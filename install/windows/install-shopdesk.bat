@@ -1,10 +1,11 @@
 @echo off
+setlocal
 title Shop Desk installer
-net session >nul 2>nul
+net session >nul 2>&1
 if errorlevel 1 (
-  echo Please right-click this file and choose "Run as administrator".
-  pause
-  exit /b 1
+  echo Asking for administrator permission...
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+  exit /b
 )
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install-shopdesk.ps1" %*
 echo.

@@ -858,7 +858,10 @@
     "Show all products": "সব পণ্য দেখান",
     "Matching products": "মিলে যাওয়া পণ্য",
     "Quantity": "পরিমাণ",
-    "Edit the downloaded CSV in Excel and save it as CSV UTF-8. Keep Product ID unchanged for existing items; leave it blank to add a new item. Include unit, category, optional barcode, and clothing brand/color/size/material. Missing categories are created automatically during upload.": "ডাউনলোড করা CSV ফাইলটি Excel-এ সম্পাদনা করে CSV UTF-8 হিসেবে সংরক্ষণ করুন। পুরোনো আইটেমের Product ID অপরিবর্তিত রাখুন; নতুন আইটেম যোগ করতে এটি খালি রাখুন। একক, ক্যাটাগরি, ঐচ্ছিক বারকোড এবং পোশাকের ব্র্যান্ড/রঙ/সাইজ/উপাদান অন্তর্ভুক্ত করুন। অনুপস্থিত ক্যাটাগরি আপলোডের সময় স্বয়ংক্রিয়ভাবে তৈরি হবে।"
+    "Edit the downloaded CSV in Excel and save it as CSV UTF-8. Keep Product ID unchanged for existing items; leave it blank to add a new item. Include unit, category, optional barcode, and clothing brand/color/size/material. Missing categories are created automatically during upload.": "ডাউনলোড করা CSV ফাইলটি Excel-এ সম্পাদনা করে CSV UTF-8 হিসেবে সংরক্ষণ করুন। পুরোনো আইটেমের Product ID অপরিবর্তিত রাখুন; নতুন আইটেম যোগ করতে এটি খালি রাখুন। একক, ক্যাটাগরি, ঐচ্ছিক বারকোড এবং পোশাকের ব্র্যান্ড/রঙ/সাইজ/উপাদান অন্তর্ভুক্ত করুন। অনুপস্থিত ক্যাটাগরি আপলোডের সময় স্বয়ংক্রিয়ভাবে তৈরি হবে।",
+    "Copy": "কপি",
+    "Installation ID copied": "ইনস্টলেশন আইডি কপি হয়েছে",
+    "Select the ID and copy it.": "আইডিটি নির্বাচন করে কপি করুন।"
   },
   "patterns": [
     {

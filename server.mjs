@@ -503,8 +503,8 @@ function publicLicense(status = currentLicense()) {
   return {
     state: status.state, readOnly: status.readOnly, plan: status.plan, licensedTo: status.licensedTo,
     seats: status.seats, daysLeft: status.daysLeft, warning: status.warning, warningDays: status.warningDays,
-    expiresAt: status.expiresAt, installId: status.installShort, problem: status.problem,
-    trialDaysLeft: status.trial?.daysLeft ?? 0
+    expiresAt: status.expiresAt, installId: status.installId, installShort: status.installShort, problem: status.problem,
+    trialDaysLeft: status.trial?.daysLeft ?? 0, trialEndsAt: status.trial?.endsAt || null
   };
 }
 function connectInfo() {
@@ -3157,7 +3157,7 @@ const onListening = () => {
   console.log(`Phones and tablets on the shop Wi-Fi can open: ${info.primary}`);
   const licence = currentLicense();
   console.log(`Licence: ${licence.state}${licence.state === "trial" ? ` (${licence.daysLeft} day(s) left)` : ""}${licence.readOnly ? " - read-only mode" : ""}`);
-  console.log(`Installation ID: ${shortInstallId(installId)}`);
+  console.log(`Installation ID: ${installId} (short: ${shortInstallId(installId)})`);
   console.log(`SQLite database: ${join(dataDir, "shop.sqlite3")}`);
   console.log("Press Ctrl+C to stop the server.");
 };

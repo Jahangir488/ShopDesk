@@ -177,9 +177,10 @@ function openLicenseModal() {
     [t("Expires"), license.expiresAt ? new Date(license.expiresAt).toLocaleDateString() : "—"],
     [t("Licensed to"), license.licensedTo || "—"]
   ];
+  if (license.state === "trial") rows.push([t("Trial ends"), license.trialEndsAt ? new Date(license.trialEndsAt).toLocaleDateString() : "—"]);
   openModal(t("Licence & plan"), `<div class="license-summary">${rows.map(([label, value]) => `<div><small>${esc(label)}</small><b>${esc(value)}</b></div>`).join("")}</div>
     <label>${esc(t("Licence key"))}<textarea name="licenseKey" rows="4" autocomplete="off" spellcheck="false" placeholder="${esc(t("Paste the licence key you received"))}"></textarea></label>
-    <p class="form-hint">${esc(t("Send this ID to your supplier when asking for a licence."))} <code>${esc(license.installId || "")}</code></p>`,
+    <p class="form-hint">${esc(t("Send this ID to your supplier when asking for a licence."))} <code id="license-install-id">${esc(license.installId || "")}</code> <button type="button" class="user-action" id="copy-install-id">${esc(t("Copy"))}</button></p>`,
     async form => {
       const token = String(form.get("licenseKey") || "").trim();
       if (!token) throw new Error(t("Paste the licence key you received."));
@@ -190,6 +191,23 @@ function openLicenseModal() {
     });
   const submit = $("#submit-modal");
   if (submit) submit.textContent = t("Activate");
+  const copyButton = $("#copy-install-id");
+  if (copyButton) copyButton.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(license.installId || "");
+      toast(t("Installation ID copied"));
+    } catch {
+      const field = $("#license-install-id");
+      if (field) {
+        const range = document.createRange();
+        range.selectNodeContents(field);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      toast(t("Select the ID and copy it."));
+    }
+  };
 }
 document.addEventListener("click", event => {
   if (event.target.closest("[data-open-license]")) { event.preventDefault(); openLicenseModal(); }
@@ -1762,7 +1780,7 @@ $("#edit-workspace").onclick = () => {
     toast("Shop details saved");
   });
   $("#open-license-settings")?.remove();
-  $("#modal-fields")?.insertAdjacentHTML("beforeend", `<p class="settings-license-row"><button type="button" class="button secondary" id="open-license-settings">Licence & plan</button> <span class="form-hint">${esc(t("Installation ID"))}: <code>${esc(data.license?.installId || "")}</code></span></p>`);
+  $("#modal-fields")?.insertAdjacentHTML("beforeend", `<p class="settings-license-row"><button type="button" class="button secondary" id="open-license-settings">Licence & plan</button> <span class="form-hint">${esc(t("Installation ID"))}: <code title="${esc(data.license?.installShort || "")}">${esc(data.license?.installId || "")}</code></span></p>`);
   const licenseButton = $("#open-license-settings");
   if (licenseButton) licenseButton.onclick = () => { closeModal(); openLicenseModal(); };
   $("#settings-update-row")?.remove();

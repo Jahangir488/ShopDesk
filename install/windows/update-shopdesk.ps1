@@ -10,15 +10,31 @@
   version does not start, it restores the previous app and database automatically.
 #>
 param(
-  [string]$InstallDir = "C:\ShopDesk",
-  [int]$Port = 8765,
+  [string]$InstallDir = "",
+  [int]$Port = 0,
   [string]$SourceDir = "",
   [string]$ZipPath = ""
 )
 $ErrorActionPreference = "Stop"
 $TaskName = "Shop Desk"
+$MarkerFile = Join-Path $env:ProgramData "ShopDesk\install.json"
+
+# Find the folder chosen during installation (C:\ShopDesk is only a fallback).
+$marker = $null
+if (Test-Path $MarkerFile) { try { $marker = Get-Content $MarkerFile -Raw | ConvertFrom-Json } catch { } }
+if (-not $InstallDir -and $marker -and $marker.installDir) { $InstallDir = $marker.installDir }
+if (-not $InstallDir) {
+  $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  if ($task) {
+    $action = @($task.Actions)[0]
+    if ($action -and $action.Arguments -match '/c\s+"?([^"]+run-shop\.cmd)"?') { $InstallDir = Split-Path $Matches[1] -Parent }
+  }
+}
+if (-not $InstallDir) { $InstallDir = "C:\ShopDesk" }
+if (-not $Port -and $marker -and $marker.port) { $Port = [int]$marker.port }
+if (-not $Port) { $Port = 8765 }
 $AppDir = Join-Path $InstallDir "app"
-$DataDir = Join-Path $InstallDir "data"
+$DataDir = if ($marker -and $marker.dataDir) { $marker.dataDir } else { Join-Path $InstallDir "data" }
 $LogDir = Join-Path $InstallDir "logs"
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $StageDir = Join-Path $InstallDir "app.new"
