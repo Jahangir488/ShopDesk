@@ -5,9 +5,17 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes, randomInt, scryptSync, timingSafeEqual } from "node:crypto";
 import { connect as tlsConnect } from "node:tls";
-import { cpus as systemCpus, freemem, totalmem } from "node:os";
+import { cpus as systemCpus, freemem, networkInterfaces, totalmem } from "node:os";
+import { TRIAL_DAYS, UPGRADE_TRIAL_DAYS, licenseAllowsMutation, licenseStatus, shortInstallId, verifyLicense } from "./lib/license.mjs";
+import { DEFAULT_FOLDER_NAME, DEFAULT_KEEP, GoogleDriveBackup, decryptSecret, encryptSecret, loadBackupKeyMaterial, prepareOffsitePayload } from "./lib/offsite.mjs";
+import { qrSvg } from "./lib/qr.mjs";
+import { compareVersions, parseManifest } from "./lib/release.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
+const appVersion = (() => {
+  try { return JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version || "12.0.0"; }
+  catch { return "12.0.0"; }
+})();
 const dataDir = process.env.SHOP_DATA_DIR || join(root, "data");
 // Hosting settings. PORT is what most hosts (cPanel Node.js App, Render, Railway, etc.) provide.
 const rawPort = String(process.env.PORT || process.env.SHOP_PORT || 8765);
@@ -15,6 +23,7 @@ const port = /^\d+$/.test(rawPort) ? Number(rawPort) : rawPort; // Passenger may
 const host = process.env.SHOP_HOST || (process.env.PORT ? "0.0.0.0" : "127.0.0.1");
 // Set SHOP_TRUST_PROXY=1 when running behind HTTPS reverse proxy (Nginx, Caddy, Apache, Cloudflare, Passenger).
 const trustProxy = /^(1|true|yes)$/i.test(process.env.SHOP_TRUST_PROXY || "");
+const publicBaseUrl = String(process.env.SHOP_PUBLIC_URL || "").split(",")[0].trim().replace(/\/+$/, "");
 const lastHeaderValue = value => String(value || "").split(",").map(part => part.trim()).filter(Boolean).pop() || "";
 const firstHeaderValue = value => String(value || "").split(",")[0].trim();
 function isSecureRequest(request) {
@@ -63,6 +72,8 @@ const dbFile = join(dataDir, "shop.sqlite3");
 let db = new DatabaseSync(dbFile);
 db.exec(`
   PRAGMA journal_mode = WAL;
+  PRAGMA busy_timeout = 5000;
+  PRAGMA synchronous = NORMAL;
   PRAGMA foreign_keys = ON;
   CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), shop_name TEXT NOT NULL, workspace TEXT NOT NULL, contact_number TEXT NOT NULL DEFAULT '', website TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', facebook_page TEXT NOT NULL DEFAULT '', whatsapp_number TEXT NOT NULL DEFAULT '', contact_address TEXT NOT NULL DEFAULT '');
   CREATE TABLE IF NOT EXISTS products (
@@ -120,7 +131,22 @@ const backupScheduleColumns = new Set(db.prepare("PRAGMA table_info(backup_sched
 if (!backupScheduleColumns.has("directory")) db.exec("ALTER TABLE backup_schedule ADD COLUMN directory TEXT NOT NULL DEFAULT ''");
 if (!backupScheduleColumns.has("last_run_time")) db.exec("ALTER TABLE backup_schedule ADD COLUMN last_run_time TEXT NOT NULL DEFAULT ''");
 if (!backupScheduleColumns.has("last_run_directory")) db.exec("ALTER TABLE backup_schedule ADD COLUMN last_run_directory TEXT NOT NULL DEFAULT ''");
+db.exec(`CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS license (id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL, activated_at TEXT NOT NULL DEFAULT '');
+  CREATE TABLE IF NOT EXISTS offsite_backup (
+    id INTEGER PRIMARY KEY CHECK(id=1), enabled INTEGER NOT NULL DEFAULT 0,
+    folder_name TEXT NOT NULL DEFAULT 'ShopDesk Backups', keep INTEGER NOT NULL DEFAULT 14,
+    connection TEXT NOT NULL DEFAULT '', connected_email TEXT NOT NULL DEFAULT '',
+    last_attempt_at TEXT NOT NULL DEFAULT '', last_success_at TEXT NOT NULL DEFAULT '',
+    last_error TEXT NOT NULL DEFAULT '', last_file TEXT NOT NULL DEFAULT ''
+  );
+  INSERT OR IGNORE INTO offsite_backup(id) VALUES(1);`);
 const settingColumns = new Set(db.prepare("PRAGMA table_info(settings)").all().map(column => column.name));
+const hadLanguageColumn = settingColumns.has("language");
+if (!hadLanguageColumn) db.exec("ALTER TABLE settings ADD COLUMN language TEXT NOT NULL DEFAULT 'bn'");
+if (!settingColumns.has("bangla_digits")) db.exec("ALTER TABLE settings ADD COLUMN bangla_digits INTEGER NOT NULL DEFAULT 1");
+// Existing shops keep English until they choose Bangla; new installs start in Bangla.
+if (!hadLanguageColumn && db.prepare("SELECT COUNT(*) AS count FROM users").get().count > 0) db.exec("UPDATE settings SET language='en' WHERE id=1");
 for (const [name, definition] of Object.entries({
   shop_type: "TEXT NOT NULL DEFAULT 'general'",
   currency_code: "TEXT NOT NULL DEFAULT 'BDT'",
@@ -417,9 +443,95 @@ function upgradeRestoredDatabase() {
   db.exec("CREATE TABLE IF NOT EXISTS email_verifications (user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, email TEXT NOT NULL, code_hash TEXT NOT NULL, expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0)");
   db.exec("CREATE TABLE IF NOT EXISTS email_recovery_codes (user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, code_hash TEXT NOT NULL, expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0)");
   db.exec("CREATE TABLE IF NOT EXISTS activity_log (id INTEGER PRIMARY KEY, at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, username TEXT NOT NULL, action TEXT NOT NULL)");
+  ensure("settings", "language", "TEXT NOT NULL DEFAULT 'en'");
+  ensure("settings", "bangla_digits", "INTEGER NOT NULL DEFAULT 0");
+  db.exec("CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+  db.exec("CREATE TABLE IF NOT EXISTS license (id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL, activated_at TEXT NOT NULL DEFAULT '')");
+  db.exec(`CREATE TABLE IF NOT EXISTS offsite_backup (id INTEGER PRIMARY KEY CHECK(id=1), enabled INTEGER NOT NULL DEFAULT 0,
+    folder_name TEXT NOT NULL DEFAULT 'ShopDesk Backups', keep INTEGER NOT NULL DEFAULT 14, connection TEXT NOT NULL DEFAULT '',
+    connected_email TEXT NOT NULL DEFAULT '', last_attempt_at TEXT NOT NULL DEFAULT '', last_success_at TEXT NOT NULL DEFAULT '',
+    last_error TEXT NOT NULL DEFAULT '', last_file TEXT NOT NULL DEFAULT '');
+    INSERT OR IGNORE INTO offsite_backup(id) VALUES(1);`);
 }
 
-const mime = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".json": "application/json; charset=utf-8" };
+const mime = {
+  ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8", ".webmanifest": "application/manifest+json; charset=utf-8",
+  ".svg": "image/svg+xml; charset=utf-8", ".png": "image/png", ".ico": "image/x-icon", ".woff2": "font/woff2"
+};
+
+// ---- Installation identity, trial and licence state ----
+const metaValue = key => db.prepare("SELECT value FROM app_meta WHERE key=?").get(key)?.value || "";
+const setMetaValue = (key, value) => db.prepare("INSERT INTO app_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key, String(value));
+const installId = (() => {
+  let value = metaValue("install_id");
+  if (!value) { value = randomBytes(12).toString("hex"); setMetaValue("install_id", value); }
+  return value;
+})();
+if (!metaValue("trial_started_at")) {
+  const existingUsers = db.prepare("SELECT COUNT(*) AS count FROM users").get().count;
+  setMetaValue("trial_started_at", new Date().toISOString());
+  setMetaValue("trial_days", String(existingUsers > 0 ? UPGRADE_TRIAL_DAYS : TRIAL_DAYS));
+}
+const licenseRow = () => db.prepare("SELECT token, activated_at FROM license WHERE id=1").get();
+let licenseCache = { at: 0, value: null };
+function currentLicense() {
+  if (licenseCache.value && Date.now() - licenseCache.at < 5000) return licenseCache.value;
+  const row = licenseRow();
+  const status = licenseStatus({
+    license: row ? { token: row.token, activatedAt: row.activated_at } : null,
+    trialStartedAt: metaValue("trial_started_at"),
+    trialDays: Number(metaValue("trial_days") || TRIAL_DAYS),
+    installId
+  });
+  status.installId = installId;
+  status.installShort = shortInstallId(installId);
+  licenseCache = { at: Date.now(), value: status };
+  return status;
+}
+const refreshLicense = () => { licenseCache = { at: 0, value: null }; return currentLicense(); };
+function licenceProblemMessage(problem) {
+  switch (problem) {
+    case "install": return "This licence was issued for a different installation. Send your Installation ID to your supplier and ask for a licence for this shop PC.";
+    case "signature": return "That licence key is not valid for Shop Desk. Check that you copied the whole key, or ask your supplier to reissue it.";
+    case "expired": return "This licence has already expired. Ask your supplier for a renewal key.";
+    case "empty": return "Paste the licence key you received.";
+    default: return "That licence key could not be read. Check that you copied all of it.";
+  }
+}
+function publicLicense(status = currentLicense()) {
+  return {
+    state: status.state, readOnly: status.readOnly, plan: status.plan, licensedTo: status.licensedTo,
+    seats: status.seats, daysLeft: status.daysLeft, warning: status.warning, warningDays: status.warningDays,
+    expiresAt: status.expiresAt, installId: status.installShort, problem: status.problem,
+    trialDaysLeft: status.trial?.daysLeft ?? 0
+  };
+}
+function connectInfo() {
+  const settings = db.prepare("SELECT shop_name FROM settings WHERE id=1").get();
+  const lanPort = typeof port === "number" ? port : 8765;
+  const urls = [];
+  if (publicBaseUrl) urls.push(publicBaseUrl);
+  else if (typeof port === "number") {
+    const found = [];
+    for (const entries of Object.values(networkInterfaces())) {
+      for (const entry of entries || []) {
+        if (entry.family === "IPv4" && !entry.internal) found.push(`http://${entry.address}:${lanPort}`);
+      }
+    }
+    found.sort((a, b) => (a.includes("192.168.") ? -1 : 0) - (b.includes("192.168.") ? -1 : 0));
+    urls.push(...found);
+    if (!found.length) urls.push(`http://localhost:${lanPort}`);
+  }
+  const unique = [...new Set(urls)];
+  return { shopName: settings?.shop_name || "Shop Desk", urls: unique, primary: unique[0] || `http://localhost:${lanPort}`, port: lanPort };
+}
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character]));
+}
+function htmlPage(title, message, ok = true) {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Shop Desk</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f2f4f6;color:#1f2328;font:16px/1.6 system-ui,"Segoe UI",sans-serif}main{background:#fff;border:1px solid #dfe3e6;border-radius:14px;padding:32px;max-width:520px;margin:24px;box-shadow:0 18px 50px #1f23281a}h1{margin:0 0 10px;font-size:22px}p{color:#5b6670}a{display:inline-block;margin-top:10px;background:#1f6f5c;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;font-weight:600}</style></head><body><main><h1>${ok ? "&#10003;" : "&#9888;"} ${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p><a href="/#backup-tools">Return to Shop Desk</a></main></body></html>`;
+}
 const tokenHash = token => createHash("sha256").update(token).digest("hex");
 const validText = value => typeof value === "string" && value.trim().length > 0 && value.length <= 500;
 const validAmount = value => Number.isFinite(Number(value)) && Number(value) >= 0;
@@ -805,6 +917,9 @@ function stateFor(user) {
     shopType: settings?.shop_type || "general",
     currencyCode: settings?.currency_code || "BDT",
     locale: settings?.locale || "en-BD",
+    language: settings ? (settings.language === "bn" ? "bn" : "en") : "bn",
+    banglaDigits: settings ? Boolean(settings.bangla_digits) : true,
+    license: publicLicense(),
     taxRate: settings?.tax_rate || 0,
     taxMode: settings?.tax_mode || "none",
     requireCustomer: Boolean(settings?.require_customer),
@@ -908,8 +1023,23 @@ async function handleApi(request, response, url) {
   if (method !== "GET" && !originAllowed(request)) {
     return json(response, 403, { error: "Cross-origin requests are not allowed." });
   }
+  if (route === "/api/connect" && method === "GET") return json(response, 200, connectInfo());
+  if (route === "/api/connect/qr.svg" && method === "GET") {
+    const info = connectInfo();
+    const target = url.searchParams.get("url");
+    const address = target && info.urls.includes(target) ? target : info.primary;
+    const svg = qrSvg(address, { size: 260, title: `Open ${info.shopName} on this device` });
+    response.writeHead(200, { "Content-Type": "image/svg+xml; charset=utf-8", "Cache-Control": "no-store" });
+    response.end(svg);
+    return;
+  }
   if (route === "/api/auth/status" && method === "GET") {
-    return json(response, 200, { setupRequired: db.prepare("SELECT COUNT(*) AS count FROM users").get().count === 0, emailRecoveryAvailable: Boolean(process.env.SHOP_GMAIL_USER && process.env.SHOP_GMAIL_APP_PASSWORD) });
+    const bootSettings = db.prepare("SELECT language FROM settings WHERE id=1").get();
+    return json(response, 200, {
+      setupRequired: db.prepare("SELECT COUNT(*) AS count FROM users").get().count === 0,
+      emailRecoveryAvailable: Boolean(process.env.SHOP_GMAIL_USER && process.env.SHOP_GMAIL_APP_PASSWORD),
+      language: bootSettings?.language === "en" ? "en" : "bn"
+    });
   }
   if (route === "/api/setup" && method === "POST") {
     const body = await readJson(request);
@@ -921,7 +1051,7 @@ async function handleApi(request, response, url) {
       return json(response, 400, { error: "Use a 3–32 character username and a password of at least 12 characters." });
     }
     const { salt, hash } = makePassword(body.password);
-    const result = db.prepare("INSERT INTO users(username,salt,password_hash,role,can_inventory,can_sales,can_expenses,can_team,can_admins,can_records,can_repair_records,can_settings,can_supplier_purchases,can_backups) VALUES(?,?,?,'admin',1,1,1,1,1,1,1,0,0,1)").run(body.username, salt, hash);
+    const result = db.prepare("INSERT INTO users(username,salt,password_hash,role,can_inventory,can_sales,can_expenses,can_team,can_admins,can_records,can_repair_records,can_settings,can_supplier_purchases,can_backups) VALUES(?,?,?,'admin',1,1,1,1,1,1,1,1,1,1)").run(body.username, salt, hash);
     setupToken = null;
     const user = db.prepare("SELECT * FROM users WHERE id=?").get(Number(result.lastInsertRowid));
     createSession(user, response);
@@ -1012,13 +1142,102 @@ async function handleApi(request, response, url) {
     return json(response, 200, { ok: true, message: "If the account has a verified recovery email, a code will arrive shortly." });
   }
 
+  if (route === "/api/backups/offsite/oauth/callback" && method === "GET") {
+    const sendPage = (status, title, message, ok) => {
+      response.writeHead(status, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+      response.end(htmlPage(title, message, ok));
+    };
+    const error = url.searchParams.get("error");
+    if (error) return sendPage(400, "Google Drive was not connected", error === "access_denied" ? "You cancelled the Google permission screen. Nothing was changed." : `Google returned: ${error}`, false);
+    const saved = String(metaValue("offsite_oauth_state") || "");
+    const [savedState, expiresAt] = saved.split(":");
+    const state = String(url.searchParams.get("state") || "");
+    const code = String(url.searchParams.get("code") || "");
+    if (!state || !savedState || state !== savedState || Number(expiresAt) < Date.now()) {
+      return sendPage(400, "This Google sign-in link has expired", "Start the connection again from Shop Desk → Backup and restore.", false);
+    }
+    setMetaValue("offsite_oauth_state", "");
+    if (!code) return sendPage(400, "Google Drive was not connected", "Google did not return an authorisation code. Try again.", false);
+    try {
+      const tokens = await driveClient.exchangeCode(code);
+      tokens.email = await driveClient.accountEmail(tokens);
+      saveOffsiteTokens(tokens);
+      db.prepare("UPDATE offsite_backup SET connected_email=?, last_error='' WHERE id=1").run(tokens.email || "");
+      logSystem("Connected Google Drive for offsite backups");
+      return sendPage(200, "Google Drive connected", `Offsite backups can now be uploaded${tokens.email ? ` to ${tokens.email}` : ""}. Return to the Backup and restore screen and run a backup now.`, true);
+    } catch (exchangeError) {
+      console.error("Google Drive connection failed:", exchangeError.message);
+      db.prepare("UPDATE offsite_backup SET last_error=? WHERE id=1").run(String(exchangeError.message).slice(0, 500));
+      return sendPage(400, "Google Drive could not be connected", exchangeError.message || "Try again from Shop Desk.", false);
+    }
+  }
+
   const user = currentUser(request);
   response.on("finish", () => { if (user && method !== "GET" && response.statusCode < 400) logActivity(user, method, route); });
   if (!user) return json(response, 401, { error: "Please sign in." });
+  if (method !== "GET" && currentLicense().readOnly && !licenseAllowsMutation(route)) {
+    return json(response, 402, {
+      error: "The Shop Desk licence has expired. New bills and changes are paused, but your data, reports, exports and backups still work. Enter a licence key in Settings to continue.",
+      code: "license_expired",
+      license: publicLicense()
+    });
+  }
   if (["/api/profile/email-verification", "/api/profile/email-verification/confirm", "/api/recovery-code"].includes(route) && user.role !== "admin" && user.id !== ownerId()) {
     return json(response, 403, { error: "Only Jahangir and administrators can set up or change account recovery options." });
   }
   if (route === "/api/auth/me" && method === "GET") return json(response, 200, { user: publicUser(user) });
+  if (route === "/api/license" && method === "GET") return json(response, 200, publicLicense());
+  if (route === "/api/license/activate" && method === "POST") {
+    if (user.role !== "admin") return json(response, 403, { error: "Only an administrator can activate a licence." });
+    const body = await readJson(request);
+    const token = String(body.token || "").trim();
+    const verified = verifyLicense(token, { installId });
+    if (!verified.valid) return json(response, 400, { error: licenceProblemMessage(verified.problem), code: verified.problem || "invalid" });
+    if (verified.expired) return json(response, 400, { error: licenceProblemMessage("expired"), code: "expired" });
+    db.prepare("INSERT INTO license(id,token,activated_at) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET token=excluded.token,activated_at=excluded.activated_at").run(token, new Date().toISOString());
+    const status = refreshLicense();
+    try { db.prepare("INSERT INTO activity_log(username,action) VALUES(?,?)").run(user.username, `Activated a ${status.plan} licence for ${verified.payload.shop}`); } catch { /* logging must never block activation */ }
+    return json(response, 200, publicLicense(status));
+  }
+  if (route === "/api/update-check" && method === "GET") {
+    if (user.role !== "admin" && !can(user, "settings")) return json(response, 403, { error: "Shop settings access is required to check for updates." });
+    const manifestUrl = String(process.env.SHOP_UPDATE_MANIFEST_URL || "").trim();
+    if (!manifestUrl) return json(response, 200, { configured: false, current: appVersion });
+    // HTTPS only. SHOP_UPDATE_ALLOW_HTTP=1 is for local testing with a loopback URL.
+    const loopbackHttp = /^(1|true|yes)$/i.test(process.env.SHOP_UPDATE_ALLOW_HTTP || "") && /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(manifestUrl);
+    if (!/^https:\/\//i.test(manifestUrl) && !loopbackHttp) return json(response, 503, { configured: true, error: "SHOP_UPDATE_MANIFEST_URL must be an HTTPS address." });
+    const fetchText = async address => {
+      const reply = await fetch(address, { signal: AbortSignal.timeout(10000), headers: { "user-agent": `ShopDesk/${appVersion}` } });
+      if (!reply.ok) throw new Error(`HTTP ${reply.status}`);
+      return reply.text();
+    };
+    try {
+      const [manifestBytes, signature] = await Promise.all([fetchText(manifestUrl), fetchText(manifestUrl + ".sig")]);
+      const parsed = parseManifest(Buffer.from(manifestBytes, "utf8"), signature);
+      if (!parsed.valid) return json(response, 502, {
+        configured: true,
+        current: appVersion,
+        error: "The update notice could not be verified. Ask your supplier for a correctly signed release.",
+        code: parsed.problem
+      });
+      const latest = parsed.manifest;
+      try { db.prepare("INSERT INTO activity_log(username,action) VALUES(?,?)").run(user.username, `Checked for updates (latest: ${latest.version})`); } catch { /* logging must never block the check */ }
+      return json(response, 200, {
+        configured: true,
+        verified: true,
+        current: appVersion,
+        latest: latest.version,
+        updateAvailable: compareVersions(latest.version, appVersion) > 0,
+        released: latest.released,
+        notes: latest.notes,
+        url: latest.url,
+        sha256: latest.sha256,
+        size: latest.size
+      });
+    } catch (error) {
+      return json(response, 502, { configured: true, current: appVersion, error: `Could not check for updates: ${error.message}` });
+    }
+  }
   if (route === "/api/system/status" && method === "GET") {
     if (!can(user, "server_load")) return json(response, 403, { error: "Server load access has not been granted to this account." });
     return json(response, 200, serverLoadStatus());
@@ -1105,15 +1324,19 @@ async function handleApi(request, response, url) {
     const whatsappNumber = String(body.whatsappNumber || "").trim();
     const contactAddress = String(body.contactAddress || "").trim();
     const taxRate = Number(body.taxRate);
+    const existingSettings = db.prepare("SELECT language, bangla_digits FROM settings WHERE id=1").get() || {};
+    const language = body.language === undefined ? (existingSettings.language || "en") : (body.language === "bn" ? "bn" : "en");
+    const banglaDigits = body.banglaDigits === undefined ? Boolean(existingSettings.bangla_digits) : Boolean(body.banglaDigits);
     if (!validText(body.shopName) || !validText(body.workspace) || !validTypes.includes(body.shopType) || !validCurrencies.includes(body.currencyCode) || !validLocales.includes(body.locale) ||
         !Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100 || !["none", "inclusive", "exclusive"].includes(body.taxMode) || !methods.length || methods.length > 10 || methods.some(value => value.length > 40) || contactNumber.length > 60 || website.length > 250 || email.length > 254 || (email && !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email)) || facebookPage.length > 250 || whatsappNumber.length > 60 || contactAddress.length > 300) {
       return json(response, 400, { error: "Check the shop type, currency, tax, and payment settings." });
     }
-    db.prepare(`INSERT INTO settings(id,shop_name,workspace,shop_type,currency_code,locale,tax_rate,tax_mode,require_customer,allow_discounts,payment_methods,contact_number,website,email,facebook_page,whatsapp_number,contact_address)
-      VALUES(1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET shop_name=excluded.shop_name,workspace=excluded.workspace,shop_type=excluded.shop_type,
+    db.prepare(`INSERT INTO settings(id,shop_name,workspace,shop_type,currency_code,locale,tax_rate,tax_mode,require_customer,allow_discounts,payment_methods,contact_number,website,email,facebook_page,whatsapp_number,contact_address,language,bangla_digits)
+      VALUES(1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET shop_name=excluded.shop_name,workspace=excluded.workspace,shop_type=excluded.shop_type,
       currency_code=excluded.currency_code,locale=excluded.locale,tax_rate=excluded.tax_rate,tax_mode=excluded.tax_mode,
-      require_customer=excluded.require_customer,allow_discounts=excluded.allow_discounts,payment_methods=excluded.payment_methods,contact_number=excluded.contact_number,website=excluded.website,email=excluded.email,facebook_page=excluded.facebook_page,whatsapp_number=excluded.whatsapp_number,contact_address=excluded.contact_address`)
-      .run(body.shopName.trim(), body.workspace.trim(), body.shopType, body.currencyCode, body.locale, taxRate, body.taxMode, body.requireCustomer ? 1 : 0, body.allowDiscounts ? 1 : 0, methods.join(","), contactNumber, website, email, facebookPage, whatsappNumber, contactAddress);
+      require_customer=excluded.require_customer,allow_discounts=excluded.allow_discounts,payment_methods=excluded.payment_methods,contact_number=excluded.contact_number,website=excluded.website,email=excluded.email,facebook_page=excluded.facebook_page,whatsapp_number=excluded.whatsapp_number,contact_address=excluded.contact_address,
+      language=excluded.language,bangla_digits=excluded.bangla_digits`)
+      .run(body.shopName.trim(), body.workspace.trim(), body.shopType, body.currencyCode, body.locale, taxRate, body.taxMode, body.requireCustomer ? 1 : 0, body.allowDiscounts ? 1 : 0, methods.join(","), contactNumber, website, email, facebookPage, whatsappNumber, contactAddress, language, banglaDigits ? 1 : 0);
     addProfileCategories(body.shopType);
     return json(response, 200, stateFor(user));
   }
@@ -2447,13 +2670,13 @@ async function handleApi(request, response, url) {
       db.close(); databaseClosed = true;
       copyFileSync(uploadFile, dbFile);
       db = new DatabaseSync(dbFile);
-      db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;");
+      db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;");
       upgradeRestoredDatabase();
       return json(response, 200, { ok: true, safetyBackup: safetyName, restoredBackup: uploadName });
     } catch (error) {
       if (!databaseClosed) { rmSync(uploadFile, { force: true }); return json(response, 500, { error: "Restore could not start. The current database is still open and unchanged." }); }
       try { db?.close(); } catch {}
-      try { copyFileSync(safetyFile, dbFile); db = new DatabaseSync(dbFile); db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;"); upgradeRestoredDatabase(); }
+      try { copyFileSync(safetyFile, dbFile); db = new DatabaseSync(dbFile); db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;"); upgradeRestoredDatabase(); }
       catch (restoreError) { console.error("Could not reopen the safety copy after restore failure:", restoreError); }
       rmSync(uploadFile, { force: true });
       return json(response, 500, { error: "Restore failed. The pre-restore safety copy was kept." });
@@ -2519,15 +2742,78 @@ async function handleApi(request, response, url) {
       databaseClosed = true;
       copyFileSync(file, dbFile);
       db = new DatabaseSync(dbFile);
-      db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;");
+      db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;");
       upgradeRestoredDatabase();
       return json(response, 200, { ok: true, safetyBackup: safetyName });
     } catch (error) {
       if (!databaseClosed) return json(response, 500, { error: "Restore could not start. The current database is still open and unchanged." });
       try { db?.close(); } catch {}
-      try { copyFileSync(safetyFile, dbFile); db = new DatabaseSync(dbFile); db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;"); upgradeRestoredDatabase(); } catch (restoreError) { console.error("Could not reopen the safety copy after restore failure:", restoreError); }
+      try { copyFileSync(safetyFile, dbFile); db = new DatabaseSync(dbFile); db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;"); upgradeRestoredDatabase(); } catch (restoreError) { console.error("Could not reopen the safety copy after restore failure:", restoreError); }
       return json(response, 500, { error: "Restore failed. The pre-restore safety copy was kept." });
     }
+  }
+  if (route === "/api/backups/offsite" && method === "GET") {
+    if (user.role !== "admin" || !can(user, "backups")) return json(response, 403, { error: "Backup and restore access is required." });
+    return json(response, 200, offsitePublic());
+  }
+  if (route === "/api/backups/offsite/config" && method === "POST") {
+    if (user.role !== "admin" || !can(user, "backups")) return json(response, 403, { error: "Backup and restore access is required." });
+    const body = await readJson(request);
+    const keep = Math.max(1, Math.min(90, Number(body.keep) || DEFAULT_KEEP));
+    const folderName = String(body.folderName || DEFAULT_FOLDER_NAME).trim().slice(0, 60) || DEFAULT_FOLDER_NAME;
+    db.prepare("UPDATE offsite_backup SET enabled=?, keep=?, folder_name=? WHERE id=1").run(body.enabled ? 1 : 0, keep, folderName);
+    return json(response, 200, offsitePublic());
+  }
+  if (route === "/api/backups/offsite/connect" && method === "POST") {
+    if (user.role !== "admin" || !can(user, "backups")) return json(response, 403, { error: "Backup and restore access is required." });
+    if (!driveClient.configured) {
+      return json(response, 503, { error: "Google Drive is not configured on this server yet. Add SHOP_GOOGLE_CLIENT_ID and SHOP_GOOGLE_CLIENT_SECRET, restart Shop Desk, then try again.", code: "not_configured" });
+    }
+    const state = randomBytes(24).toString("hex");
+    setMetaValue("offsite_oauth_state", `${state}:${Date.now() + 15 * 60 * 1000}`);
+    return json(response, 200, {
+      url: driveClient.authUrl(state),
+      redirectUri: offsiteRedirectUri,
+      onServerPc: offsiteRedirectUri.includes("localhost") || offsiteRedirectUri.includes("127.0.0.1")
+    });
+  }
+  if (route === "/api/backups/offsite/disconnect" && method === "POST") {
+    if (user.role !== "admin" || !can(user, "backups")) return json(response, 403, { error: "Backup and restore access is required." });
+    db.prepare("UPDATE offsite_backup SET connection='', connected_email='', enabled=0, last_error='' WHERE id=1").run();
+    logSystem("Disconnected Google Drive offsite backups");
+    return json(response, 200, offsitePublic());
+  }
+  if (route === "/api/backups/offsite/run" && method === "POST") {
+    if (user.role !== "admin" || !can(user, "backups")) return json(response, 403, { error: "Backup and restore access is required." });
+    if (!driveClient.configured) return json(response, 503, { error: "Google Drive is not configured on this server yet.", code: "not_configured" });
+    try {
+      const result = await uploadOffsite("manual");
+      return json(response, 200, { ok: true, result, status: offsitePublic() });
+    } catch (error) {
+      return json(response, 502, { error: "Offsite backup failed: " + error.message, status: offsitePublic() });
+    }
+  }
+  if (route === "/api/backups/offsite/test" && method === "POST") {
+    if (user.role !== "admin" || !can(user, "backups")) return json(response, 403, { error: "Backup and restore access is required." });
+    if (!driveClient.configured) return json(response, 503, { error: "Google Drive is not configured on this server yet.", code: "not_configured" });
+    try {
+      const email = await withDrive(tokens => driveClient.accountEmail(tokens));
+      db.prepare("UPDATE offsite_backup SET connected_email=?, last_error='' WHERE id=1").run(email || "");
+      logSystem("Tested the Google Drive offsite backup connection");
+      return json(response, 200, { ok: true, email, status: offsitePublic() });
+    } catch (error) {
+      return json(response, 502, { error: "Google Drive could not be reached: " + error.message });
+    }
+  }
+  if (route === "/api/backups/offsite/files" && method === "GET") {
+    if (user.role !== "admin" || !can(user, "backups")) return json(response, 403, { error: "Backup and restore access is required." });
+    try {
+      const files = await withDrive(async tokens => {
+        const folderId = await driveClient.folderId(tokens, offsiteRow().folder_name || DEFAULT_FOLDER_NAME);
+        return driveClient.list(tokens, folderId);
+      });
+      return json(response, 200, { files });
+    } catch (error) { return json(response, 502, { error: error.message }); }
   }
   if (route === "/api/backups" && (method === "GET" || method === "POST")) {
     if (user.role !== "admin" || !can(user, "backups")) return json(response, 403, { error: "Backup and restore access is required." });
@@ -2693,6 +2979,107 @@ function runBackup(reason) {
   files.slice(0, Math.max(0, files.length - 14)).forEach(name => rmSync(join(backupDir, name), { force: true }));
   return name;
 }
+// ---- Google Drive offsite backups ----
+const googleClientId = String(process.env.SHOP_GOOGLE_CLIENT_ID || "").trim();
+const googleClientSecret = String(process.env.SHOP_GOOGLE_CLIENT_SECRET || "").trim();
+const backupKeyMaterial = loadBackupKeyMaterial(dataDir);
+const offsiteRedirectUri = String(process.env.SHOP_OAUTH_REDIRECT || "").trim() ||
+  (publicBaseUrl ? `${publicBaseUrl}/api/backups/offsite/oauth/callback` : `http://localhost:${typeof port === "number" ? port : 8765}/api/backups/offsite/oauth/callback`);
+const driveClient = new GoogleDriveBackup({
+  clientId: googleClientId, clientSecret: googleClientSecret, redirectUri: offsiteRedirectUri, keyMaterial: backupKeyMaterial,
+  endpoints: {
+    auth: process.env.SHOP_GOOGLE_AUTH_URL,
+    token: process.env.SHOP_GOOGLE_TOKEN_URL,
+    files: process.env.SHOP_GOOGLE_FILES_URL,
+    upload: process.env.SHOP_GOOGLE_UPLOAD_URL
+  }
+});
+const offsiteRow = () => db.prepare("SELECT * FROM offsite_backup WHERE id=1").get();
+function logSystem(action) { try { db.prepare("INSERT INTO activity_log(username,action) VALUES('system',?)").run(action); } catch { /* logging must never break a request */ } }
+function offsitePublic() {
+  const row = offsiteRow() || {};
+  let connected = false;
+  if (row.connection) { try { decryptSecret(row.connection, backupKeyMaterial); connected = true; } catch { connected = false; } }
+  return {
+    configured: driveClient.configured, connected, email: row.connected_email || "",
+    enabled: Boolean(row.enabled), keep: row.keep || DEFAULT_KEEP, folderName: row.folder_name || DEFAULT_FOLDER_NAME,
+    lastAttemptAt: row.last_attempt_at || null, lastSuccessAt: row.last_success_at || null,
+    lastError: row.last_error || "", lastFile: row.last_file || "", redirectUri: offsiteRedirectUri, encrypted: true
+  };
+}
+function saveOffsiteTokens(tokens) {
+  db.prepare("UPDATE offsite_backup SET connection=? WHERE id=1").run(encryptSecret(tokens, backupKeyMaterial));
+}
+function offsiteTokens() {
+  const row = offsiteRow();
+  if (!row?.connection) throw new Error("Google Drive is not connected yet.");
+  return decryptSecret(row.connection, backupKeyMaterial);
+}
+async function freshOffsiteTokens() {
+  let tokens = offsiteTokens();
+  if (!tokens.accessToken || Number(tokens.expiresAt || 0) <= Date.now()) {
+    tokens = await driveClient.refresh(tokens);
+    saveOffsiteTokens(tokens);
+  }
+  return tokens;
+}
+async function withDrive(action) {
+  let tokens = await freshOffsiteTokens();
+  try { return await action(tokens); }
+  catch (error) {
+    if (error.code === "reauth" || error.status === 401) {
+      tokens = await driveClient.refresh(tokens);
+      saveOffsiteTokens(tokens);
+      return await action(tokens);
+    }
+    throw error;
+  }
+}
+async function uploadOffsite(reason = "auto") {
+  const row = offsiteRow();
+  if (!row) throw new Error("Offsite backup is not set up.");
+  if (reason !== "manual" && !row.enabled) throw new Error("Offsite backup is turned off.");
+  if (!row.connection) throw new Error("Connect Google Drive first.");
+  db.prepare("UPDATE offsite_backup SET last_attempt_at=?, last_error='' WHERE id=1").run(new Date().toISOString());
+  try {
+    const localName = runBackup("offsite");
+    const plain = readFileSync(join(backupDir, localName));
+    const shopName = db.prepare("SELECT shop_name FROM settings WHERE id=1").get()?.shop_name || "shop";
+    const payload = prepareOffsitePayload({ dbBuffer: plain, keyMaterial: backupKeyMaterial, shopName });
+    const uploaded = await withDrive(async tokens => {
+      const folderId = await driveClient.folderId(tokens, row.folder_name || DEFAULT_FOLDER_NAME);
+      const file = await driveClient.upload(tokens, { name: payload.name, buffer: payload.buffer, folderId });
+      await driveClient.prune(tokens, folderId, row.keep || DEFAULT_KEEP);
+      return file;
+    });
+    const fileName = uploaded?.name || payload.name;
+    db.prepare("UPDATE offsite_backup SET last_success_at=?, last_error='', last_file=? WHERE id=1").run(new Date().toISOString(), fileName);
+    logSystem(`Uploaded an encrypted offsite backup (${reason})`);
+    return { file: fileName, bytes: payload.encryptedBytes, localBackup: localName, encrypted: true };
+  } catch (error) {
+    db.prepare("UPDATE offsite_backup SET last_error=? WHERE id=1").run(String(error.message).slice(0, 500));
+    logSystem(`Offsite backup failed: ${String(error.message).slice(0, 200)}`);
+    throw error;
+  }
+}
+let offsiteRunning = false;
+async function offsiteTick() {
+  if (offsiteRunning) return;
+  const row = offsiteRow();
+  if (!row?.enabled || !row.connection) return;
+  const now = Date.now();
+  const lastSuccess = row.last_success_at ? Date.parse(row.last_success_at) : 0;
+  const lastAttempt = row.last_attempt_at ? Date.parse(row.last_attempt_at) : 0;
+  if (now - lastSuccess < 20 * 3600 * 1000) return; // one successful upload a day is enough
+  if (now - lastAttempt < 3600 * 1000) return; // retry failures at most hourly
+  offsiteRunning = true;
+  try { await uploadOffsite("auto"); }
+  catch (error) { console.error("Offsite backup failed:", error.message); }
+  finally { offsiteRunning = false; }
+}
+setInterval(() => { offsiteTick(); }, 15 * 60 * 1000).unref();
+setTimeout(() => { offsiteTick(); }, 90 * 1000).unref();
+
 const scheduledBackup = () => {
   const schedule = db.prepare("SELECT enabled,time,directory,last_run_date,last_run_time,last_run_directory FROM backup_schedule WHERE id=1").get();
   if (!schedule?.enabled) return;
@@ -2715,7 +3102,7 @@ const server = createServer(async (request, response) => {
   response.setHeader("Referrer-Policy", "same-origin");
   if (isSecureRequest(request)) response.setHeader("Strict-Transport-Security", "max-age=31536000");
   if (request.url === "/healthz") { response.writeHead(200, { "Content-Type": "text/plain" }); response.end("ok"); return; }
-  response.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");
+  response.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");
   const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
   if (url.pathname.startsWith("/api/")) {
     try { await handleApi(request, response, url); }
@@ -2727,10 +3114,16 @@ const server = createServer(async (request, response) => {
     return;
   }
   let requested;
-  try { requested = url.pathname === "/" ? "index.html" : decodeURIComponent(url.pathname.slice(1)); }
+  try {
+    requested = url.pathname === "/" ? "index.html"
+      : url.pathname === "/join" ? "join.html"
+      : decodeURIComponent(url.pathname.slice(1));
+  }
   catch { response.writeHead(400).end("Bad request"); return; }
   // Serve only the app's public files; never expose the SQLite database, backups, logs, or source tree.
-  if (!["index.html", "app.js", "styles.css"].includes(requested)) return response.writeHead(404).end("Not found");
+  const publicFiles = ["index.html", "app.js", "styles.css", "join.html", "manifest.webmanifest", "sw.js", "offline.html"];
+  const publicFolder = /^(icons|i18n|fonts)\/[A-Za-z0-9._-]+$/.test(requested);
+  if (!publicFiles.includes(requested) && !publicFolder) return response.writeHead(404).end("Not found");
   const file = normalize(join(root, requested));
   const relativePath = relative(root, file);
   if (relativePath.startsWith("..") || isAbsolute(relativePath)) return response.writeHead(404).end("Not found");
@@ -2742,15 +3135,29 @@ const server = createServer(async (request, response) => {
     response.end("Not found");
     return;
   }
-  response.writeHead(200, {
+  const headers = {
     "Content-Type": mime[extname(file)] || "application/octet-stream",
-    "Cache-Control": "no-cache"
-  });
+    "Cache-Control": requested === "sw.js" ? "no-cache, no-store, must-revalidate" : "no-cache"
+  };
+  if (requested === "sw.js") headers["Service-Worker-Allowed"] = "/";
+  if (requested === "join.html") {
+    const info = connectInfo();
+    const lanList = info.urls.map((address, index) => `<li><a href="${escapeHtml(address)}">${escapeHtml(address)}${index === 0 ? " <span>প্রধান</span>" : ""}</a></li>`).join("");
+    contents = contents.toString("utf8")
+      .replace("{{SHOP_NAME}}", escapeHtml(info.shopName))
+      .replace("{{LAN_LIST}}", lanList);
+  }
+  response.writeHead(200, headers);
   response.end(contents);
 });
 
 const onListening = () => {
   console.log(`Shop Desk is running on ${typeof port === "number" ? `${host}:${port}` : "the host's application socket"}${trustProxy ? " (behind HTTPS proxy)" : ""}`);
+  const info = connectInfo();
+  console.log(`Phones and tablets on the shop Wi-Fi can open: ${info.primary}`);
+  const licence = currentLicense();
+  console.log(`Licence: ${licence.state}${licence.state === "trial" ? ` (${licence.daysLeft} day(s) left)` : ""}${licence.readOnly ? " - read-only mode" : ""}`);
+  console.log(`Installation ID: ${shortInstallId(installId)}`);
   console.log(`SQLite database: ${join(dataDir, "shop.sqlite3")}`);
   console.log("Press Ctrl+C to stop the server.");
 };

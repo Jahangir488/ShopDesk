@@ -1,8 +1,9 @@
 const $ = selector => document.querySelector(selector);
 const money = amount => {
-  const value = Number(amount) || 0, currency = data.currencyCode || "BDT", locale = data.locale || "en-BD";
+  const value = Number(amount) || 0, currency = data.currencyCode || "BDT";
+  const locale = data.banglaDigits ? "bn-BD" : (data.locale || "en-BD");
   try { return new Intl.NumberFormat(locale, { style: "currency", currency, maximumFractionDigits: 0 }).format(value); }
-  catch { return `${currency} ${Math.round(value).toLocaleString()}`; }
+  catch { return `${currency} ${localizeDigits(Math.round(value).toLocaleString())}`; }
 };
 const currencySymbol = () => {
   try { return new Intl.NumberFormat(data.locale || "en-BD", { style: "currency", currency: data.currencyCode || "BDT", maximumFractionDigits: 0 }).formatToParts(0).find(part => part.type === "currency")?.value || data.currencyCode || "BDT"; }
@@ -15,14 +16,187 @@ const paymentOptions = (selected, options = paymentChoices()) => {
 };
 const quickPaymentChoices = () => paymentChoices().filter(method => !/due|credit|unpaid/i.test(method));
 const dateKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-const dateLabel = value => new Date(`${value}T12:00:00`).toLocaleDateString(data.locale || "en-BD", { day: "numeric", month: "short" });
+const dateLabel = value => new Date(`${value}T12:00:00`).toLocaleDateString(data.banglaDigits || hasBangla() ? "bn-BD" : (data.locale || "en-BD"), { day: "numeric", month: "short" });
 const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 let data = { shopName: "Shop Desk", workspace: "", contactNumber: "", website: "", email: "", facebookPage: "", whatsappNumber: "", contactAddress: "", shopType: "general", currencyCode: "BDT", locale: "en-BD", taxRate: 0, taxMode: "none", requireCustomer: false, allowDiscounts: true, paymentMethods: ["Cash", "bKash", "Nagad", "Card", "Due"], products: [], sales: [], onlineOrders: [], serviceJobs: [], devices: [], expenses: [], categories: [], permissions: {} };
 let signedInUser = null;
 let toastTimer;
 
+// ---- Language (English / বাংলা) -------------------------------------------------
+const I18N = { code: "en", strings: {}, patterns: [], loaded: false };
+const hasBangla = () => I18N.code === "bn";
+const bnDigits = value => String(value).replace(/\d/g, digit => "০১২৩৪৫৬৭৮৯"[Number(digit)]);
+const localizeDigits = value => (data.banglaDigits ? bnDigits(value) : String(value));
+function t(text, vars) {
+  const source = String(text ?? "");
+  if (!hasBangla() || !source) return source;
+  const trimmed = source.trim();
+  let translated = I18N.strings[trimmed];
+  if (translated !== undefined) {
+    const start = source.slice(0, source.indexOf(trimmed));
+    const end = source.slice(source.indexOf(trimmed) + trimmed.length);
+    translated = start + translated + end;
+  } else {
+    for (const rule of I18N.patterns) {
+      try {
+        const pattern = new RegExp(rule.re);
+        if (pattern.test(trimmed)) { translated = trimmed.replace(pattern, rule.bn); break; }
+      } catch { /* ignore a bad rule */ }
+    }
+  }
+  if (translated === undefined) return source;
+  return vars ? String(translated).replace(/\{(\w+)\}/g, (match, key) => (vars[key] ?? match)) : String(translated);
+}
+const tt = text => t(text);
+const I18N_SKIP = "script,style,textarea,code,pre,[data-no-i18n],.no-i18n";
+function translateTextNode(node) {
+  if (!hasBangla() || !node || node.nodeType !== 3 || !node.nodeValue) return;
+  const parent = node.parentElement;
+  if (!parent || parent.closest(I18N_SKIP)) return;
+  const translated = t(node.nodeValue);
+  if (translated !== node.nodeValue) node.nodeValue = translated;
+}
+function translateAttributes(element) {
+  if (!hasBangla() || !element || element.nodeType !== 1 || element.closest(I18N_SKIP)) return;
+  for (const name of ["placeholder", "title", "aria-label", "alt", "data-label"]) {
+    const value = element.getAttribute(name);
+    if (!value) continue;
+    const translated = t(value);
+    if (translated !== value) element.setAttribute(name, translated);
+  }
+}
+function translateDom(root = document.body) {
+  if (!hasBangla() || !root) return;
+  if (root.nodeType === 3) { translateTextNode(root); return; }
+  if (root.nodeType === 1) translateAttributes(root);
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  let node;
+  while ((node = walker.nextNode())) {
+    if (node.nodeType === 3) translateTextNode(node);
+    else translateAttributes(node);
+  }
+}
+let i18nObserver = null, i18nScheduled = false;
+const i18nPending = new Set();
+function scheduleI18nFlush() {
+  if (i18nScheduled) return;
+  i18nScheduled = true;
+  const run = () => {
+    i18nScheduled = false;
+    if (!hasBangla()) { i18nPending.clear(); return; }
+    const nodes = [...i18nPending];
+    i18nPending.clear();
+    for (const node of nodes) { try { translateDom(node); } catch { /* keep rendering */ } }
+  };
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+  else setTimeout(run, 16);
+}
+function startI18nObserver() {
+  if (i18nObserver || typeof MutationObserver !== "function") return;
+  i18nObserver = new MutationObserver(records => {
+    if (!hasBangla()) return;
+    for (const record of records) {
+      if (record.type === "characterData") i18nPending.add(record.target);
+      else if (record.type === "attributes") i18nPending.add(record.target);
+      else record.addedNodes.forEach(node => { if (node.nodeType === 1 || node.nodeType === 3) i18nPending.add(node); });
+    }
+    // Batches are merged: a panel that finishes rendering while another
+    // translation pass is queued must not be dropped.
+    scheduleI18nFlush();
+  });
+  i18nObserver.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["placeholder", "title", "aria-label", "alt", "data-label"] });
+}
+async function loadLanguage(code) {
+  const language = code === "bn" ? "bn" : "en";
+  I18N.code = language;
+  if (language === "bn" && !I18N.loaded) {
+    try {
+      const response = await fetch("/i18n/bn.json", { credentials: "same-origin" });
+      const payload = await response.json();
+      I18N.strings = payload.strings || {};
+      I18N.patterns = payload.patterns || [];
+      I18N.loaded = true;
+    } catch { I18N.strings = {}; I18N.patterns = []; }
+  }
+  document.documentElement.lang = language;
+  document.body.classList.toggle("lang-bn", language === "bn");
+  if (language === "bn") { startI18nObserver(); translateDom(document.body); }
+}
+function renderLicenseBanner() {
+  const license = data.license;
+  const main = document.querySelector(".main");
+  if (!main || !license) return;
+  const show = license.readOnly || (license.state !== "active" && license.warning) || (license.state === "active" && license.warning);
+  let banner = $("#license-banner");
+  if (!show) { banner?.remove(); return; }
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "license-banner";
+    banner.className = "license-banner";
+    banner.setAttribute("role", "status");
+    main.prepend(banner);
+  }
+  const days = Math.max(0, Number(license.daysLeft) || 0);
+  let message;
+  if (license.readOnly) message = `${t("Read-only mode")} — ${t("Billing is paused. Your data, reports, exports and backups are still available.")}`;
+  else if (license.state === "trial") message = `${t("Trial")} · ${t("Trial ends")}: ${days} ${t("days left")}`;
+  else message = `${t("Your licence expires soon")}: ${days} ${t("days left")}`;
+  const canActivate = signedInUser?.role === "admin";
+  banner.innerHTML = `<span class="license-banner-text">${esc(message)}</span>${canActivate
+    ? `<button type="button" class="button primary" data-open-license>${esc(t("Enter licence key"))}</button>`
+    : `<span class="license-banner-hint">${esc(t("Ask an administrator to enter a licence key."))}</span>`}`;
+}
+let backupWarningCheckedAt = 0;
+async function renderBackupWarning() {
+  if (!data.permissions?.backups || !document.querySelector(".main")) return;
+  if (Date.now() - backupWarningCheckedAt < 60_000) return;
+  backupWarningCheckedAt = Date.now();
+  let status;
+  try { status = await api("/api/backups/offsite"); } catch { return; }
+  const stale = status.connected && status.enabled && (!status.lastSuccessAt || Date.now() - new Date(status.lastSuccessAt).getTime() > 48 * 3600 * 1000);
+  const existing = $("#backup-warning");
+  if (!stale) { existing?.remove(); return; }
+  const main = document.querySelector(".main");
+  const banner = existing || document.createElement("div");
+  banner.id = "backup-warning";
+  banner.className = "backup-warning";
+  banner.setAttribute("role", "status");
+  banner.innerHTML = `<span>${esc(t("Your last offsite backup is more than 48 hours old. Restore protection before the computer is lost or damaged."))}</span><button type="button" class="button secondary">${esc(t("Open backup settings"))}</button>`;
+  banner.querySelector("button").onclick = () => showScreen("backup-tools", true);
+  if (!existing) {
+    const licenseBanner = $("#license-banner");
+    if (licenseBanner) licenseBanner.after(banner); else main.prepend(banner);
+  }
+}
+function openLicenseModal() {
+  const license = data.license || {};
+  const rows = [
+    [t("Plan"), license.plan || "—"],
+    [t("Status"), license.state === "active" ? t("Activated") : license.state === "trial" ? t("Trial") : t("Read-only mode")],
+    [t("Days left"), String(license.daysLeft ?? 0)],
+    [t("Expires"), license.expiresAt ? new Date(license.expiresAt).toLocaleDateString() : "—"],
+    [t("Licensed to"), license.licensedTo || "—"]
+  ];
+  openModal(t("Licence & plan"), `<div class="license-summary">${rows.map(([label, value]) => `<div><small>${esc(label)}</small><b>${esc(value)}</b></div>`).join("")}</div>
+    <label>${esc(t("Licence key"))}<textarea name="licenseKey" rows="4" autocomplete="off" spellcheck="false" placeholder="${esc(t("Paste the licence key you received"))}"></textarea></label>
+    <p class="form-hint">${esc(t("Send this ID to your supplier when asking for a licence."))} <code>${esc(license.installId || "")}</code></p>`,
+    async form => {
+      const token = String(form.get("licenseKey") || "").trim();
+      if (!token) throw new Error(t("Paste the licence key you received."));
+      data.license = await api("/api/license/activate", { method: "POST", body: JSON.stringify({ token }) });
+      renderLicenseBanner();
+      render();
+      toast(t("Activated"));
+    });
+  const submit = $("#submit-modal");
+  if (submit) submit.textContent = t("Activate");
+}
+document.addEventListener("click", event => {
+  if (event.target.closest("[data-open-license]")) { event.preventDefault(); openLicenseModal(); }
+});
+
 function refreshTopbarClock() {
-  const now = new Date(), locale = data.locale || "en-BD";
+  const now = new Date(), locale = data.banglaDigits || hasBangla() ? "bn-BD" : (data.locale || "en-BD");
   $("#today").textContent = now.toLocaleDateString(locale, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
   $("#topbar-time").textContent = now.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit", second: "2-digit" });
 }
@@ -65,7 +239,7 @@ function showScreen(screen, updateHash = false) {
     if (active) item.setAttribute("aria-current", "page");
     else item.removeAttribute("aria-current");
   });
-  $(".topbar b").textContent = screenTitles[screen];
+  $(".topbar b").textContent = t(screenTitles[screen]);
   if (screen === "backup-tools") renderBackupManager();
   if (screen === "repairs") renderRepairJobs();
   if (screen === "online-orders") renderOnlineOrders();
@@ -95,9 +269,12 @@ async function api(path, options = {}) {
   const payload = response.status === 204 ? null : await response.json().catch(() => ({}));
   if (response.status === 401 && path !== "/api/login" && path !== "/api/setup") {
     showAuth();
-    throw new Error("Your session ended. Please sign in again.");
+    throw new Error(t("Your session ended. Please sign in again."));
   }
-  if (!response.ok) throw new Error(payload?.error || "The request could not be completed.");
+  if (!response.ok) {
+    if (response.status === 402 && payload?.code === "license_expired") { data.license = payload.license; renderLicenseBanner(); }
+    throw new Error(tt(payload?.error || "The request could not be completed."));
+  }
   return payload;
 }
 async function updateState(path, body, method = "POST") {
@@ -106,7 +283,7 @@ async function updateState(path, body, method = "POST") {
 }
 function toast(message) {
   const element = $("#toast");
-  element.textContent = message;
+  element.textContent = tt(message);
   element.classList.add("show");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => element.classList.remove("show"), 3000);
@@ -119,7 +296,7 @@ function showAuth() {
   $("#main-app").classList.add("auth-locked");
 }
 function showError(selector, message) {
-  $(selector).textContent = message;
+  $(selector).textContent = tt(message);
 }
 function localizeCurrencyLabels(root = document) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -137,6 +314,7 @@ function toggleSignedInView(isSignedIn) {
 async function loadWorkspace(user) {
   signedInUser = user;
   data = await api("/api/state");
+  await loadLanguage(data.language || "en");
   refreshTopbarClock();
   refreshServerLoad();
   toggleSignedInView(true);
@@ -148,6 +326,10 @@ async function loadWorkspace(user) {
 }
 async function startApp() {
   try {
+    try {
+      const boot = await api("/api/auth/status");
+      await loadLanguage(boot.language || "bn");
+    } catch { /* the language file is optional; keep English */ }
     try {
       const session = await api("/api/auth/me");
       await loadWorkspace(session.user);
@@ -246,7 +428,7 @@ $("#recovery-form").onsubmit = async event => {
 $("#logout").onclick = async () => {
   try { await api("/api/logout", { method: "POST", body: "{}" }); } catch { /* Sign out locally even if the server is unavailable. */ }
   showAuth();
- startApp();
+  startApp();
 };
 
 function reportRange() {
@@ -1323,7 +1505,7 @@ function render() {
   const todayKey = dateKey(new Date());
   const month = todayKey.slice(0, 7);
   const displayName = signedInUser?.displayName || signedInUser?.username || "Shopkeeper";
-  $("#welcome-greeting").innerHTML = `Good morning, ${esc(displayName)} <span>✳</span>`;
+  $("#welcome-greeting").innerHTML = `${t("Good morning")}, ${esc(displayName)} <span>✳</span>`;
   $("#signed-in-as").textContent = displayName;
   $("#profile-initial").textContent = displayName.trim().charAt(0).toUpperCase() || "?";
   const profilePhoto = $("#profile-photo");
@@ -1429,6 +1611,9 @@ function render() {
   $("#add-expense").classList.toggle("hidden", !permissions.expenses);
   renderReport();
   localizeCurrencyLabels();
+  renderLicenseBanner();
+  renderBackupWarning();
+  translateDom(document.body);
   if (!repairsEnabled && ["#repairs", "#devices"].includes(location.hash)) showScreen("dashboard", true);
   if (!onlineOrdersEnabled && location.hash === "#online-orders") showScreen("dashboard", true);
 }
@@ -1492,7 +1677,9 @@ function closeDialogElement(element) {
   }
 }
 function openModal(title, markup, onSave) {
-  $("#modal-title").textContent = title;
+  $("#modal-title").textContent = t(title);
+  const submit = $("#submit-modal");
+  if (submit) submit.textContent = t("Save");
   const errorBanner = $("#modal-error-banner");
   if (errorBanner) {
     errorBanner.textContent = "";
@@ -1500,6 +1687,7 @@ function openModal(title, markup, onSave) {
   }
   $("#modal-fields").innerHTML = markup;
   localizeCurrencyLabels($("#modal-fields"));
+  translateDom($("#modal-fields"));
   $("#modal-fields").oninput = () => {
     if (errorBanner) errorBanner.classList.add("hidden");
   };
@@ -1566,11 +1754,32 @@ $("#edit-workspace").onclick = () => {
     return;
   }
   const select = (name, values, current) => `<select name="${name}">${values.map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join("")}</select>`;
-  openModal("Shop settings", `<label>Shop name<input name="shopName" value="${esc(data.shopName)}" required></label><label>Workspace / location<input name="workspace" value="${esc(data.workspace)}" required></label><h3>Business contact details for printed orders</h3><div class="form-row"><label>Contact number<input name="contactNumber" maxlength="60" value="${esc(data.contactNumber || "")}"></label><label>WhatsApp number<input name="whatsappNumber" maxlength="60" value="${esc(data.whatsappNumber || "")}"></label></div><div class="form-row"><label>Email address<input name="email" type="email" maxlength="254" value="${esc(data.email || "")}"></label><label>Website<input name="website" maxlength="250" value="${esc(data.website || "")}" placeholder="www.example.com"></label></div><label>Facebook page<input name="facebookPage" maxlength="250" value="${esc(data.facebookPage || "")}" placeholder="Facebook page URL"></label><label>Contact / return address<input name="contactAddress" maxlength="300" value="${esc(data.contactAddress || "")}" placeholder="Office or shop return address"></label><div class="form-row"><label>Shop type${select("shopType", [["general","General retail"],["hardware","Hardware"],["grocery","Grocery"],["clothing","Clothing"],["pharmacy","Pharmacy"],["mobile","Mobile phone sales & service"]], data.shopType)}<small class="form-hint">Adds useful starter categories; existing products stay as they are.</small></label><label>Currency${select("currencyCode", [["BDT","Bangladeshi taka (BDT)"],["USD","US dollar (USD)"],["EUR","Euro (EUR)"],["GBP","Pound sterling (GBP)"],["INR","Indian rupee (INR)"],["PKR","Pakistani rupee (PKR)"],["NPR","Nepalese rupee (NPR)"],["LKR","Sri Lankan rupee (LKR)"],["AUD","Australian dollar (AUD)"],["CAD","Canadian dollar (CAD)"]], data.currencyCode)}<small class="form-hint">Changing currency changes display only; it does not convert existing amounts.</small></label></div><label>Number and date region${select("locale", [["en-BD","English · Bangladesh"],["bn-BD","বাংলা · বাংলাদেশ"],["en-US","English · United States"],["en-GB","English · United Kingdom"],["en-IN","English · India"],["en-PK","English · Pakistan"],["en-NP","English · Nepal"],["en-LK","English · Sri Lanka"],["en-AU","English · Australia"],["en-CA","English · Canada"]], data.locale)}</label><div class="form-row"><label>Tax mode${select("taxMode", [["none","No tax"],["inclusive","Tax included in prices"],["exclusive","Add tax at checkout"]], data.taxMode)}</label><label>Tax rate (%)<input name="taxRate" type="number" min="0" max="100" step="0.01" value="${Number(data.taxRate || 0)}"></label></div><label>Payment methods <small class="form-hint">Separate options with commas. Example: Cash, Card, Mobile pay, Due.</small><input name="paymentMethods" maxlength="400" value="${esc((data.paymentMethods || []).join(", "))}" required></label><label class="setting-check"><input type="checkbox" name="requireCustomer" ${data.requireCustomer ? "checked" : ""}> Require a customer name on every bill</label><label class="setting-check"><input type="checkbox" name="allowDiscounts" ${data.allowDiscounts ? "checked" : ""}> Allow bill discounts</label>`, async form => {
-    data = await api("/api/settings", { method: "PUT", body: JSON.stringify({ shopName: form.get("shopName").trim(), workspace: form.get("workspace").trim(), contactNumber: form.get("contactNumber").trim(), website: form.get("website").trim(), email: form.get("email").trim(), facebookPage: form.get("facebookPage").trim(), whatsappNumber: form.get("whatsappNumber").trim(), contactAddress: form.get("contactAddress").trim(), shopType: form.get("shopType"), currencyCode: form.get("currencyCode"), locale: form.get("locale"), taxMode: form.get("taxMode"), taxRate: Number(form.get("taxRate")), paymentMethods: String(form.get("paymentMethods")).split(",").map(value => value.trim()).filter(Boolean), requireCustomer: form.get("requireCustomer") === "on", allowDiscounts: form.get("allowDiscounts") === "on" }) });
+  openModal("Shop settings", `<label>Shop name<input name="shopName" value="${esc(data.shopName)}" required></label><label>Workspace / location<input name="workspace" value="${esc(data.workspace)}" required></label><h3>Business contact details for printed orders</h3><div class="form-row"><label>Contact number<input name="contactNumber" maxlength="60" value="${esc(data.contactNumber || "")}"></label><label>WhatsApp number<input name="whatsappNumber" maxlength="60" value="${esc(data.whatsappNumber || "")}"></label></div><div class="form-row"><label>Email address<input name="email" type="email" maxlength="254" value="${esc(data.email || "")}"></label><label>Website<input name="website" maxlength="250" value="${esc(data.website || "")}" placeholder="www.example.com"></label></div><label>Facebook page<input name="facebookPage" maxlength="250" value="${esc(data.facebookPage || "")}" placeholder="Facebook page URL"></label><label>Contact / return address<input name="contactAddress" maxlength="300" value="${esc(data.contactAddress || "")}" placeholder="Office or shop return address"></label><div class="form-row"><label>Shop type${select("shopType", [["general","General retail"],["hardware","Hardware"],["grocery","Grocery"],["clothing","Clothing"],["pharmacy","Pharmacy"],["mobile","Mobile phone sales & service"]], data.shopType)}<small class="form-hint">Adds useful starter categories; existing products stay as they are.</small></label><label>Currency${select("currencyCode", [["BDT","Bangladeshi taka (BDT)"],["USD","US dollar (USD)"],["EUR","Euro (EUR)"],["GBP","Pound sterling (GBP)"],["INR","Indian rupee (INR)"],["PKR","Pakistani rupee (PKR)"],["NPR","Nepalese rupee (NPR)"],["LKR","Sri Lankan rupee (LKR)"],["AUD","Australian dollar (AUD)"],["CAD","Canadian dollar (CAD)"]], data.currencyCode)}<small class="form-hint">Changing currency changes display only; it does not convert existing amounts.</small></label></div><label>Number and date region${select("locale", [["en-BD","English · Bangladesh"],["bn-BD","বাংলা · বাংলাদেশ"],["en-US","English · United States"],["en-GB","English · United Kingdom"],["en-IN","English · India"],["en-PK","English · Pakistan"],["en-NP","English · Nepal"],["en-LK","English · Sri Lanka"],["en-AU","English · Australia"],["en-CA","English · Canada"]], data.locale)}</label><label>Language<select name="language"><option value="bn" ${data.language === "bn" ? "selected" : ""}>বাংলা</option><option value="en" ${data.language !== "bn" ? "selected" : ""}>English</option></select></label><label class="setting-check"><input type="checkbox" name="banglaDigits" ${data.banglaDigits ? "checked" : ""}> Bangla digits (০১২৩)</label></div><div class="form-row"><label>Tax mode${select("taxMode", [["none","No tax"],["inclusive","Tax included in prices"],["exclusive","Add tax at checkout"]], data.taxMode)}</label><label>Tax rate (%)<input name="taxRate" type="number" min="0" max="100" step="0.01" value="${Number(data.taxRate || 0)}"></label></div><label>Payment methods <small class="form-hint">Separate options with commas. Example: Cash, Card, Mobile pay, Due.</small><input name="paymentMethods" maxlength="400" value="${esc((data.paymentMethods || []).join(", "))}" required></label><label class="setting-check"><input type="checkbox" name="requireCustomer" ${data.requireCustomer ? "checked" : ""}> Require a customer name on every bill</label><label class="setting-check"><input type="checkbox" name="allowDiscounts" ${data.allowDiscounts ? "checked" : ""}> Allow bill discounts</label>`, async form => {
+    const previousLanguage = data.language, previousDigits = data.banglaDigits;
+    data = await api("/api/settings", { method: "PUT", body: JSON.stringify({ shopName: form.get("shopName").trim(), workspace: form.get("workspace").trim(), contactNumber: form.get("contactNumber").trim(), website: form.get("website").trim(), email: form.get("email").trim(), facebookPage: form.get("facebookPage").trim(), whatsappNumber: form.get("whatsappNumber").trim(), contactAddress: form.get("contactAddress").trim(), shopType: form.get("shopType"), currencyCode: form.get("currencyCode"), locale: form.get("locale"), taxMode: form.get("taxMode"), taxRate: Number(form.get("taxRate")), paymentMethods: String(form.get("paymentMethods")).split(",").map(value => value.trim()).filter(Boolean), requireCustomer: form.get("requireCustomer") === "on", allowDiscounts: form.get("allowDiscounts") === "on", language: form.get("language"), banglaDigits: form.get("banglaDigits") === "on" }) });
+    if (data.language !== previousLanguage || data.banglaDigits !== previousDigits) { location.reload(); return; }
     render();
     toast("Shop details saved");
   });
+  $("#open-license-settings")?.remove();
+  $("#modal-fields")?.insertAdjacentHTML("beforeend", `<p class="settings-license-row"><button type="button" class="button secondary" id="open-license-settings">Licence & plan</button> <span class="form-hint">${esc(t("Installation ID"))}: <code>${esc(data.license?.installId || "")}</code></span></p>`);
+  const licenseButton = $("#open-license-settings");
+  if (licenseButton) licenseButton.onclick = () => { closeModal(); openLicenseModal(); };
+  $("#settings-update-row")?.remove();
+  $("#modal-fields")?.insertAdjacentHTML("beforeend", `<p class="settings-update-row" id="settings-update-row"><button type="button" class="button secondary" id="check-updates">${esc(t("Check for updates"))}</button> <span class="form-hint" id="update-status" role="status"></span></p>`);
+  const updateButton = $("#check-updates");
+  if (updateButton) updateButton.onclick = async () => {
+    const note = $("#update-status");
+    updateButton.disabled = true;
+    note.textContent = t("Checking…");
+    try {
+      const result = await api("/api/update-check");
+      if (!result.configured) note.textContent = t("Updates are not configured on this server.");
+      else if (result.updateAvailable) note.innerHTML = `${esc(t("Version {version} is available.", { version: result.latest }))} ${result.url ? `<a href="${esc(result.url)}" target="_blank" rel="noopener noreferrer">${esc(t("Download update"))}</a>` : esc(t("Ask your supplier for the update."))}`;
+      else note.textContent = `${t("You are running the latest version.")} (${result.current})`;
+    } catch (error) { note.textContent = `${t("Could not check for updates.")} ${error.message}`; }
+    finally { updateButton.disabled = false; }
+  };
 };
 
 function imageAsSmallJpeg(file) {
@@ -2433,6 +2642,9 @@ function printHtml(html) {
     frame.remove();
     return toast("Could not prepare the print view. Please try again.");
   }
+  if (hasBangla()) {
+    try { translateDom(frame.contentDocument.body); } catch { /* printing still works in English */ }
+  }
   setTimeout(() => {
     try {
       frame.contentWindow.focus();
@@ -2769,13 +2981,100 @@ $("#backup-tabs").addEventListener("click", event => {
   const button = event.target.closest("[data-backup-view]");
   if (button && !button.classList.contains("hidden")) setBackupView(button.dataset.backupView);
 });
+async function renderOffsitePanel() {
+  const panel = $("#offsite-panel");
+  if (!panel) return;
+  let status;
+  try { status = await api("/api/backups/offsite"); }
+  catch (error) { panel.innerHTML = `<p class="backup-status">${esc(error.message)}</p>`; return; }
+  const heading = `<div class="offsite-heading"><div><h3>Offsite backup</h3><p>Keep an encrypted copy outside this computer with Google Drive.</p></div><span class="offsite-pill ${status.connected ? "on" : ""}">${esc(status.connected ? t("Connected") : t("Not connected"))}</span></div>`;
+  if (!status.configured) {
+    panel.innerHTML = heading + `<p class="backup-status">Offsite backup is not configured on this server yet.</p><p class="form-hint">Set SHOP_GOOGLE_CLIENT_ID and SHOP_GOOGLE_CLIENT_SECRET on the server, then restart Shop Desk.</p>`;
+    translateDom(panel);
+    return;
+  }
+  const lastSuccess = status.lastSuccessAt ? new Date(status.lastSuccessAt).toLocaleString() : "";
+  const stale = status.lastSuccessAt ? (Date.now() - new Date(status.lastSuccessAt).getTime() > 48 * 3600 * 1000) : true;
+  const warning = status.connected && status.enabled && stale
+    ? `<p class="offsite-warning">${esc(t("Your last offsite backup is more than 48 hours old."))}</p>` : "";
+  if (!status.connected) {
+    panel.innerHTML = heading + `<p class="backup-status">Connect Google Drive so this shop can be restored even if the server PC is lost, stolen, or damaged. The backup is encrypted before it leaves this computer.</p>
+      <div class="backup-actions"><button type="button" class="button primary" id="offsite-connect">Connect Google Drive</button></div>
+      <p class="form-hint">Google will return to: <code>${esc(status.redirectUri)}</code></p>${status.redirectUri.includes("localhost") || status.redirectUri.includes("127.0.0.1") ? `<p class="form-hint">Open the Google link on the shop server PC.</p>` : ""}`;
+    translateDom(panel);
+    const connect = $("#offsite-connect");
+    if (connect) connect.onclick = async () => {
+      connect.disabled = true;
+      try {
+        const result = await api("/api/backups/offsite/connect", { method: "POST" });
+        window.open(result.url, "_blank", "noopener");
+        toast("Complete the Google sign-in, then return to this screen.");
+      } catch (error) { toast(error.message); }
+      finally { connect.disabled = false; }
+    };
+    return;
+  }
+  panel.innerHTML = heading + warning + `
+    <div class="offsite-summary">
+      <div><small>Google account</small><b>${esc(status.email || "Connected")}</b></div>
+      <div><small>Last successful upload</small><b>${esc(lastSuccess || t("Never"))}</b></div>
+      <div><small>Files kept on Drive</small><b>${Number(status.keep) || 14}</b></div>
+    </div>
+    ${status.lastFile ? `<p class="form-hint">Latest file: <code>${esc(status.lastFile)}</code></p>` : ""}
+    ${status.lastError ? `<p class="backup-status offsite-error" role="status">${esc(status.lastError)}</p>` : ""}
+    <form id="offsite-config" class="offsite-config">
+      <label class="backup-schedule-toggle"><input type="checkbox" name="enabled" ${status.enabled ? "checked" : ""}> Upload a backup every day</label>
+      <label>Backup folder name<input name="folderName" maxlength="60" value="${esc(status.folderName)}"></label>
+      <label>Keep on Google Drive<input name="keep" type="number" min="1" max="90" value="${Number(status.keep) || 14}"></label>
+      <button type="submit" class="button secondary">Save offsite settings</button><span id="offsite-status" role="status"></span>
+    </form>
+    <div class="backup-actions"><button type="button" class="button primary" id="offsite-run">Back up now</button><button type="button" class="button secondary" id="offsite-test">Test connection</button><button type="button" class="button secondary" id="offsite-disconnect">Disconnect</button></div>
+    <p class="form-hint">Backups are encrypted with the key stored on this server.</p>
+    <p class="form-hint">Keep a copy of the offsite.key file from the data folder: without it, downloaded backups cannot be opened.</p>`;
+  translateDom(panel);
+  const testButton = $("#offsite-test");
+  if (testButton) testButton.onclick = async () => {
+    testButton.disabled = true;
+    try {
+      const result = await api("/api/backups/offsite/test", { method: "POST" });
+      toast(`${t("Google Drive connection works.")} ${result.email || ""}`.trim());
+    } catch (error) { toast(error.message); }
+    finally { testButton.disabled = false; }
+  };
+  $("#offsite-config").onsubmit = async event => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget), note = $("#offsite-status");
+    note.textContent = "Saving…";
+    try {
+      await api("/api/backups/offsite/config", { method: "POST", body: JSON.stringify({ enabled: form.has("enabled"), folderName: form.get("folderName"), keep: Number(form.get("keep")) }) });
+      note.textContent = "Saved.";
+      renderOffsitePanel();
+    } catch (error) { note.textContent = error.message; }
+  };
+  $("#offsite-run").onclick = async event => {
+    const button = event.currentTarget;
+    button.disabled = true; button.textContent = "Uploading…";
+    try {
+      const result = await api("/api/backups/offsite/run", { method: "POST" });
+      toast(`${t("Backup uploaded")}: ${result.result.file}`);
+      renderOffsitePanel();
+    } catch (error) { toast(error.message); }
+    finally { button.disabled = false; button.textContent = t("Back up now"); }
+  };
+  $("#offsite-disconnect").onclick = async () => {
+    if (!confirm(t("Disconnect Google Drive? Existing backups will stay on Drive."))) return;
+    await api("/api/backups/offsite/disconnect", { method: "POST" });
+    renderOffsitePanel();
+  };
+}
+
 async function renderBackupManager() {
   const container = $("#backup-manager");
   container.innerHTML = `<p class="backup-status">Loading backups…</p>`;
   try {
     const [{ files }, schedule] = await Promise.all([api("/api/backups"), api("/api/backups/schedule")]);
     const lastBackup = schedule.lastBackupAt ? new Date(schedule.lastBackupAt).toLocaleString() : "No scheduled backup has completed yet.";
-    container.innerHTML = `<p class="backup-intro">Create a dated SQLite copy and choose where to save it on this computer. To restore, select a Shop Desk backup file. Restoring replaces current shop data; a safety copy is made first.</p><section class="backup-schedule"><div><h3>Automatic backup schedule</h3><p>Choose a folder on the shop server PC. The server must be running at the selected time. Uses the server PC’s local time; keeps the newest 14 backups.</p><p class="backup-last-run">Last scheduled backup: <b>${esc(lastBackup)}</b></p></div><form id="backup-schedule-form"><label class="backup-schedule-toggle"><input type="checkbox" name="enabled" ${schedule.enabled ? "checked" : ""}> Enable daily backup</label><label>Backup time<input type="time" name="time" value="${esc(schedule.time)}" required></label><label class="backup-schedule-directory">Server backup folder<span class="backup-folder-choice"><input type="text" id="backup-schedule-directory" name="directory" value="${esc(schedule.directory)}" readonly required><button type="button" class="button secondary" id="browse-backup-folder">Choose folder…</button></span></label><button type="submit" class="button secondary">Save schedule</button><span id="backup-schedule-status" role="status"></span></form></section><dialog id="backup-folder-dialog" class="backup-folder-dialog" aria-labelledby="backup-folder-title"><div class="backup-folder-dialog-content"><div class="backup-folder-heading"><h3 id="backup-folder-title">Choose server backup folder</h3><button type="button" class="user-action" id="close-backup-folder">Close</button></div><p>Browse folders on the server PC, then choose the folder for scheduled backups.</p><div class="backup-folder-current"><button type="button" class="user-action" id="backup-folder-up">Up one folder</button><button type="button" class="user-action" id="backup-folder-drives">Drives</button><strong id="backup-folder-current"></strong></div><p id="backup-folder-error" class="backup-folder-error" role="status"></p><div id="backup-folder-list" class="backup-folder-list"></div><div class="backup-folder-actions"><button type="button" class="button primary" id="use-backup-folder">Use this folder</button><button type="button" class="button secondary" id="cancel-backup-folder">Cancel</button></div></div></dialog><div class="backup-actions"><button type="button" class="button primary" id="create-save-backup">Create and save backup</button><button type="button" class="button secondary" id="restore-from-file">Restore from file…</button></div><p class="backup-status" id="backup-status" role="status"></p>${files.length ? `<h3>Backups stored on the shop server</h3><div class="table-scroll"><table><thead><tr><th>Backup file</th><th>Size</th><th>Actions</th></tr></thead><tbody>${files.map(file => `<tr><td>${esc(file.name)}</td><td>${(file.size / 1048576).toFixed(2)} MB</td><td><button type="button" class="user-action" data-save-backup="${esc(file.name)}">Save to location…</button><button type="button" class="user-action danger" data-restore-server-backup="${esc(file.name)}">Restore</button><button type="button" class="user-action danger" data-delete-backup="${esc(file.name)}" aria-label="Delete backup ${esc(file.name)}">Delete</button></td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">No backups are stored on the shop server yet.</p>`}`;
+    container.innerHTML = `<section id="offsite-panel" class="offsite-panel"><p class="backup-status">Loading offsite backup…</p></section><p class="backup-intro">Create a dated SQLite copy and choose where to save it on this computer. To restore, select a Shop Desk backup file. Restoring replaces current shop data; a safety copy is made first.</p><section class="backup-schedule"><div><h3>Automatic backup schedule</h3><p>Choose a folder on the shop server PC. The server must be running at the selected time. Uses the server PC’s local time; keeps the newest 14 backups.</p><p class="backup-last-run">Last scheduled backup: <b>${esc(lastBackup)}</b></p></div><form id="backup-schedule-form"><label class="backup-schedule-toggle"><input type="checkbox" name="enabled" ${schedule.enabled ? "checked" : ""}> Enable daily backup</label><label>Backup time<input type="time" name="time" value="${esc(schedule.time)}" required></label><label class="backup-schedule-directory">Server backup folder<span class="backup-folder-choice"><input type="text" id="backup-schedule-directory" name="directory" value="${esc(schedule.directory)}" readonly required><button type="button" class="button secondary" id="browse-backup-folder">Choose folder…</button></span></label><button type="submit" class="button secondary">Save schedule</button><span id="backup-schedule-status" role="status"></span></form></section><dialog id="backup-folder-dialog" class="backup-folder-dialog" aria-labelledby="backup-folder-title"><div class="backup-folder-dialog-content"><div class="backup-folder-heading"><h3 id="backup-folder-title">Choose server backup folder</h3><button type="button" class="user-action" id="close-backup-folder">Close</button></div><p>Browse folders on the server PC, then choose the folder for scheduled backups.</p><div class="backup-folder-current"><button type="button" class="user-action" id="backup-folder-up">Up one folder</button><button type="button" class="user-action" id="backup-folder-drives">Drives</button><strong id="backup-folder-current"></strong></div><p id="backup-folder-error" class="backup-folder-error" role="status"></p><div id="backup-folder-list" class="backup-folder-list"></div><div class="backup-folder-actions"><button type="button" class="button primary" id="use-backup-folder">Use this folder</button><button type="button" class="button secondary" id="cancel-backup-folder">Cancel</button></div></div></dialog><div class="backup-actions"><button type="button" class="button primary" id="create-save-backup">Create and save backup</button><button type="button" class="button secondary" id="restore-from-file">Restore from file…</button></div><p class="backup-status" id="backup-status" role="status"></p>${files.length ? `<h3>Backups stored on the shop server</h3><div class="table-scroll"><table><thead><tr><th>Backup file</th><th>Size</th><th>Actions</th></tr></thead><tbody>${files.map(file => `<tr><td>${esc(file.name)}</td><td>${(file.size / 1048576).toFixed(2)} MB</td><td><button type="button" class="user-action" data-save-backup="${esc(file.name)}">Save to location…</button><button type="button" class="user-action danger" data-restore-server-backup="${esc(file.name)}">Restore</button><button type="button" class="user-action danger" data-delete-backup="${esc(file.name)}" aria-label="Delete backup ${esc(file.name)}">Delete</button></td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">No backups are stored on the shop server yet.</p>`}`;
     $("#backup-schedule-form").onsubmit = async event => {
       event.preventDefault();
       const form = new FormData(event.currentTarget), button = event.currentTarget.querySelector('[type="submit"]'), status = $("#backup-schedule-status");
@@ -2820,6 +3119,7 @@ async function renderBackupManager() {
     $("#use-backup-folder").onclick = () => { $("#backup-schedule-directory").value = selectedServerFolder; closeDialogElement(folderDialog); };
     $("#close-backup-folder").onclick = $("#cancel-backup-folder").onclick = () => closeDialogElement(folderDialog);
     $("#create-save-backup").onclick = createAndSaveBackup;
+    renderOffsitePanel();
     $("#restore-from-file").onclick = restoreFromChosenFile;
     container.onclick = async event => {
       const saveButton = event.target.closest("[data-save-backup]");
@@ -3076,4 +3376,50 @@ render = function () {
   $("#supplier-tools").classList.toggle("hidden", !data.permissions?.inventory && !data.permissions?.supplier_purchases);
 };
 $("#supplier-tools").onclick = openSupplierHub;
+// ---- Installable app (PWA) and the "connect a phone" page ----
+let installPrompt = null;
+function setupInstallButton() {
+  const actions = document.querySelector(".top-actions");
+  if (!actions || $("#install-app")) return;
+  const button = document.createElement("button");
+  button.type = "button"; button.id = "install-app";
+  button.className = "button secondary hidden"; button.textContent = t("Install app");
+  actions.prepend(button);
+  window.addEventListener("beforeinstallprompt", event => {
+    event.preventDefault();
+    installPrompt = event;
+    button.classList.remove("hidden");
+  });
+  window.addEventListener("appinstalled", () => {
+    installPrompt = null;
+    button.classList.add("hidden");
+    toast("Shop Desk was added to this device.");
+  });
+  button.addEventListener("click", async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    try { await installPrompt.userChoice; } catch { /* the user dismissed the prompt */ }
+    installPrompt = null;
+    button.classList.add("hidden");
+  });
+}
+function setupJoinLink() {
+  const bottom = document.querySelector(".sidebar-bottom");
+  if (!bottom || $("#join-link")) return;
+  const link = document.createElement("a");
+  link.id = "join-link"; link.className = "join-link";
+  link.href = "/join"; link.target = "_blank"; link.rel = "noopener";
+  link.innerHTML = `<span aria-hidden="true">▦</span> ${esc(t("Connect a phone"))}`;
+  bottom.appendChild(link);
+}
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  const secure = location.protocol === "https:" || ["localhost", "127.0.0.1"].includes(location.hostname);
+  if (!secure) return; // browsers only allow service workers on HTTPS or localhost
+  navigator.serviceWorker.register("/sw.js").catch(() => { /* offline caching is optional */ });
+}
+setupInstallButton();
+setupJoinLink();
+registerServiceWorker();
+
 startApp();

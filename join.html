@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="bn">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#23282d">
+  <title>Connect a phone · Shop Desk</title>
+  <style>
+    @font-face{font-family:"Noto Sans Bengali";font-style:normal;font-weight:400;font-display:swap;src:url("/fonts/noto-sans-bengali-400-normal.woff2") format("woff2")}
+    @font-face{font-family:"Noto Sans Bengali";font-style:normal;font-weight:600;font-display:swap;src:url("/fonts/noto-sans-bengali-600-normal.woff2") format("woff2")}
+    @font-face{font-family:"Noto Sans Bengali";font-style:normal;font-weight:700;font-display:swap;src:url("/fonts/noto-sans-bengali-700-normal.woff2") format("woff2")}
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #eef1f3; color: #1f2328; font: 16px/1.55 "Noto Sans Bengali", "Nirmala UI", "Segoe UI", system-ui, sans-serif; }
+    main { width: min(720px, 100%); margin: 0 auto; padding: 28px 18px 60px; }
+    header { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+    .mark { width: 54px; height: 54px; border-radius: 14px; background: #56d378; display: grid; place-items: center; flex: none; }
+    .mark svg { width: 32px; height: 32px; fill: none; stroke: #1f2328; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+    h1 { font-size: 22px; margin: 0; }
+    header small { display: block; color: #5b6670; font-size: 14px; margin-top: 2px; }
+    .card { background: #fff; border: 1px solid #dfe3e6; border-radius: 16px; padding: 22px; box-shadow: 0 18px 44px #1f23280f; }
+    .qr { display: grid; place-items: center; gap: 10px; margin: 8px 0 18px; }
+    .qr img { width: min(260px, 82vw); height: auto; image-rendering: pixelated; background: #fff; border-radius: 12px; }
+    .qr p { margin: 0; color: #5b6670; font-size: 14px; text-align: center; }
+    .urls { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 8px; }
+    .urls a { display: flex; align-items: center; justify-content: space-between; gap: 12px; text-decoration: none; background: #f2f4f6; border: 1px solid #e3e7ea; border-radius: 10px; padding: 12px 14px; color: #17433d; font-weight: 600; word-break: break-all; }
+    .urls span { font-weight: 400; color: #5b6670; font-size: 13px; white-space: nowrap; }
+    h2 { font-size: 17px; margin: 24px 0 8px; color: #17433d; }
+    ol, ul { margin: 0; padding-left: 22px; color: #44505a; }
+    li { margin: 6px 0; }
+    .divider { height: 1px; background: #e6eaec; margin: 22px 0; }
+    .en { color: #5b6670; font-size: 14px; }
+    .tip { margin-top: 18px; background: #fff8e5; border: 1px solid #f0dfae; color: #6b5200; border-radius: 12px; padding: 12px 14px; font-size: 14px; }
+    code { background: #f2f4f6; padding: 2px 6px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <span class="mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M7 14.5h18v11H7zM11 14.5V10h10v4.5M7 19h18M14 19v2h4v-2"/><path d="M5 14.5 8 9h16l3 5.5"/></svg></span>
+      <div>
+        <h1>{{SHOP_NAME}}</h1>
+        <small>Shop Desk · ফোন বা ট্যাবলেট যুক্ত করুন</small>
+      </div>
+    </header>
+
+    <section class="card">
+      <div class="qr">
+        <img src="/api/connect/qr.svg" width="260" height="260" alt="Shop Desk ঠিকানা সহ QR কোড">
+        <p>ফোনের ক্যামেরা দিয়ে QR কোডটি স্ক্যান করুন</p>
+      </div>
+
+      <ul class="urls">
+        {{LAN_LIST}}
+      </ul>
+
+      <div class="divider"></div>
+
+      <h2>কীভাবে যুক্ত করবেন</h2>
+      <ol>
+        <li>ফোনটি দোকানের ওয়াই-ফাইতে যুক্ত করুন।</li>
+        <li>উপরের QR কোড স্ক্যান করুন, অথবা যেকোনো ঠিকানা ব্রাউজারে খুলুন।</li>
+        <li>Shop Desk-এ আপনার অ্যাকাউন্ট দিয়ে সাইন ইন করুন।</li>
+        <li>ব্রাউজারের মেনু থেকে <strong>“Add to Home screen”</strong> চাপলে অ্যাপের মতো আইকন তৈরি হবে।</li>
+      </ol>
+
+      <h2>How to connect</h2>
+      <p class="en">Join the shop Wi-Fi, scan the QR code, then sign in. Use your browser's “Add to Home screen” option to install Shop Desk as an app.</p>
+
+      <div class="tip">
+        দোকানের কম্পিউটার বন্ধ থাকলে ফোনে বিল করা যাবে না। সার্ভার কম্পিউটার চালু রাখুন এবং নিয়মিত ব্যাকআপ নিন।
+      </div>
+    </section>
+  </main>
+</body>
+</html>

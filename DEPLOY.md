@@ -5,6 +5,8 @@ and keep a **persistent disk** for the `data` folder. Plain PHP/static hosting (
 
 Always serve it over **HTTPS**. It contains passwords, sessions and business data.
 
+For shop-PC installs (Windows service, systemd, backups and licence keys), see [INSTALL.md](INSTALL.md).
+
 ## Environment variables
 
 | Variable | Meaning |
@@ -15,6 +17,11 @@ Always serve it over **HTTPS**. It contains passwords, sessions and business dat
 | `SHOP_DATA_DIR` | Folder for `shop.sqlite3` and `backups/`. Use a persistent path outside the code folder |
 | `SHOP_SETUP_CODE` | Optional 16+ char first-run code. Otherwise read it from the app's logs. Remove after owner is created |
 | `SHOP_GMAIL_USER`, `SHOP_GMAIL_APP_PASSWORD` | Optional Gmail recovery |
+| `SHOP_GOOGLE_CLIENT_ID`, `SHOP_GOOGLE_CLIENT_SECRET` | Google Drive offsite backups (see INSTALL.md §6) |
+| `SHOP_OAUTH_REDIRECT` | Override the Google callback URI if it differs from `SHOP_PUBLIC_URL` |
+| `SHOP_BACKUP_KEY` | 16+ char backup encryption key. Empty = generated in `DATA_DIR/offsite.key` |
+| `SHOP_UPDATE_MANIFEST_URL` | HTTPS URL of the signed release manifest for update notices |
+| `SHOP_UPDATE_ALLOW_HTTP=1` | Testing only: allow a loopback `http://` manifest |
 
 A health check is available at `/healthz`.
 

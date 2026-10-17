@@ -2,13 +2,59 @@
 
 Small shop inventory, sales, expenses, and reports with a separate SQLite database.
 
+## Install for a shop
+
+See [INSTALL.md](INSTALL.md) for Windows, Linux and Docker installation, automatic start,
+Google Drive backups, licence keys, HTTPS and updates.
+
+- **Windows:** right-click `install/windows/install-shopdesk.bat` and choose **Run as administrator**. It copies the app to `C:\ShopDesk`, starts it at boot, opens the private-network firewall and creates desktop shortcuts.
+- **Linux:** `sudo ./install/linux/install-shopdesk.sh` installs a systemd service with data in `/var/lib/shopdesk`.
+- **Docker:** `docker build -t shopdesk .` and run it with a volume mounted at `/data`.
+
+## Offsite backups (Google Drive)
+
+Local backups stay on the shop PC, so they do not help if the PC is lost, stolen or damaged.
+**Backup and restore → Offsite backup** connects a Google Drive account and uploads an
+AES-256-GCM encrypted copy after every successful local backup, plus **Back up now**.
+Only ciphertext leaves the computer; the key stays in `data/offsite.key` (or
+`SHOP_BACKUP_KEY`). The app keeps the newest 14 files by default (1–90 configurable) and
+shows the Google account, the last successful upload and any error. A red banner appears
+on every screen when the last success is more than 48 hours old.
+**Test connection** verifies the Google session without uploading anything.
+Read [INSTALL.md §6](INSTALL.md#6-google-drive-offsite-backups) to create the OAuth client.
+
+## Licence and trial
+
+New installations start with a 14-day trial (existing databases get 30 days). During the
+last 7 days a banner reminds you to activate. After expiry the API switches to read-only:
+new bills and other changes are blocked, while viewing data, reports, exports, local
+backups and offsite backups keep working. Enter the Ed25519-signed key in
+**Settings → Licence & plan**. The installation ID shown there must match the key.
+Vendor key generation and issuing are documented in [INSTALL.md §7](INSTALL.md#7-licence-keys-and-trial).
+
+## Bangla interface and receipts
+
+Choose **বাংলা** in **Shop settings → Language** (or on first run). The whole interface —
+navigation, forms, tables, dialogs, toasts, reports and printed bills — switches to
+Bangla, using the bundled UI font stack and `i18n/bn.json`. **Bangla digits** converts
+amounts and dates to ০১২৩৪৫৬৭৮৯ independently of the receipt language. Printed receipts
+and repair tickets follow the selected language. Switch back to English at any time.
+
+## Install on phones (PWA)
+
+When Shop Desk is served over HTTPS (or on `localhost`), browsers offer **Install app**.
+The app has a web manifest, 192/512/maskable icons, an offline fallback page and a service
+worker that caches the shell but never API responses. **Connect a phone** opens `/join`,
+which shows a server-generated QR code for the current LAN address so staff can join
+without typing a URL.
+
 ## Browser support
 
 Shop Desk works in current versions of Chrome, Edge, Firefox, and Safari (2020 or newer). The product search in New bill, Record sale, and Online orders is built into the page instead of using the browser's datalist popup, so typing part of an item name or scanning a barcode gives the same results in every browser. Very old browsers show an update message instead of a blank page.
 
 ## Start on this PC only
 
-Run `run-shop.bat`, then open `http://127.0.0.1:8765`. Node.js 22 or later is required.
+Run `run-shop.bat`, then open `http://127.0.0.1:8765`. Node.js 22.13 or later is required.
 
 ## First-time owner setup
 
@@ -70,7 +116,7 @@ Close and reopen the shop server window so it receives those environment values.
 
 ## Data and backups
 
-The database is `data/shop.sqlite3` on the server PC. The app creates a daily SQLite backup at the scheduled time (default **11:00 PM server local time**) and keeps the newest 14. The default backup folder is `data/backups`; administrators with **Manage backups and restore the database** can use **Choose folder** in **Backup and restore** to select a folder on the server PC. The server must be running at the scheduled time; if it starts later that day, it catches up by creating that day's backup. Changing the schedule time or destination after a backup has run will trigger a backup for the updated schedule once its time is due. The same page lets authorized administrators enable or disable the schedule, change its time, create a backup and download it to a chosen location, restore a selected SQLite backup, or permanently delete any server-stored backup after confirmation. This power is separate from staff and administrator management. Before restore, the server creates a safety copy of the current database. Restoring replaces the current data, so confirm the selected file carefully. Jahangir can use **Fresh start** there to clear trial business records and team accounts, reset shop settings, and keep the Jahangir login; the app saves a backup first and asks for a typed confirmation. Keep an off-device copy on another secure device. Backups are local and are not encrypted or automatically copied to cloud storage.
+The database is `data/shop.sqlite3` on the server PC. The app creates a daily SQLite backup at the scheduled time (default **11:00 PM server local time**) and keeps the newest 14. The default backup folder is `data/backups`; administrators with **Manage backups and restore the database** can use **Choose folder** in **Backup and restore** to select a folder on the server PC. The server must be running at the scheduled time; if it starts later that day, it catches up by creating that day's backup. Changing the schedule time or destination after a backup has run will trigger a backup for the updated schedule once its time is due. The same page lets authorized administrators enable or disable the schedule, change its time, create a backup and download it to a chosen location, restore a selected SQLite backup, or permanently delete any server-stored backup after confirmation. This power is separate from staff and administrator management. Before restore, the server creates a safety copy of the current database. Restoring replaces the current data, so confirm the selected file carefully. Jahangir can use **Fresh start** there to clear trial business records and team accounts, reset shop settings, and keep the Jahangir login; the app saves a backup first and asks for a typed confirmation. Keep an off-device copy on another secure device. Local backups are not encrypted. For protection when the PC is lost or damaged, connect Google Drive under **Offsite backup**: a compressed SQLite snapshot is encrypted on this server before upload, and the app keeps the newest files on Drive with a 48-hour staleness warning.
 
 The top bar displays the current date and time on the device running the browser, plus live server CPU and system memory usage. Hover over the server status for the shop process memory and server uptime.
 
