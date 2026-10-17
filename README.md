@@ -2,6 +2,10 @@
 
 Small shop inventory, sales, expenses, and reports with a separate SQLite database.
 
+## Browser support
+
+Shop Desk works in current versions of Chrome, Edge, Firefox, and Safari (2020 or newer). The product search in New bill, Record sale, and Online orders is built into the page instead of using the browser's datalist popup, so typing part of an item name or scanning a barcode gives the same results in every browser. Very old browsers show an update message instead of a blank page.
+
 ## Start on this PC only
 
 Run `run-shop.bat`, then open `http://127.0.0.1:8765`. Node.js 22 or later is required.
