@@ -118,13 +118,24 @@ function ShortPath($path) {
     return $fso.GetFile($path).ShortPath
   } catch { return $path }
 }
+function Write-UrlShortcut([string]$path, [string]$url, [string]$iconPath) {
+  if ($iconPath -match '[^\x00-\x7F]') { $iconPath = ShortPath $iconPath }
+  $contents = "[InternetShortcut]`r`nURL=$url`r`nIconFile=$iconPath`r`nIconIndex=0`r`n"
+  [System.IO.File]::WriteAllText($path, $contents, [System.Text.Encoding]::ASCII)
+}
 function Wait-Healthy([int]$seconds) {
+  Write-Host "  Waiting for the local server" -NoNewline -ForegroundColor Gray
   for ($i = 0; $i -lt $seconds; $i++) {
-    Start-Sleep -Seconds 1
     try {
-      if ((Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/healthz" -TimeoutSec 3).StatusCode -eq 200) { return $true }
+      if ((Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/healthz" -TimeoutSec 2).StatusCode -eq 200) {
+        Write-Host " ready" -ForegroundColor DarkGreen
+        return $true
+      }
     } catch { }
+    Write-Host "." -NoNewline -ForegroundColor Gray
+    Start-Sleep -Seconds 1
   }
+  Write-Host " timed out" -ForegroundColor Yellow
   return $false
 }
 
@@ -279,15 +290,11 @@ if (-not $SkipFirewall) {
 }
 
 try {
-  $shell = New-Object -ComObject WScript.Shell
   $desktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
   if (-not $desktop) { $desktop = [Environment]::GetFolderPath("Desktop") }
-  $shortcut = $shell.CreateShortcut((Join-SafePath $desktop "Shop Desk.url"))
-  $shortcut.TargetPath = "http://localhost:$Port/"
-  $shortcut.Save()
-  $phone = $shell.CreateShortcut((Join-SafePath $desktop "Shop Desk - Connect a phone.url"))
-  $phone.TargetPath = "http://localhost:$Port/join"
-  $phone.Save()
+  $iconFile = Join-SafePath $AppDir "icons\shopdesk.ico"
+  Write-UrlShortcut (Join-SafePath $desktop "Shop Desk.url") "http://localhost:$Port/" $iconFile
+  Write-UrlShortcut (Join-SafePath $desktop "Shop Desk - Connect a phone.url") "http://localhost:$Port/join" $iconFile
   Write-Host "  Desktop shortcuts created" -ForegroundColor DarkGreen
 } catch {
   Add-Problem "The desktop shortcuts were not created."
