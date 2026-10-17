@@ -76,7 +76,11 @@ say "Waiting for Shop Desk"
 healthy=0
 for _ in $(seq 1 30); do
   sleep 1
-  if curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then healthy=1; break; fi
+  if command -v curl >/dev/null 2>&1; then
+    if curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then healthy=1; break; fi
+  elif "$NODE_BIN" -e "fetch('http://127.0.0.1:' + process.env.PORT + '/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))" >/dev/null 2>&1; then
+    healthy=1; break
+  fi
 done
 if [[ "$healthy" -ne 1 ]]; then
   fail "Shop Desk did not answer on port $PORT. Check: journalctl -u shopdesk -n 60 --no-pager"
