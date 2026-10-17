@@ -96,17 +96,29 @@ try {
 console.log("Install files");
 try {
   const required = [
-    "INSTALL.md", "Dockerfile", "docker-compose.yml", ".env.example",
-    "1 - Install Shop Desk.bat", "2 - Uninstall Shop Desk.bat",
+    "INSTALL.md", "LICENSING.md", "Dockerfile", "docker-compose.yml", ".env.example",
+    "1 - Install Shop Desk.bat", "2 - Uninstall Shop Desk.bat", "3 - Build Licence Kit.bat",
     "install/windows/install-shopdesk.ps1", "install/windows/install-shopdesk.bat",
     "install/windows/update-shopdesk.ps1", "install/windows/uninstall-shopdesk.ps1",
     "install/windows/uninstall-shopdesk.bat",
+    "install/windows/repair-shopdesk.ps1", "install/windows/repair-shopdesk.bat",
     "install/linux/install-shopdesk.sh", "install/linux/uninstall-shopdesk.sh", "install/linux/shopdesk.service",
-    "lib/license-public.mjs", "join.html", "offline.html"
+    "lib/license-public.mjs", "tools/licence-kit.mjs", "tools/make-licence-kit.mjs",
+    "join.html", "offline.html"
   ];
   const missing = required.filter(file => !existsSync(join(root, file)));
   if (missing.length) fail("missing install files: " + missing.join(", "));
   else ok(`${required.length} install, licence and PWA files present`);
+  // Batch files must keep Windows line endings; LF-only copies break cmd.exe blocks.
+  for (const bat of ["1 - Install Shop Desk.bat", "2 - Uninstall Shop Desk.bat", "install/windows/install-shopdesk.bat", "install/windows/uninstall-shopdesk.bat", "install/windows/repair-shopdesk.bat"]) {
+    const bytes = readFileSync(join(root, bat));
+    if (!bytes.includes("\r\n") || bytes.toString("latin1").replace(/\r\n/g, "").includes("\n")) fail(`${bat} must use CRLF line endings`);
+  }
+  ok("batch files use CRLF line endings");
+  // The installer must never copy the signing key or issued licences onto a shop PC.
+  const installer = readFileSync(join(root, "install", "windows", "install-shopdesk.ps1"), "utf8");
+  for (const token of ["vendor", "licences", "*.pem"]) if (!installer.includes(token)) fail(`installer should exclude ${token}`);
+  ok("installer excludes the signing key, PEM files and licence receipts");
 } catch (error) { fail("install files: " + error.message); }
 
 console.log("QR code");

@@ -78,6 +78,26 @@ passed `-SetupCode`.
 **Phones:** connect them to the same Wi-Fi and open `http://SERVER-IP:8765`, or scan the
 QR code from **Connect a phone** (`http://localhost:8765/join`) on the server PC.
 
+### Repairing a broken installation
+
+Every step of the installer is independent: if the Scheduled Task, the firewall rule or a
+shortcut cannot be created, the installer says so, keeps going, and still starts Shop Desk.
+A **Needs attention** list at the end names the failed step and the repair command. The
+installer writes **`Repair Shop Desk.bat`** into the install folder next to the uninstaller.
+
+Double-click **`Repair Shop Desk.bat`** in the install folder (for example
+`E:\ShopDesk\Repair Shop Desk.bat`) to rebuild `run-shop.cmd`, the scheduled task, the
+firewall rule, the shortcuts and `%ProgramData%\ShopDesk\install.json`, then start the app
+and check `/healthz`. Data is never touched. From PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install\windows\repair-shopdesk.ps1 -InstallDir "E:\ShopDesk"
+```
+
+The repair script finds the installation on its own — from the marker file, the
+**Shop Desk** task, the licence file or a scan of `C:\ShopDesk` … `Z:\ShopDesk` — so no
+parameters are needed in the usual case.
+
 ---
 
 ## 3. Linux installation (systemd)
@@ -260,6 +280,20 @@ npm run license:keygen
   installations; replacing the key pair invalidates all previously issued keys.
 
 ### Vendor: issue a licence
+
+The quickest way at a shop is the portable USB kit:
+
+```bash
+npm run licence:kit          # builds releases/ShopDesk-Licence-Kit
+```
+
+Copy that folder to an encrypted USB stick, then double-click
+**`Make Licence Key.bat`** on the shop PC. It finds the installation, reads the
+Installation ID, signs a 365-day key, copies it to the clipboard and saves a receipt.
+Unplug the stick when the app shows **Activated**. The full workflow, safety rules and
+Bangla instructions are in [LICENSING.md](LICENSING.md).
+
+For scripts and remote keys:
 
 ```bash
 node tools/license-issue.mjs \
