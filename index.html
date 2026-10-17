@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#23282d">
+  <title>Mohammad Hardware — Shop desk</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Semi+Condensed:wght@600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="main-app">
+  <aside class="sidebar">
+    <a class="brand" href="#"><span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M7 14.5h18v11H7zM11 14.5V10h10v4.5M7 19h18M14 19v2h4v-2" /><path class="brand-accent" d="M5 14.5 8 9h16l3 5.5" /></svg></span><span><b id="shop-name">Bolts & Boards</b><small>SHOP DESK</small></span></a>
+    <button class="store-label" id="edit-workspace" type="button" aria-label="Shop workspace location">WORKSPACE <span id="edit-workspace-icon" aria-hidden="true">✎</span><small id="workspace-name">Uttara, Dhaka</small></button>
+    <nav>
+      <p class="nav-caption">OVERVIEW</p>
+      <a class="nav-link active" data-screen-link="dashboard" href="#dashboard"><i>▦</i> Dashboard</a>
+      <a class="nav-link" id="inventory-nav" data-screen-link="inventory" href="#inventory"><i>▤</i> Inventory <span id="nav-stock" class="nav-count">0</span></a>
+      <a class="nav-link" id="sales-nav" data-screen-link="sales" href="#sales"><i>↗</i> Sales</a>
+      <a class="nav-link" id="online-orders-nav" data-screen-link="online-orders" href="#online-orders"><i>🛒</i> Online orders <span id="nav-online-orders" class="nav-count">0</span></a>
+      <a class="nav-link" id="repairs-nav" data-screen-link="repairs" href="#repairs"><i>⚒</i> Repairs</a>
+      <a class="nav-link" id="devices-nav" data-screen-link="devices" href="#devices"><i>▣</i> Device sales & warranty</a>
+      <a class="nav-link" id="expenses-nav" data-screen-link="expenses" href="#expenses"><i>↘</i> Expenses</a>
+      <p class="nav-caption space">MANAGE</p>
+      <a class="nav-link" id="reports-nav" data-screen-link="reports" href="#reports"><i>▧</i> Reports</a>
+      <a class="nav-link" id="users-nav" data-screen-link="users" href="#users"><i>♙</i> Team access</a>
+      <a class="nav-link hidden" id="backup-tools-nav" data-screen-link="backup-tools" href="#backup-tools"><i>◫</i> Backup and restore</a>
+    </nav>
+    <div class="sidebar-bottom"><div class="help-icon">?</div><div><b>Need a hand?</b><small>Shop data is on the server PC.</small></div></div>
+  </aside>
+  <main class="main" id="dashboard">
+    <header class="topbar"><div><span class="breadcrumb">Shop desk</span><span class="crumb-sep">/</span><b>Dashboard</b></div><div class="top-actions"><div class="topbar-status" aria-label="Date, time, and server status"><span class="today" id="today"></span><span class="topbar-time" id="topbar-time"></span><span class="server-load hidden" id="server-load" title="Server resource status">Server · loading…</span></div><span id="signed-in-as" class="signed-in-as"></span><button class="button secondary" id="supplier-tools" type="button">Supplier history</button><button class="button secondary" id="logout">Sign out</button><button class="avatar profile-button" id="profile-button" aria-label="Edit your profile"><span id="profile-initial">S</span><img id="profile-photo" class="hidden" alt="Profile photo"></button></div></header>
+    <div class="content">
+      <div class="app-screen" data-screen="dashboard">
+      <section class="welcome"><div><p class="eyebrow" id="welcome-date"></p><h1 id="welcome-greeting">Good morning, Shopkeeper <span>✳</span></h1><p>Here’s what’s happening at your shop today.</p></div><button class="button primary" id="new-sale">＋ &nbsp;Record a sale</button></section>
+      <section class="metrics">
+        <article class="metric"><div class="metric-top"><span>Today’s sales</span><span class="metric-icon green">↗</span></div><strong id="today-sales">৳0</strong><small><span class="neutral">●</span> <span id="today-count">0 transactions</span></small></article>
+        <article class="metric"><div class="metric-top"><span>Estimated profit</span><span class="metric-icon violet">⌁</span></div><strong id="today-profit">৳0</strong><small>After cost of goods sold</small></article>
+        <article class="metric"><div class="metric-top"><span>Monthly expenses</span><span class="metric-icon orange">↘</span></div><strong id="month-expenses">৳0</strong><small id="expense-count">0 recorded this month</small></article>
+        <article class="metric"><div class="metric-top"><span>Product types</span><span class="metric-icon blue">▤</span></div><strong id="stock-total">0</strong><small><span id="low-count" class="warning">0 low</span> · quantities shown by unit</small></article>
+      </section>
+      <section class="grid-main">
+        <article class="panel trend-panel"><div class="panel-heading"><div><h2>Business activity</h2><p>Daily sales and expenses · last 7 days</p></div><a class="text-link" data-screen-link="reports" href="#reports">Open reports →</a></div><div class="trend-summary"><div><small>7-DAY SALES</small><b id="trend-sales-total">৳0</b></div><div><small>7-DAY EXPENSES</small><b id="trend-expenses-total">৳0</b></div></div><div class="trend-legend"><span><i class="trend-key sales-key"></i>Sales</span><span><i class="trend-key expenses-key"></i>Expenses</span></div><div class="trend-chart" id="dashboard-trend" role="img" aria-label="Sales and expense graph for the last seven days"></div><p class="trend-empty hidden" id="dashboard-trend-empty"></p></article>
+        <article class="panel stock-panel"><div class="panel-heading"><div><h2>Stock watch <small id="stock-watch-count" style="color: #bf823e; font-size: 11px; font-weight: 700; margin-left: 4px;"></small></h2><p>Products that need attention</p></div><div class="report-filters"><button class="button secondary" id="download-stock-watch" type="button">Download Excel</button></div><a class="text-link" href="#inventory">View all →</a></div><div id="stock-watch" class="stock-watch"></div></article>
+      </section>
+      <section class="panel returns-panel" id="dashboard-returns"><div class="panel-heading"><div><h2>Recent product returns</h2><p>Latest returned items and return values</p></div><a class="text-link" data-screen-link="sales" href="#sales">View sales →</a></div><div id="dashboard-returns-list" class="dashboard-returns-list"></div></section>
+      </div>
+      <div class="app-screen hidden" data-screen="reports">
+        <section class="panel sales-panel" id="reports"><div class="panel-heading"><div><h2>Business report</h2><p id="report-caption">Sales, costs, and estimated profit</p></div><div class="report-filters"><label>From<input id="report-from" type="date" aria-label="Report start date"></label><label>To<input id="report-to" type="date" aria-label="Report end date"></label><button class="button secondary" id="download-report" type="button">Download Excel</button><button class="button secondary" id="print-report" type="button">Print report</button></div></div><div class="report-totals"><div><small>GROSS SALES</small><b id="report-sales">৳0</b></div><div><small>GROSS PROFIT</small><b id="report-profit">৳0</b></div><div><small>TAX COLLECTED</small><b id="report-tax">৳0</b></div><div><small>EXPENSES</small><b id="report-expenses">৳0</b></div><div><small>NET PROFIT</small><b id="report-net">৳0</b></div></div><div class="chart-summary"><b id="chart-total">৳0</b><span id="chart-label">Sales in selected period</span><span class="chart-dot"></span><span>Sales</span></div><div class="chart-wrap"><div class="y-labels"><span id="chart-max">৳0</span><span></span><span></span><span></span><span>৳0</span></div><div class="chart" id="chart"></div></div></section>
+      </div>
+      <div class="app-screen hidden" data-screen="inventory">
+      <section class="panel table-panel" id="inventory"><div class="panel-heading"><div><h2>Inventory</h2><p>Products, variants, stock levels, and pricing</p></div><div class="table-tools"><label class="search">⌕ <input id="search" placeholder="Search name, SKU, barcode, size, color"></label><div id="bulk-inventory-tools" class="bulk-inventory-tools hidden"><button class="button secondary" id="download-inventory-template" type="button">Download Excel template</button><label class="button secondary" for="bulk-inventory-file">Upload updated file</label><input id="bulk-inventory-file" type="file" accept=".csv,text/csv" hidden></div><button class="button secondary" id="manage-categories">Categories</button><button class="button secondary" id="add-product">＋ Add product</button></div></div><p id="bulk-inventory-help" class="bulk-inventory-help hidden">Edit the downloaded CSV in Excel and save it as CSV UTF-8. Keep Product ID unchanged for existing items; leave it blank to add a new item. Include unit, category, optional barcode, and clothing brand/color/size/material. Missing categories are created automatically during upload.</p><div class="table-scroll inventory-scroll"><table><thead><tr><th>PRODUCT</th><th>CATEGORY</th><th>SKU</th><th>BARCODE</th><th>UNIT</th><th>SELLING PRICE / UNIT</th><th>IN STOCK</th><th title="Quantity multiplied by selling price">TOTAL SELLING VALUE</th><th>STATUS</th><th>ACTION</th></tr></thead><tbody id="products-table"></tbody></table><div class="empty hidden" id="products-empty">No products yet. Add your first item to get started.</div></div><div id="inventory-summary" class="list-summary" aria-live="polite"></div></section>
+      </div>
+      <div class="app-screen hidden" data-screen="sales">
+      <section class="panel table-panel" id="sales"><div class="panel-heading"><div><h2>Sales history</h2><p>All recorded transactions</p></div><div class="table-tools"><button class="button primary" id="new-bill">New bill</button><button class="button secondary" id="sale-shortcut">＋ Record sale</button></div></div><div class="table-scroll sales-scroll"><table><thead><tr><th>DATE</th><th>ITEM</th><th>QTY / UNIT</th><th>PAYMENT</th><th>TOTAL</th><th id="sales-actions-header" class="hidden">ACTION</th></tr></thead><tbody id="sales-table"></tbody></table></div><div class="empty hidden" id="sales-empty">Your recorded sales will appear here.</div><div id="sales-summary" class="list-summary" aria-live="polite"></div></section>
+      </div>
+      <div class="app-screen hidden" data-screen="online-orders">
+        <section class="panel table-panel" id="online-orders">
+          <div class="panel-heading">
+            <div>
+              <h2>Online orders</h2>
+              <p>Manage customer orders, parcel packing, couriers, and deliveries</p>
+            </div>
+            <div class="table-tools">
+              <label class="search">⌕ <input id="online-order-search" placeholder="Search order #, customer, phone, address, courier, tracking, items"></label>
+              <select id="online-order-status-filter" aria-label="Filter online orders by status">
+                <option value="">All statuses</option>
+                <option value="Pending">Pending</option>
+                <option value="Confirmed">Confirmed</option>
+                <option value="Processing">Processing / Packed</option>
+                <option value="Shipped">Shipped / In transit</option>
+                <option value="Delivered">Delivered</option>
+                <option value="Returned">Returned</option>
+                <option value="Cancelled">Cancelled</option>
+              </select>
+              <button class="button secondary" id="download-online-orders" type="button">Download Excel</button>
+              <button class="button primary" id="new-online-order">＋ New online order</button>
+            </div>
+          </div>
+          <div class="online-order-shortcuts"><button class="button secondary" type="button" id="online-order-customers">Customers</button><button class="button secondary" type="button" id="online-order-bills">Bills</button><button class="button secondary" type="button" id="online-order-returns">Returns <span id="online-order-return-count" class="nav-count"></span></button></div><div class="online-order-date-filters"><label>From date<input type="date" id="online-orders-from"></label><label>To date<input type="date" id="online-orders-to"></label><button type="button" class="button secondary" id="online-orders-clear-dates">Clear dates</button></div>
+          <div id="online-orders-metrics" class="online-orders-metrics"></div>
+          <div class="table-scroll online-orders-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>ORDER #</th>
+                  <th>DATE</th>
+                  <th>CUSTOMER &amp; ADDRESS</th>
+                  <th>ITEMS (SIZE &amp; COLOR)</th>
+                  <th>COURIER &amp; TRACKING</th>
+                  <th>PAYMENT / DUE COD</th>
+                  <th>TOTAL</th>
+                  <th>STATUS</th>
+                  <th>ACTION</th>
+                </tr>
+              </thead>
+              <tbody id="online-orders-table"></tbody>
+            </table>
+            <div class="empty hidden" id="online-orders-empty">No online orders yet. Click "New online order" to record your first parcel or shipment.</div>
+          </div>
+          <div id="online-orders-summary" class="list-summary" aria-live="polite"></div>
+        </section>
+      </div>
+      <div class="app-screen hidden" data-screen="repairs">
+        <section class="panel table-panel" id="repairs"><div class="panel-heading"><div><h2>Repair jobs</h2><p>Track customer devices from intake through delivery</p></div><div class="table-tools"><label class="search">⌕ <input id="repair-search" placeholder="Search job, customer, phone, model, IMEI"></label><select id="repair-status-filter" aria-label="Filter repair jobs"><option value="">All statuses</option><option>Received</option><option>Diagnosing</option><option>Waiting for parts</option><option>In repair</option><option>Ready</option><option>Delivered</option><option>Cancelled</option></select><button class="button primary" id="new-repair">＋ New repair job</button></div></div><div class="table-scroll"><table><thead><tr><th>JOB</th><th>RECEIVED</th><th>CUSTOMER / PHONE</th><th>DEVICE / IMEI</th><th>ISSUE</th><th>STATUS</th><th>REPAIR WARRANTY</th><th>CHARGE / DUE</th><th>ACTION</th></tr></thead><tbody id="repairs-table"></tbody></table><div class="empty hidden" id="repairs-empty">No repair jobs yet. Create a job when a customer leaves a device for service.</div></div></section>
+      </div>
+      <div class="app-screen hidden" data-screen="devices">
+        <section class="panel table-panel" id="devices"><div class="panel-heading"><div><h2>Device sales & warranty</h2><p>IMEI/serial lookup and warranty status</p></div><label class="search">⌕ <input id="device-search" placeholder="Search IMEI, product, customer, phone"></label></div><div class="table-scroll"><table><thead><tr><th>IMEI / SERIAL</th><th>DEVICE</th><th>SOLD DATE</th><th>CUSTOMER / PHONE</th><th>WARRANTY ENDS</th><th>STATUS</th></tr></thead><tbody id="devices-table"></tbody></table><div class="empty hidden" id="devices-empty">No device sales have been recorded yet.</div></div></section>
+      </div>
+      <div class="app-screen hidden" data-screen="expenses">
+      <section class="panel table-panel" id="expenses"><div class="panel-heading"><div><h2>Expense history</h2><p>All recorded shop costs</p></div><button class="button secondary" id="add-expense">＋ Add expense</button></div><div class="table-scroll expenses-scroll"><table><thead><tr><th>DATE</th><th>CATEGORY</th><th>NOTE</th><th>AMOUNT</th><th id="expenses-actions-header" class="hidden">ACTION</th></tr></thead><tbody id="expenses-table"></tbody></table></div><div class="empty hidden" id="expenses-empty">Track rent, bills, wages, and other running costs here.</div></section>
+      </div>
+      <div class="app-screen hidden" data-screen="users">
+      <section class="panel table-panel hidden" id="users"><div class="panel-heading"><div><h2>Team access</h2><p>Add staff accounts and choose what each person can do</p></div><button class="button secondary" id="add-user">＋ Add team member</button></div><div class="table-scroll team-access-scroll"><table><thead><tr><th>USERNAME</th><th>ROLE</th><th>ACCESS</th><th>STATUS</th><th>ACTIONS</th></tr></thead><tbody id="users-table"></tbody></table></div><div class="empty hidden" id="users-empty">No staff accounts yet.</div></section>
+      </div>
+      <div class="app-screen hidden" data-screen="backup-tools">
+        <section class="panel table-panel" id="backup-tools-panel">
+          <div class="panel-heading"><div><h2>Backup and restore</h2><p>Save a copy of this shop or restore from a backup file</p></div></div>
+          <div class="team-tabs" id="backup-tabs" role="tablist" aria-label="Backup options">
+            <button class="button primary" type="button" data-backup-view="backups" role="tab" aria-selected="true">Backups</button>
+            <button class="button secondary hidden" id="fresh-start-tab" type="button" data-backup-view="fresh-start" role="tab" aria-selected="false">Fresh start</button>
+          </div>
+          <div id="backup-manager"></div>
+          <div id="fresh-start-panel" class="hidden">
+            <div class="fresh-start-card"><span class="fresh-start-icon" aria-hidden="true">↻</span><div><h3>Prepare this shop for a new company</h3><p>Remove trial records, sample products, suppliers, customers, team accounts, and transactions. Reset the shop profile and tax settings to defaults.</p><p class="form-hint">Your Jahangir administrator account and password will stay. A full backup is saved on the shop server first.</p><button type="button" class="button danger-button" id="fresh-start-button">Clear trial data and start fresh</button></div></div>
+          </div>
+        </section>
+      </div>
+      <footer><span id="footer-shop-name">Shop Desk</span> <span>·</span> Data is stored in the server PC database</footer>
+    </div>
+  </main>
+  </div>
+  <dialog id="modal"><form id="modal-form"><div class="modal-heading"><div><p class="eyebrow">SHOP DESK</p><h2 id="modal-title"></h2></div><button class="close" id="modal-cancel" type="button" aria-label="Close">×</button></div><div id="modal-error-banner" class="modal-error-banner hidden" role="alert" aria-live="assertive"></div><div id="modal-fields"></div><div class="modal-actions"><button class="button secondary" id="cancel-modal" type="button">Cancel</button><button class="button primary" id="submit-modal" type="submit">Save</button></div></form></dialog>
+  <div id="auth-screen" class="auth-screen hidden">
+    <form id="login-form" class="auth-card hidden">
+      <div class="auth-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M7 14.5h18v11H7zM11 14.5V10h10v4.5M7 19h18M14 19v2h4v-2" /><path class="brand-accent" d="M5 14.5 8 9h16l3 5.5" /></svg></div><p class="eyebrow">SHOP DESK</p><h1>Sign in</h1><p>Use your shop account to continue.</p>
+      <label>Username<input name="username" autocomplete="username" required></label>
+      <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+      <p class="auth-error" id="login-error"></p><button class="button primary" type="submit">Sign in</button>
+      <button class="user-action" id="show-recovery" type="button">Forgot password? Recover account</button>
+    </form>
+    <form id="recovery-form" class="auth-card hidden">
+      <div class="auth-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M7 14.5h18v11H7zM11 14.5V10h10v4.5M7 19h18M14 19v2h4v-2" /><path class="brand-accent" d="M5 14.5 8 9h16l3 5.5" /></svg></div><p class="eyebrow">ACCOUNT RECOVERY</p><h1>Reset password</h1><p>Enter the recovery code you saved while signed in. A successful reset gives you a replacement code.</p>
+      <div id="recovery-entry">
+        <label>Username<input name="username" autocomplete="username" required></label>
+        <label>Offline recovery code or emailed reset code<input name="recoveryCode" autocomplete="off" autocapitalize="characters" spellcheck="false" required></label>
+        <button class="user-action hidden" id="request-email-code" type="button">Email me a reset code</button><p class="form-hint" id="email-recovery-status" aria-live="polite"></p>
+        <label>New password <small>(at least 12 characters)</small><input name="password" type="password" minlength="12" autocomplete="new-password" required></label>
+        <label>Confirm new password<input name="confirmPassword" type="password" minlength="12" autocomplete="new-password" required></label>
+        <p class="auth-error" id="recovery-error"></p><button class="button primary" type="submit">Reset password</button>
+      </div>
+      <div id="recovery-success" class="hidden" aria-live="polite"></div>
+      <button class="user-action" id="recovery-back-login" type="button">Back to sign in</button>
+    </form>
+    <form id="setup-form" class="auth-card hidden">
+      <div class="auth-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M7 14.5h18v11H7zM11 14.5V10h10v4.5M7 19h18M14 19v2h4v-2" /><path class="brand-accent" d="M5 14.5 8 9h16l3 5.5" /></svg></div><p class="eyebrow">FIRST-TIME SETUP</p><h1>Create owner account</h1><p>Enter the one-time setup code shown in the server window. Keep your password private.</p>
+      <label>One-time setup code<input name="setupCode" autocomplete="off" required></label>
+      <label>Owner username<input name="username" minlength="3" maxlength="32" autocomplete="username" required></label>
+      <label>Password <small>(at least 12 characters)</small><input name="password" type="password" minlength="12" autocomplete="new-password" required></label>
+      <p class="auth-error" id="setup-error"></p><button class="button primary" type="submit">Create owner account</button>
+    </form>
+  </div>
+  <div class="toast" id="toast" role="status"></div>
+  <script src="app.js"></script>
+</body>
+</html>

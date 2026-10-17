@@ -1,0 +1,24 @@
+# VPS setup with automatic HTTPS (Let's Encrypt) via Caddy.
+# 1) Point your domain's A record to the VPS   2) edit Caddyfile   3) docker compose up -d --build
+services:
+  shop:
+    build: .
+    restart: unless-stopped
+    environment:
+      SHOP_PUBLIC_URL: ${SHOP_PUBLIC_URL}
+      SHOP_SETUP_CODE: ${SHOP_SETUP_CODE:-}
+      SHOP_GMAIL_USER: ${SHOP_GMAIL_USER:-}
+      SHOP_GMAIL_APP_PASSWORD: ${SHOP_GMAIL_APP_PASSWORD:-}
+    volumes:
+      - shopdata:/data
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+    depends_on: [shop]
+volumes:
+  shopdata:
+  caddydata:

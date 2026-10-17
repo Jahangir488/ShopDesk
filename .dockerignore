@@ -1,0 +1,6 @@
+data
+*.sqlite3*
+server.log
+structure.txt
+*.bat
+.git

@@ -1,0 +1,7 @@
+shop.yourdomain.com {
+	encode gzip
+	request_body {
+		max_size 20MB
+	}
+	reverse_proxy shop:8765
+}

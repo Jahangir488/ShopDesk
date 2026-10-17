@@ -1,0 +1,10 @@
+{
+  "name": "shop-desk",
+  "version": "11.0.0",
+  "private": true,
+  "description": "Shop Desk - inventory, sales, expenses and reports (SQLite)",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": { "start": "node server.mjs" },
+  "engines": { "node": ">=22.13" }
+}
