@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Generate the PWA / home-screen icons as PNGs without any image libraries.
-//   node tools/make-icons.mjs
+// Generate the Shop Desk PWA, offline-page and Windows shortcut icons without
+// image dependencies.  `node tools/make-icons.mjs`
 import { deflateSync } from "node:zlib";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -57,71 +57,107 @@ function png(width, height, pixel) {
   ]);
 }
 
-const COLORS = {
-  bg: [23, 67, 61],      // sidebar green
-  bgDeep: [18, 53, 49],
-  accent: [242, 183, 5],  // brand yellow
-  accentDark: [214, 158, 0],
-  paper: [242, 244, 246],
-  green: [86, 211, 120],
-  ink: [31, 35, 40]
+const C = {
+  deep: [18, 53, 49],
+  light: [27, 83, 73],
+  paper: [249, 251, 248],
+  paperShade: [231, 240, 235],
+  ink: [24, 65, 59],
+  mint: [77, 210, 133],
+  mintLight: [164, 239, 191],
+  gold: [248, 190, 32],
+  goldShade: [224, 157, 16]
 };
 
-// Draw the shop-front mark on a 512x512 design grid, then scale.
-function design(theme = "normal") {
-  return (px, py) => {
-    const x = (px / 512) * 512, y = (py / 512) * 512;
-    const s = 512 / 512;
-    // background (full bleed so maskable icons crop nicely)
-    let color = COLORS.bg;
-    // subtle vertical gradient
-    const t = y / 512;
-    color = [
-      Math.round(COLORS.bg[0] + (COLORS.bgDeep[0] - COLORS.bg[0]) * t),
-      Math.round(COLORS.bg[1] + (COLORS.bgDeep[1] - COLORS.bg[1]) * t),
-      Math.round(COLORS.bg[2] + (COLORS.bgDeep[2] - COLORS.bg[2]) * t)
-    ];
-    if (theme === "maskable") color = COLORS.bg;
+function roundedRect(x, y, left, top, right, bottom, radius) {
+  const cx = Math.max(left + radius, Math.min(x, right - radius));
+  const cy = Math.max(top + radius, Math.min(y, bottom - radius));
+  return (x - cx) ** 2 + (y - cy) ** 2 <= radius ** 2;
+}
+function circle(x, y, cx, cy, radius) {
+  return (x - cx) ** 2 + (y - cy) ** 2 <= radius ** 2;
+}
 
-    const inside = (x1, y1, x2, y2) => x >= x1 * s && x <= x2 * s && y >= y1 * s && y <= y2 * s;
-    // awning (trapezoid)
-    if (y >= 150 * s && y <= 232 * s) {
-      const inset = 96 + ((232 - 150) - (y / s - 150)) * 0.55;
-      const left = Math.min(150, inset + 20);
-      if (x >= (150 - (y / s - 150) * 0.35) * s && x <= (362 + (y / s - 150) * 0.35) * s) color = COLORS.accent;
+// A contemporary cash-register / sales-ledger mark: the pale register body,
+// live-screen bars and gold receipt remain legible at both home-screen and
+// small Windows shortcut sizes.
+function design(artScale = 1) {
+  return (px, py, size) => {
+    const sourceX = (px + 0.5) * 512 / size;
+    const sourceY = (py + 0.5) * 512 / size;
+    const x = 256 + (sourceX - 256) / artScale;
+    const y = 256 + (sourceY - 256) / artScale;
+    const mix = (a, b, t) => a.map((value, index) => Math.round(value + (b[index] - value) * t));
+    const centerGlow = Math.max(0, 1 - Math.hypot(x - 250, y - 235) / 400);
+    let color = mix(C.deep, C.light, centerGlow * 0.58);
+
+    // Soft circular halo behind the mark.
+    if (circle(x, y, 256, 246, 194)) color = mix(color, [36, 111, 92], 0.22);
+
+    // Receipt peeking above the register, with a simple printed sales chart.
+    if (roundedRect(x, y, 302, 78, 408, 253, 22)) color = C.paperShade;
+    if (roundedRect(x, y, 316, 92, 394, 229, 13)) color = C.paper;
+    if (roundedRect(x, y, 329, 111, 381, 118, 3)) color = C.gold;
+    if (roundedRect(x, y, 329, 132, 376, 139, 3)) color = [175, 191, 183];
+    if (roundedRect(x, y, 329, 149, 376, 156, 3)) color = [175, 191, 183];
+    if (roundedRect(x, y, 329, 166, 376, 173, 3)) color = [175, 191, 183];
+    if (roundedRect(x, y, 329, 189, 340, 216, 4)) color = C.mint;
+    if (roundedRect(x, y, 346, 179, 357, 216, 4)) color = C.mint;
+    if (roundedRect(x, y, 363, 171, 374, 216, 4)) color = C.gold;
+
+    // Cash register base and a dark, high-contrast display.
+    if (roundedRect(x, y, 84, 174, 424, 420, 46)) color = C.paper;
+    if (roundedRect(x, y, 111, 198, 397, 306, 24)) color = C.ink;
+    // Three ascending sales bars on the display.
+    if (roundedRect(x, y, 151, 261, 190, 286, 8)) color = C.mint;
+    if (roundedRect(x, y, 210, 240, 249, 286, 8)) color = C.mint;
+    if (roundedRect(x, y, 269, 220, 308, 286, 8)) color = C.gold;
+    // Display baseline.
+    if (roundedRect(x, y, 143, 289, 314, 295, 3)) color = [94, 136, 123];
+
+    // Tactile keypad and one gold checkout key.
+    for (const left of [126, 187, 248]) {
+      for (const top of [326, 365]) {
+        if (roundedRect(x, y, left, top, left + 43, top + 23, 8)) color = C.paperShade;
+      }
     }
-    // awning stripes
-    if (y >= 150 * s && y <= 232 * s && x >= 96 * s && x <= 416 * s) {
-      const stripe = Math.floor(((x / s) - 96) / 40) % 2 === 0;
-      if (stripe) color = COLORS.accent;
-      else color = COLORS.accentDark;
-    }
-    // shop body
-    if (inside(132, 232, 380, 400)) color = COLORS.paper;
-    // windows
-    if (inside(158, 262, 222, 322)) color = COLORS.green;
-    if (inside(290, 262, 354, 322)) color = COLORS.green;
-    // door
-    if (inside(232, 300, 280, 400)) color = COLORS.bg;
-    // door handle
-    if (inside(270, 344, 276, 358)) color = COLORS.accent;
-    // base shadow
-    if (inside(120, 400, 392, 412)) color = COLORS.bgDeep;
+    if (roundedRect(x, y, 309, 326, 379, 365, 12)) color = C.gold;
+    if (roundedRect(x, y, 309, 374, 379, 391, 8)) color = C.mintLight;
+
+    // Short shadow under the register gives the flat mark a little depth.
+    if (roundedRect(x, y, 137, 414, 371, 427, 6)) color = [9, 39, 36];
     return [...color, 255];
   };
 }
 
-const sizes = [
-  ["icon-192.png", 192, design()],
-  ["icon-512.png", 512, design()],
-  ["icon-maskable-512.png", 512, design("maskable")],
-  ["apple-touch-icon.png", 180, design()]
-];
-for (const [name, size, pixel] of sizes) {
-  writeFileSync(join(outDir, name), png(size, size, pixel));
+const iconPixel = design();
+const maskablePixel = design(0.78); // keep the mark inside the OS mask-safe circle
+for (const [name, size, pixel] of [
+  ["icon-192.png", 192, iconPixel],
+  ["icon-512.png", 512, iconPixel],
+  ["icon-maskable-512.png", 512, maskablePixel],
+  ["apple-touch-icon.png", 180, iconPixel]
+]) {
+  writeFileSync(join(outDir, name), png(size, size, (x, y) => pixel(x, y, size)));
   console.log("wrote", join("icons", name), `${size}x${size}`);
 }
-
-// favicon (32x32 PNG served as /icons/favicon.png)
-writeFileSync(join(outDir, "favicon.png"), png(32, 32, design()));
+const favicon = png(32, 32, (x, y) => iconPixel(x, y, 32));
+writeFileSync(join(outDir, "favicon.png"), favicon);
 console.log("wrote icons/favicon.png 32x32");
+
+// Windows Vista and later accept PNG-compressed images in ICO files. This gives
+// the desktop Internet shortcuts the same full-colour Shop Desk mark as the PWA.
+const ico = Buffer.alloc(22 + png(256, 256, (x, y) => iconPixel(x, y, 256)).length);
+ico.writeUInt16LE(0, 0);       // reserved
+ico.writeUInt16LE(1, 2);        // icon resource
+ico.writeUInt16LE(1, 4);        // one image
+ico[6] = 0; ico[7] = 0;         // 256 x 256 (zero encodes 256)
+ico[8] = 0; ico[9] = 0;         // true colour
+ico.writeUInt16LE(1, 10);       // planes
+ico.writeUInt16LE(32, 12);      // bits per pixel
+const icoPng = png(256, 256, (x, y) => iconPixel(x, y, 256));
+ico.writeUInt32LE(icoPng.length, 14);
+ico.writeUInt32LE(22, 18);
+icoPng.copy(ico, 22);
+writeFileSync(join(outDir, "shopdesk.ico"), ico);
+console.log("wrote icons/shopdesk.ico 256x256");

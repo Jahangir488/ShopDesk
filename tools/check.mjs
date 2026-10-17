@@ -104,7 +104,7 @@ try {
     "install/windows/repair-shopdesk.ps1", "install/windows/repair-shopdesk.bat",
     "install/linux/install-shopdesk.sh", "install/linux/uninstall-shopdesk.sh", "install/linux/shopdesk.service",
     "lib/license-public.mjs", "tools/licence-kit.mjs", "tools/make-licence-kit.mjs",
-    "join.html", "offline.html"
+    "join.html", "offline.html", "icons/shopdesk.ico", "tools/make-icons.mjs"
   ];
   const missing = required.filter(file => !existsSync(join(root, file)));
   if (missing.length) fail("missing install files: " + missing.join(", "));
@@ -119,6 +119,13 @@ try {
   const installer = readFileSync(join(root, "install", "windows", "install-shopdesk.ps1"), "utf8");
   for (const token of ["vendor", "licences", "*.pem"]) if (!installer.includes(token)) fail(`installer should exclude ${token}`);
   ok("installer excludes the signing key, PEM files and licence receipts");
+  const ico = readFileSync(join(root, "icons", "shopdesk.ico"));
+  const imageOffset = ico.readUInt32LE(18);
+  if (ico.readUInt16LE(2) !== 1 || ico.readUInt16LE(4) !== 1 || ico[6] !== 0 || ico[7] !== 0) fail("Shop Desk Windows icon must be a single 256px ICO image");
+  if (ico.subarray(imageOffset, imageOffset + 8).toString("hex") !== "89504e470d0a1a0a") fail("Shop Desk ICO image must contain a PNG payload");
+  const offline = readFileSync(join(root, "offline.html"), "utf8");
+  if (!offline.includes('src="/icons/icon-192.png"') || offline.includes("🏪")) fail("offline page must use the branded icon instead of an emoji");
+  ok("custom PWA, offline and Windows shortcut icons");
 } catch (error) { fail("install files: " + error.message); }
 
 console.log("Windows scripts");
@@ -140,7 +147,12 @@ try {
   if (!installer.includes("'\"3 - Build Licence Kit.bat\"'")) fail("the installer must quote the licence-kit filename passed to Robocopy");
   const updater = readFileSync(join(root, "install", "windows", "update-shopdesk.ps1"), "utf8");
   if (!updater.includes('"3 - Build Licence Kit.bat"')) fail("the updater must quote the licence-kit filename passed to Robocopy");
-  ok(`${scripts.length} Windows scripts probe drives without Join-Path and quote Robocopy exclusions`);
+  for (const name of ["install-shopdesk.ps1", "repair-shopdesk.ps1"]) {
+    const text = readFileSync(join(root, "install", "windows", name), "utf8");
+    if (!text.includes("function Write-UrlShortcut") || !text.includes("IconFile=$iconPath")) fail(`${name} must give the desktop shortcuts the Shop Desk icon`);
+  }
+  if (!installer.includes("Waiting for the local server") || !installer.includes("timed out")) fail("the installer should show progress while checking server startup");
+  ok(`${scripts.length} Windows scripts probe drives, quote Robocopy exclusions and set the desktop icon`);
 } catch (error) { fail("Windows scripts: " + error.message); }
 
 console.log("QR code");

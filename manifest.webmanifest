@@ -9,7 +9,7 @@
   "display_override": ["window-controls-overlay", "standalone", "browser"],
   "orientation": "any",
   "background_color": "#f2f4f6",
-  "theme_color": "#23282d",
+  "theme_color": "#123531",
   "lang": "bn",
   "dir": "ltr",
   "categories": ["business", "productivity", "finance"],
