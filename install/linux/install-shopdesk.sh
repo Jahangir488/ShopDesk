@@ -32,11 +32,16 @@ mkdir -p "$INSTALL_DIR" "$DATA_DIR"
 if command -v rsync >/dev/null 2>&1; then
   rsync -a --delete \
     --exclude '.git' --exclude 'node_modules' --exclude 'data' --exclude 'vendor' \
+    --exclude 'releases' --exclude 'licences' --exclude 'private' --exclude 'ShopDesk-Licence-Kit' \
     --exclude '*.sqlite3' --exclude '*.sqlite3-wal' --exclude '*.sqlite3-shm' --exclude 'server.log' \
+    --exclude '*.pem' --exclude 'licences.csv' --exclude '3 - Build Licence Kit.bat' \
     "$SOURCE_DIR"/ "$INSTALL_DIR"/
 else
   tar -C "$SOURCE_DIR" --exclude='.git' --exclude='node_modules' --exclude='data' --exclude='vendor' \
-      --exclude='*.sqlite3*' --exclude='server.log' -cf - . | tar -C "$INSTALL_DIR" -xf -
+      --exclude='releases' --exclude='licences' --exclude='private' --exclude='ShopDesk-Licence-Kit' \
+      --exclude='*.sqlite3*' --exclude='*.pem' --exclude='licences.csv' --exclude='server.log' \
+      --exclude='3 - Build Licence Kit.bat' \
+      -cf - . | tar -C "$INSTALL_DIR" -xf -
 fi
 
 # The vendor signing key is never copied to a shop server.

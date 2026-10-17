@@ -29,6 +29,8 @@ $MarkerDir = Join-Path $env:ProgramData "ShopDesk"
 $MarkerFile = Join-Path $MarkerDir "install.json"
 $SourceDir = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $script:Step = 1
+$script:Problems = @()
+$script:TaskRegistered = $false
 
 function Write-Step($message) { Write-Host ("`n[{0}/6] {1}" -f $script:Step, $message) -ForegroundColor Cyan; $script:Step++ }
 function Fail($message) { Write-Host "`nERROR: $message" -ForegroundColor Red; exit 1 }
@@ -69,11 +71,37 @@ function Find-ExistingInstall() {
     }
   }
   if (Test-Path "C:\ShopDesk\app\server.mjs") { return "C:\ShopDesk" }
+  # A failed install may never have written the marker: look for ShopDesk folders on every drive.
+  foreach ($letter in [char[]]"CDEFGHIJKLMNOPQRSTUVWXYZ") {
+    $candidate = "${letter}:\ShopDesk"
+    if (Test-Path (Join-Path $candidate "app\server.mjs")) { return $candidate }
+  }
   return ""
 }
 function Read-Marker() {
   if (-not (Test-Path $MarkerFile)) { return $null }
   try { return Get-Content $MarkerFile -Raw | ConvertFrom-Json } catch { return $null }
+}
+function Add-Problem($message) {
+  $script:Problems += $message
+}
+
+# Paths inside the install folder are written as %~dp0... so that a folder name
+# with Bangla or other non-English characters still works in an ASCII .cmd file.
+function CmdPath($fullPath, $baseDir) {
+  $base = $baseDir.TrimEnd('\')
+  if ($fullPath.TrimEnd('\') -ieq $base) { return "%~dp0." }
+  if ($fullPath.StartsWith($base + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+    return "%~dp0" + $fullPath.Substring($base.Length + 1)
+  }
+  return $fullPath
+}
+function ShortPath($path) {
+  try {
+    $fso = New-Object -ComObject Scripting.FileSystemObject
+    if (Test-Path -PathType Container $path) { return $fso.GetFolder($path).ShortPath }
+    return $fso.GetFile($path).ShortPath
+  } catch { return $path }
 }
 function Wait-Healthy([int]$seconds) {
   for ($i = 0; $i -lt $seconds; $i++) {
@@ -169,8 +197,8 @@ if ($isUpdate) {
 New-Item -ItemType Directory -Force -Path $AppDir, $LogDir, $DataDir | Out-Null
 $robocopy = Start-Process -FilePath "robocopy.exe" -ArgumentList @(
   "`"$SourceDir`"", "`"$AppDir`"", "/E",
-  "/XD", "data", "vendor", "node_modules", ".git", "backups", "releases",
-  "/XF", "*.sqlite3", "*.sqlite3-shm", "*.sqlite3-wal", "server.log",
+  "/XD", "data", "vendor", "node_modules", ".git", "backups", "releases", "licences", "private", "ShopDesk-Licence-Kit",
+  "/XF", "*.sqlite3", "*.sqlite3-shm", "*.sqlite3-wal", "server.log", "licences.csv", "*.pem", "3 - Build Licence Kit.bat",
   "/NFL", "/NDL", "/NJH", "/NJS", "/NP"
 ) -Wait -PassThru -NoNewWindow
 if ($robocopy.ExitCode -ge 8) { Fail "Could not copy the Shop Desk files (robocopy exit $($robocopy.ExitCode))." }
@@ -178,83 +206,138 @@ Write-Host "  Copied to $AppDir" -ForegroundColor DarkGreen
 
 # ---- 3. Startup command ------------------------------------------------
 Write-Step "Writing the startup command"
+$cmdNode = if ($nodeExe -match '[^\x00-\x7F]') { ShortPath $nodeExe } else { $nodeExe }
+if ($cmdNode -match '[^\x00-\x7F]') {
+  Add-Problem "Node.js is installed in a folder with non-English characters. If Shop Desk does not start, reinstall Node.js to C:\Program Files\nodejs."
+}
+$cmdData = CmdPath $DataDir $InstallDir
+if ($cmdData -match '[^\x00-\x7F]') {
+  Add-Problem "The data folder path contains non-English characters. The Windows startup file cannot store them; use a folder such as $InstallDir\data."
+}
 $lines = @(
   "@echo off",
-  "cd /d `"$AppDir`"",
+  "cd /d `"%~dp0`"",
   "set `"PORT=$Port`"",
   "set `"SHOP_HOST=0.0.0.0`"",
-  "set `"SHOP_DATA_DIR=$DataDir`""
+  "set `"SHOP_DATA_DIR=$cmdData`""
 )
 if ($SetupCode) { $lines += "set `"SHOP_SETUP_CODE=$SetupCode`"" }
 if ($GoogleClientId) { $lines += "set `"SHOP_GOOGLE_CLIENT_ID=$GoogleClientId`"" }
 if ($GoogleClientSecret) { $lines += "set `"SHOP_GOOGLE_CLIENT_SECRET=$GoogleClientSecret`"" }
 if ($PublicUrl) { $lines += "set `"SHOP_PUBLIC_URL=$PublicUrl`""; $lines += "set `"SHOP_TRUST_PROXY=1`"" }
-$lines += "`"$nodeExe`" server.mjs >> `"$LogDir\server.log`" 2>&1"
+$lines += "`"$cmdNode`" server.mjs >> `"$(CmdPath $LogDir $InstallDir)\server.log`" 2>&1"
 Set-Content -Path $RunFile -Value $lines -Encoding ASCII
 Write-Host "  $RunFile" -ForegroundColor DarkGreen
 
 # ---- 4. Automatic start ------------------------------------------------
 Write-Step "Registering automatic startup"
-$action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$RunFile`""
-$triggers = @((New-ScheduledTaskTrigger -AtStartup), (New-ScheduledTaskTrigger -AtLogOn))
-$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Days 0) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-Register-ScheduledTask -TaskName $TaskName -Action $action -Triggers $triggers -Principal $principal -Settings $settings -Description "Runs the Shop Desk billing and stock server." -Force | Out-Null
-Write-Host "  Scheduled task `"$TaskName`" starts at boot" -ForegroundColor DarkGreen
+try {
+  $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$RunFile`""
+  $triggers = @((New-ScheduledTaskTrigger -AtStartup), (New-ScheduledTaskTrigger -AtLogOn))
+  $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Days 0) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers -Principal $principal -Settings $settings -Description "Runs the Shop Desk billing and stock server." -Force -ErrorAction Stop | Out-Null
+  $script:TaskRegistered = $true
+  Write-Host "  Scheduled task `"$TaskName`" starts at boot" -ForegroundColor DarkGreen
+} catch {
+  Add-Problem "Automatic startup was not registered. Shop Desk will not start by itself after a reboot."
+  Write-Host "  Could not register the startup task: $($_.Exception.Message)" -ForegroundColor Yellow
+}
 
 # ---- 5. Firewall and shortcuts ----------------------------------------
 Write-Step "Opening the firewall and creating shortcuts"
 if (-not $SkipFirewall) {
-  Get-NetFirewallRule -DisplayName "Shop Desk (TCP $Port)" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
-  New-NetFirewallRule -DisplayName "Shop Desk (TCP $Port)" -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow -Profile @("Private","Domain") -Description "Shop Desk web app on the shop network" | Out-Null
-  Write-Host "  Firewall: inbound TCP $Port for private networks" -ForegroundColor DarkGreen
+  try {
+    Get-NetFirewallRule -DisplayName "Shop Desk (TCP $Port)" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    New-NetFirewallRule -DisplayName "Shop Desk (TCP $Port)" -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow -Profile @("Private","Domain") -Description "Shop Desk web app on the shop network" -ErrorAction Stop | Out-Null
+    Write-Host "  Firewall: inbound TCP $Port for private networks" -ForegroundColor DarkGreen
+  } catch {
+    Add-Problem "The firewall rule was not created. Phones on the shop Wi-Fi may not be able to connect."
+    Write-Host "  Could not create the firewall rule: $($_.Exception.Message)" -ForegroundColor Yellow
+  }
 } else {
   Write-Host "  Firewall skipped (-SkipFirewall)" -ForegroundColor Yellow
 }
-$shell = New-Object -ComObject WScript.Shell
-$desktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
-if (-not $desktop) { $desktop = [Environment]::GetFolderPath("Desktop") }
-$shortcut = $shell.CreateShortcut((Join-Path $desktop "Shop Desk.url"))
-$shortcut.TargetPath = "http://localhost:$Port/"
-$shortcut.Save()
-$phone = $shell.CreateShortcut((Join-Path $desktop "Shop Desk - Connect a phone.url"))
-$phone.TargetPath = "http://localhost:$Port/join"
-$phone.Save()
-Write-Host "  Desktop shortcuts created" -ForegroundColor DarkGreen
 
-# A ready-to-use uninstaller in the chosen install folder.
+try {
+  $shell = New-Object -ComObject WScript.Shell
+  $desktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
+  if (-not $desktop) { $desktop = [Environment]::GetFolderPath("Desktop") }
+  $shortcut = $shell.CreateShortcut((Join-Path $desktop "Shop Desk.url"))
+  $shortcut.TargetPath = "http://localhost:$Port/"
+  $shortcut.Save()
+  $phone = $shell.CreateShortcut((Join-Path $desktop "Shop Desk - Connect a phone.url"))
+  $phone.TargetPath = "http://localhost:$Port/join"
+  $phone.Save()
+  Write-Host "  Desktop shortcuts created" -ForegroundColor DarkGreen
+} catch {
+  Add-Problem "The desktop shortcuts were not created."
+  Write-Host "  Could not create the desktop shortcuts: $($_.Exception.Message)" -ForegroundColor Yellow
+}
+
+# Helper launchers in the install folder. They are written before the service
+# starts, so a failed step can always be fixed later with Repair Shop Desk.bat.
 $uninstallBat = Join-Path $InstallDir "Uninstall Shop Desk.bat"
-$batLines = @(
+$repairBat = Join-Path $InstallDir "Repair Shop Desk.bat"
+$batHeader = @(
   "@echo off",
   "setlocal",
-  "title Shop Desk - Uninstall",
   "net session >nul 2>&1",
   "if errorlevel 1 (",
   "  echo Asking for administrator permission...",
   "  powershell -NoProfile -ExecutionPolicy Bypass -Command `"Start-Process -FilePath '%~f0' -Verb RunAs`"",
   "  exit /b",
-  ")",
+  ")"
+)
+$uninstallLines = $batHeader + @(
+  "title Shop Desk - Uninstall",
   "powershell -NoProfile -ExecutionPolicy Bypass -File `"$AppDir\install\windows\uninstall-shopdesk.ps1`" %*",
   "echo.",
   "pause"
 )
-Set-Content -Path $uninstallBat -Value $batLines -Encoding ASCII
-Write-Host "  Uninstaller: $uninstallBat" -ForegroundColor DarkGreen
+Set-Content -Path $uninstallBat -Value $uninstallLines -Encoding ASCII
+$repairLines = $batHeader + @(
+  "title Shop Desk - Repair",
+  "powershell -NoProfile -ExecutionPolicy Bypass -File `"$AppDir\install\windows\repair-shopdesk.ps1`" -InstallDir `"$InstallDir`" %*",
+  "echo.",
+  "pause"
+)
+Set-Content -Path $repairBat -Value $repairLines -Encoding ASCII
+Write-Host "  Repair and uninstall shortcuts created" -ForegroundColor DarkGreen
 
-# Remember the choices for updates and uninstall.
-New-Item -ItemType Directory -Force -Path $MarkerDir | Out-Null
-[pscustomobject]@{
-  installDir = $InstallDir
-  dataDir = $DataDir
-  port = $Port
-  installedAt = (Get-Date).ToString("o")
-} | ConvertTo-Json | Set-Content -Path $MarkerFile -Encoding UTF8
+# Remember the choices for updates, repair and uninstall.
+try {
+  New-Item -ItemType Directory -Force -Path $MarkerDir -ErrorAction Stop | Out-Null
+  [pscustomobject]@{
+    installDir = $InstallDir
+    dataDir = $DataDir
+    port = $Port
+    installedAt = (Get-Date).ToString("o")
+  } | ConvertTo-Json | Set-Content -Path $MarkerFile -Encoding UTF8 -ErrorAction Stop
+} catch {
+  Add-Problem "The install location could not be saved. Updates and uninstall may need the folder entered by hand."
+}
 
 # ---- 6. Start ----------------------------------------------------------
 Write-Step "Starting Shop Desk"
-Start-ScheduledTask -TaskName $TaskName
+if ($script:TaskRegistered) {
+  try { Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop }
+  catch {
+    Add-Problem "The startup task could not be started now."
+    Write-Host "  Could not start the task: $($_.Exception.Message)" -ForegroundColor Yellow
+  }
+} else {
+  # Automatic start failed: run the server now so the shop can still use it today.
+  try {
+    Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$RunFile`"" -WindowStyle Hidden -ErrorAction Stop
+    Add-Problem "Shop Desk is running now, but it will not start again after a reboot until the startup task is repaired."
+  } catch {
+    Add-Problem "Shop Desk could not be started. Run $RunFile by hand to see the error."
+  }
+}
 $healthy = Wait-Healthy 40
 if (-not $healthy) {
+  Add-Problem "Shop Desk did not answer on port $Port. Check $LogDir\server.log"
   Write-Host "  Shop Desk did not answer yet. Check $LogDir\server.log" -ForegroundColor Yellow
 }
 
@@ -264,12 +347,22 @@ $lanIp = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
 
 Write-Host ""
 Write-Host "==============================================" -ForegroundColor Green
-if ($healthy) {
+if ($healthy -and $script:Problems.Count -eq 0) {
   Write-Host "  Shop Desk is installed and running." -ForegroundColor Green
+} elseif ($healthy) {
+  Write-Host "  Shop Desk is installed and running, with warnings." -ForegroundColor Yellow
 } else {
   Write-Host "  Shop Desk is installed, but it has not answered yet." -ForegroundColor Yellow
 }
 Write-Host "==============================================" -ForegroundColor Green
+if ($script:Problems.Count -gt 0) {
+  Write-Host "  Needs attention:" -ForegroundColor Yellow
+  foreach ($item in $script:Problems) { Write-Host "   - $item" -ForegroundColor Yellow }
+  Write-Host ""
+  Write-Host "  Fix these in one step by running:" -ForegroundColor Yellow
+  Write-Host "    $repairBat" -ForegroundColor Yellow
+  Write-Host ""
+}
 Write-Host "  Open on this PC : http://localhost:$Port/"
 if ($lanIp) { Write-Host "  Open on phones  : http://${lanIp}:$Port/   (same Wi-Fi)" }
 Write-Host "  Connect a phone : http://localhost:$Port/join"
@@ -281,8 +374,8 @@ Write-Host ""
 Write-Host "  First run: open Shop Desk, then find the setup code in the log file"
 Write-Host "  above if the page asks for it."
 Write-Host ""
-Write-Host "  To remove Shop Desk later, run:"
-Write-Host "    $uninstallBat"
+Write-Host "  Repair automatic start: $repairBat"
+Write-Host "  Remove Shop Desk:       $uninstallBat"
 Write-Host "==============================================" -ForegroundColor Green
 
 if (-not $NoBrowser -and -not $Yes) { Start-Process "http://localhost:$Port/" }

@@ -31,6 +31,9 @@ new bills and other changes are blocked, while viewing data, reports, exports, l
 backups and offsite backups keep working. Enter the Ed25519-signed key in
 **Settings → Licence & plan**. The installation ID shown there must match the key.
 Vendor key generation and issuing are documented in [INSTALL.md §7](INSTALL.md#7-licence-keys-and-trial).
+A portable **USB licence kit** (`npm run licence:kit` → `releases/ShopDesk-Licence-Kit`) lets you
+make a key at the shop PC and unplug without leaving the private key behind — build it with
+**`3 - Build Licence Kit.bat`** and read [LICENSING.md](LICENSING.md).
 
 ## Bangla interface and receipts
 

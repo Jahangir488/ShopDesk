@@ -13,3 +13,7 @@ vendor/
 # Local installers / releases
 releases/
 *.zip
+
+# Licence kit output (contains the private signing key)
+licences/
+licences.csv
