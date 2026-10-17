@@ -121,6 +121,23 @@ try {
   ok("installer excludes the signing key, PEM files and licence receipts");
 } catch (error) { fail("install files: " + error.message); }
 
+console.log("Windows scripts");
+try {
+  // Join-Path and Test-Path throw for a drive letter that does not exist (F: on a
+  // PC without that drive), which stopped the installer before it did anything.
+  const scripts = ["install-shopdesk.ps1", "repair-shopdesk.ps1", "uninstall-shopdesk.ps1", "update-shopdesk.ps1"];
+  for (const name of scripts) {
+    const text = readFileSync(join(root, "install", "windows", name), "utf8");
+    if (/\bJoin-Path\s/.test(text)) fail(`${name} must use Join-SafePath; Join-Path throws when a drive letter is missing`);
+    if (!text.includes("function Join-SafePath")) fail(`${name} is missing the Join-SafePath helper`);
+    if (!text.includes("[System.IO.File]::Exists")) fail(`${name} is missing the .NET file checks`);
+    if (/Test-Path\s+\(Join-/.test(text)) fail(`${name} checks a path with Test-Path`);
+  }
+  const installer = readFileSync(join(root, "install", "windows", "install-shopdesk.ps1"), "utf8");
+  if (!installer.includes("if (Test-AppFile $candidate) { return $candidate }")) fail("the drive scan must use Test-AppFile");
+  ok(`${scripts.length} Windows scripts probe drives without Join-Path`);
+} catch (error) { fail("Windows scripts: " + error.message); }
+
 console.log("QR code");
 try {
   const matrix = encodeQr("http://192.168.0.10:8765/", { errorCorrectionLevel: "M" });

@@ -16,8 +16,26 @@ param(
   [string]$ZipPath = ""
 )
 $ErrorActionPreference = "Stop"
+
+# ---- Safe path helpers --------------------------------------------------
+# These use .NET instead of Join-Path/Test-Path, which throw a terminating error
+# when a path names a drive letter that does not exist (for example F: on a PC
+# without that drive). That used to stop the installer. The .NET checks below
+# simply return false for a missing drive.
+function Join-SafePath([string]$Base, [string]$Child) {
+  if ([string]::IsNullOrWhiteSpace($Base)) { return $Child }
+  return [System.IO.Path]::Combine($Base, $Child)
+}
+function Test-AppFile([string]$folder) {
+  if ([string]::IsNullOrWhiteSpace($folder)) { return $false }
+  try { return [System.IO.File]::Exists([System.IO.Path]::Combine($folder, "app\server.mjs")) } catch { return $false }
+}
+function Test-FileExists([string]$file) {
+  if ([string]::IsNullOrWhiteSpace($file)) { return $false }
+  try { return [System.IO.File]::Exists($file) } catch { return $false }
+}
 $TaskName = "Shop Desk"
-$MarkerFile = Join-Path $env:ProgramData "ShopDesk\install.json"
+$MarkerFile = Join-SafePath $env:ProgramData "ShopDesk\install.json"
 
 # Find the folder chosen during installation (C:\ShopDesk is only a fallback).
 $marker = $null
@@ -33,12 +51,12 @@ if (-not $InstallDir) {
 if (-not $InstallDir) { $InstallDir = "C:\ShopDesk" }
 if (-not $Port -and $marker -and $marker.port) { $Port = [int]$marker.port }
 if (-not $Port) { $Port = 8765 }
-$AppDir = Join-Path $InstallDir "app"
-$DataDir = if ($marker -and $marker.dataDir) { $marker.dataDir } else { Join-Path $InstallDir "data" }
-$LogDir = Join-Path $InstallDir "logs"
+$AppDir = Join-SafePath $InstallDir "app"
+$DataDir = if ($marker -and $marker.dataDir) { $marker.dataDir } else { Join-SafePath $InstallDir "data" }
+$LogDir = Join-SafePath $InstallDir "logs"
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$StageDir = Join-Path $InstallDir "app.new"
-$BackupDir = Join-Path $InstallDir "update-backup-$stamp"
+$StageDir = Join-SafePath $InstallDir "app.new"
+$BackupDir = Join-SafePath $InstallDir "update-backup-$stamp"
 
 function Fail($message) { Write-Host "`nUPDATE FAILED: $message" -ForegroundColor Red; exit 1 }
 function Wait-Healthy([int]$seconds) {
@@ -49,17 +67,17 @@ function Wait-Healthy([int]$seconds) {
   return $false
 }
 
-if (-not (Test-Path (Join-Path $AppDir "server.mjs"))) { Fail "Shop Desk is not installed at $AppDir. Run install-shopdesk.ps1 first." }
+if (-not (Test-FileExists (Join-SafePath $AppDir "server.mjs"))) { Fail "Shop Desk is not installed at $AppDir. Run install-shopdesk.ps1 first." }
 if (-not $SourceDir -and -not $ZipPath) { Fail "Provide -SourceDir <folder with the new Shop Desk files> or -ZipPath <release zip>." }
 
-$temp = Join-Path $env:TEMP "shopdesk-update-$stamp"
+$temp = Join-SafePath $env:TEMP "shopdesk-update-$stamp"
 if ($ZipPath) {
   Expand-Archive -Path $ZipPath -DestinationPath $temp -Force
   $SourceDir = (Get-ChildItem $temp -Directory | Select-Object -First 1).FullName
   if (-not $SourceDir) { $SourceDir = $temp }
 }
 $SourceDir = (Resolve-Path $SourceDir).Path
-if (-not (Test-Path (Join-Path $SourceDir "server.mjs"))) { Fail "The update folder does not contain server.mjs." }
+if (-not (Test-FileExists (Join-SafePath $SourceDir "server.mjs"))) { Fail "The update folder does not contain server.mjs." }
 
 Write-Host "Stopping Shop Desk…"
 Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -68,9 +86,9 @@ Start-Sleep -Seconds 2
 Write-Host "Creating a rollback copy in $BackupDir"
 New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null
 robocopy $AppDir $BackupDir /E /NFL /NDL /NJH /NJS /NP | Out-Null
-Copy-Item (Join-Path $DataDir "shop.sqlite3") $BackupDir -Force -ErrorAction SilentlyContinue
-Copy-Item (Join-Path $DataDir "shop.sqlite3-wal") $BackupDir -Force -ErrorAction SilentlyContinue
-Copy-Item (Join-Path $DataDir "shop.sqlite3-shm") $BackupDir -Force -ErrorAction SilentlyContinue
+Copy-Item (Join-SafePath $DataDir "shop.sqlite3") $BackupDir -Force -ErrorAction SilentlyContinue
+Copy-Item (Join-SafePath $DataDir "shop.sqlite3-wal") $BackupDir -Force -ErrorAction SilentlyContinue
+Copy-Item (Join-SafePath $DataDir "shop.sqlite3-shm") $BackupDir -Force -ErrorAction SilentlyContinue
 
 # Rebuild the app folder, keeping data.
 if (Test-Path $StageDir) { Remove-Item -Recurse -Force $StageDir }
@@ -91,8 +109,8 @@ Write-Host "The new version did not start. Rolling back…" -ForegroundColor Yel
 Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if (Test-Path $AppDir) { Remove-Item -Recurse -Force $AppDir }
 Rename-Item "app.old-$stamp" "app"
-Copy-Item (Join-Path $BackupDir "shop.sqlite3") (Join-Path $DataDir "shop.sqlite3") -Force -ErrorAction SilentlyContinue
-Copy-Item (Join-Path $BackupDir "shop.sqlite3-wal") (Join-Path $DataDir "shop.sqlite3-wal") -Force -ErrorAction SilentlyContinue
-Copy-Item (Join-Path $BackupDir "shop.sqlite3-shm") (Join-Path $DataDir "shop.sqlite3-shm") -Force -ErrorAction SilentlyContinue
+Copy-Item (Join-SafePath $BackupDir "shop.sqlite3") (Join-SafePath $DataDir "shop.sqlite3") -Force -ErrorAction SilentlyContinue
+Copy-Item (Join-SafePath $BackupDir "shop.sqlite3-wal") (Join-SafePath $DataDir "shop.sqlite3-wal") -Force -ErrorAction SilentlyContinue
+Copy-Item (Join-SafePath $BackupDir "shop.sqlite3-shm") (Join-SafePath $DataDir "shop.sqlite3-shm") -Force -ErrorAction SilentlyContinue
 Start-ScheduledTask -TaskName $TaskName
 Fail "Rolled back to the previous version. Check $LogDir\server.log for the cause."

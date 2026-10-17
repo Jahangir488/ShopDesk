@@ -20,9 +20,27 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# ---- Safe path helpers --------------------------------------------------
+# These use .NET instead of Join-Path/Test-Path, which throw a terminating error
+# when a path names a drive letter that does not exist (for example F: on a PC
+# without that drive). That used to stop the installer. The .NET checks below
+# simply return false for a missing drive.
+function Join-SafePath([string]$Base, [string]$Child) {
+  if ([string]::IsNullOrWhiteSpace($Base)) { return $Child }
+  return [System.IO.Path]::Combine($Base, $Child)
+}
+function Test-AppFile([string]$folder) {
+  if ([string]::IsNullOrWhiteSpace($folder)) { return $false }
+  try { return [System.IO.File]::Exists([System.IO.Path]::Combine($folder, "app\server.mjs")) } catch { return $false }
+}
+function Test-FileExists([string]$file) {
+  if ([string]::IsNullOrWhiteSpace($file)) { return $false }
+  try { return [System.IO.File]::Exists($file) } catch { return $false }
+}
 $TaskName = "Shop Desk"
-$MarkerDir = Join-Path $env:ProgramData "ShopDesk"
-$MarkerFile = Join-Path $MarkerDir "install.json"
+$MarkerDir = Join-SafePath $env:ProgramData "ShopDesk"
+$MarkerFile = Join-SafePath $MarkerDir "install.json"
 $script:Problems = @()
 
 function Write-Step($message) { Write-Host "`n==> $message" -ForegroundColor Cyan }
@@ -54,20 +72,20 @@ function Read-Marker() {
   try { return Get-Content $MarkerFile -Raw | ConvertFrom-Json } catch { return $null }
 }
 function Find-InstallFolder() {
-  if ($InstallDir -and (Test-Path (Join-Path $InstallDir "app\server.mjs"))) { return $InstallDir }
+  if (Test-AppFile $InstallDir) { return $InstallDir }
   $marker = Read-Marker
-  if ($marker -and $marker.installDir -and (Test-Path (Join-Path $marker.installDir "app\server.mjs"))) { return $marker.installDir }
+  if ($marker -and (Test-AppFile $marker.installDir)) { return $marker.installDir }
   $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
   if ($task) {
     $action = @($task.Actions)[0]
     if ($action -and $action.Arguments -match '/c\s+"?([^"]+run-shop\.cmd)"?') {
       $folder = Split-Path $Matches[1] -Parent
-      if (Test-Path (Join-Path $folder "app\server.mjs")) { return $folder }
+      if (Test-AppFile $folder) { return $folder }
     }
   }
   foreach ($letter in [char[]]"CDEFGHIJKLMNOPQRSTUVWXYZ") {
     $candidate = "${letter}:\ShopDesk"
-    if (Test-Path (Join-Path $candidate "app\server.mjs")) { return $candidate }
+    if (Test-AppFile $candidate) { return $candidate }
   }
   return ""
 }
@@ -95,12 +113,12 @@ if (-not $InstallDir) {
   exit 1
 }
 $InstallDir = $InstallDir.TrimEnd('\')
-$AppDir = Join-Path $InstallDir "app"
-$LogDir = Join-Path $InstallDir "logs"
-$RunFile = Join-Path $InstallDir "run-shop.cmd"
+$AppDir = Join-SafePath $InstallDir "app"
+$LogDir = Join-SafePath $InstallDir "logs"
+$RunFile = Join-SafePath $InstallDir "run-shop.cmd"
 
 if (-not $DataDir) {
-  $DataDir = if ($marker -and $marker.dataDir) { $marker.dataDir } else { Join-Path $InstallDir "data" }
+  $DataDir = if ($marker -and $marker.dataDir) { $marker.dataDir } else { Join-SafePath $InstallDir "data" }
 }
 if (-not $Port) {
   if ($marker -and $marker.port) {
@@ -178,10 +196,10 @@ try {
   $shell = New-Object -ComObject WScript.Shell
   $desktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
   if (-not $desktop) { $desktop = [Environment]::GetFolderPath("Desktop") }
-  $shortcut = $shell.CreateShortcut((Join-Path $desktop "Shop Desk.url"))
+  $shortcut = $shell.CreateShortcut((Join-SafePath $desktop "Shop Desk.url"))
   $shortcut.TargetPath = "http://localhost:$Port/"
   $shortcut.Save()
-  $phone = $shell.CreateShortcut((Join-Path $desktop "Shop Desk - Connect a phone.url"))
+  $phone = $shell.CreateShortcut((Join-SafePath $desktop "Shop Desk - Connect a phone.url"))
   $phone.TargetPath = "http://localhost:$Port/join"
   $phone.Save()
   Done "Desktop shortcuts"
@@ -200,8 +218,8 @@ $batHeader = @(
   ")"
 )
 try {
-  $uninstallBat = Join-Path $InstallDir "Uninstall Shop Desk.bat"
-  $repairBat = Join-Path $InstallDir "Repair Shop Desk.bat"
+  $uninstallBat = Join-SafePath $InstallDir "Uninstall Shop Desk.bat"
+  $repairBat = Join-SafePath $InstallDir "Repair Shop Desk.bat"
   Set-Content -Path $uninstallBat -Value ($batHeader + @(
     "title Shop Desk - Uninstall",
     "powershell -NoProfile -ExecutionPolicy Bypass -File `"$AppDir\install\windows\uninstall-shopdesk.ps1`" %*",
