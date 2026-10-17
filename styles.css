@@ -179,9 +179,32 @@ td.product-cell{font-weight:600;color:var(--ink)}.sku{color:var(--muted);font-si
 footer{font-size:13px;color:var(--muted);padding:6px 2px 20px}footer span{padding:0 5px}
 footer button{float:right;border:0;background:transparent;color:var(--steel);font-size:13px;font-weight:600;cursor:pointer;text-decoration:underline}
 
-/* dialogs and forms */
-dialog{border:0;padding:26px;width:min(480px,calc(100% - 28px));border-radius:14px;box-shadow:0 24px 80px #0b101569;color:var(--ink)}
-dialog[open]{display:block}dialog form{margin:0}dialog::backdrop{background:#1a1f23b8;backdrop-filter:blur(2px)}
+/* dialogs and forms — explicit fallback rules so browsers without <dialog> support still get a working popup */
+dialog{border:0;padding:26px;width:min(480px,calc(100% - 28px));border-radius:14px;box-shadow:0 24px 80px #0b101569;color:var(--ink);max-height:calc(100vh - 24px);overflow-y:auto}
+dialog:not([open]){display:none!important}
+dialog[open]{display:block;position:fixed;top:0;right:0;bottom:0;left:0;inset:0;margin:auto;height:-moz-fit-content;height:-webkit-fit-content;height:fit-content;z-index:1001}
+dialog form{margin:0}dialog::backdrop{background:#1a1f23b8;-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
+.modal-backdrop{position:fixed;top:0;right:0;bottom:0;left:0;inset:0;z-index:1000;background:#1a1f23b8;-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
+body.modal-open{overflow:hidden}
+/* Item search / autocomplete used by New bill, Record sale and Online orders.
+   A plain page-rendered list is used instead of <datalist> because Firefox filters
+   datalist options by their label text, which broke item-name searching. */
+.item-search{margin:14px 0}
+.item-search>label{margin:0}
+.item-search-wrap{position:relative;margin-top:6px}
+.item-search-wrap input{margin-top:0;padding-right:44px}
+.item-search-toggle{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:32px;min-height:32px;border:0;border-radius:7px;background:#eef2f3;color:var(--steel);font-size:15px;line-height:1;cursor:pointer;padding:0}
+.item-search-toggle:hover,.item-search-toggle:focus-visible{background:#dfe7e6;outline:0}
+.item-search-results{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:30;max-height:min(42vh,300px);overflow-y:auto;padding:4px;margin:0;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 18px 44px #0b10152e;overscroll-behavior:contain}
+.item-search-option{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;width:100%;padding:9px 10px;border:0;border-radius:7px;background:transparent;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.item-search-option:hover,.item-search-option.active{background:#eaf4ef}
+.item-search-option b{font-weight:650;overflow-wrap:anywhere}
+.item-search-option small{display:block;margin-top:2px;color:var(--muted);font-size:12px;line-height:1.3;overflow-wrap:anywhere}
+.item-search-meta{flex:none;text-align:right;white-space:nowrap;font-size:12px;color:var(--steel)}
+.item-search-meta b{font-size:13px}
+.item-search-empty{margin:0;padding:12px;color:var(--muted);font-size:13px}
+.browser-warning{position:fixed;inset:0 0 auto;z-index:99999;padding:14px 18px;background:#7f1d1d;color:#fff;font:600 14px/1.45 system-ui,"Segoe UI",sans-serif;text-align:center;box-shadow:0 8px 24px #0003}
+.browser-warning b{font-size:15px}
 .modal-heading{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px}
 .modal-heading h2{font:700 26px/1.15 var(--display);margin:0}
 .close{border:0;background:transparent;font-size:28px;line-height:1;color:var(--steel);cursor:pointer;min-width:40px;min-height:40px}
@@ -298,18 +321,18 @@ dialog{box-sizing:border-box;max-height:calc(100vh - 24px);overflow-y:auto;overs
 .purchase-line-total{white-space:nowrap;font-variant-numeric:tabular-nums}
 .supplier-purchase-payment{margin-top:12px}
 @media(max-width:680px){
-  dialog:not(.wide){position:fixed;inset:auto 0 0;width:100%;max-width:none;max-height:90dvh;margin:0 auto;padding:18px 14px calc(14px + env(safe-area-inset-bottom));border-radius:18px 18px 0 0;overflow-y:auto;overscroll-behavior:contain}
+  dialog:not(.wide){position:fixed;inset:auto 0 0;width:100%;max-width:none;max-height:90vh;max-height:90dvh;margin:0 auto;padding:18px 14px calc(14px + env(safe-area-inset-bottom));border-radius:18px 18px 0 0;overflow-y:auto;overscroll-behavior:contain}
   dialog:not(.wide) .modal-heading{position:sticky;top:-18px;z-index:4;margin:-18px -14px 12px;padding:12px 14px 8px;background:#fff;border-bottom:1px solid var(--line)}
   dialog:not(.wide) .modal-heading h2{font-size:23px}
   dialog:not(.wide) .modal-actions{position:sticky;bottom:-14px;z-index:4;margin:14px -14px -14px;padding:10px 14px calc(6px + env(safe-area-inset-bottom));background:#fff;border-top:1px solid var(--line)}
   dialog:not(.wide) .modal-actions .button{min-height:48px;flex:1}
   dialog:not(.wide) input,dialog:not(.wide) select{min-height:48px;font-size:16px}
-  dialog.wide:not(.bill-editor){width:calc(100% - 12px);max-height:calc(100dvh - 12px);padding:14px 12px;overflow:auto}
-  dialog.wide.bill-editor{position:fixed;inset:auto 0 0;width:calc(100% - 12px);max-height:calc(100dvh - 8px);margin:0 auto;padding:14px 12px calc(8px + env(safe-area-inset-bottom));border-radius:16px 16px 0 0;overflow:auto;overscroll-behavior:contain}
+  dialog.wide:not(.bill-editor){width:calc(100% - 12px);max-height:calc(100vh - 12px);max-height:calc(100dvh - 12px);padding:14px 12px;overflow:auto}
+  dialog.wide.bill-editor{position:fixed;inset:auto 0 0;width:calc(100% - 12px);max-height:calc(100vh - 8px);max-height:calc(100dvh - 8px);margin:0 auto;padding:14px 12px calc(8px + env(safe-area-inset-bottom));border-radius:16px 16px 0 0;overflow:auto;overscroll-behavior:contain}
   dialog.wide.bill-editor .modal-heading{position:sticky;top:-14px;z-index:4;background:#fff;padding:4px 0 8px}
   dialog.bill-editor .modal-heading h2{font-size:22px}
   dialog.bill-editor #bill-search{font-size:16px;min-height:48px}
-  dialog.bill-editor .bill-cart{max-height:36dvh;overflow:auto}
+  dialog.bill-editor .bill-cart{max-height:36vh;max-height:36dvh;overflow:auto}
   dialog.bill-editor .bill-cart table{min-width:540px}
   dialog.bill-editor .bill-input{min-height:44px;font-size:16px}
   dialog.bill-editor .qty-input{width:78px}
@@ -317,7 +340,7 @@ dialog{box-sizing:border-box;max-height:calc(100vh - 24px);overflow-y:auto;overs
   dialog.bill-editor .bill-total b{font-size:19px}
   dialog.bill-editor .modal-actions{position:sticky;bottom:-14px;z-index:2;background:#fff;padding:10px 0 4px}
   dialog.bill-editor .modal-actions .button{min-height:48px;flex:1}
-  dialog.wide.supplier-editor{width:calc(100% - 12px);max-height:calc(100dvh - 12px);padding:14px 12px}
+  dialog.wide.supplier-editor{width:calc(100% - 12px);max-height:calc(100vh - 12px);max-height:calc(100dvh - 12px);padding:14px 12px}
   dialog.wide.supplier-editor .modal-actions .button{min-height:46px}
 }
 
@@ -347,7 +370,7 @@ dialog{box-sizing:border-box;max-height:calc(100vh - 24px);overflow-y:auto;overs
   .stock-panel .panel-heading>.report-filters{grid-column:2;grid-row:1;width:auto;margin:0}
   .stock-panel .report-filters .button{min-height:42px;padding:8px 10px;white-space:nowrap}
   .stock-panel .panel-heading>.text-link{grid-column:1/-1;justify-self:end}
-  .stock-watch-scroll{max-height:min(48dvh,380px);overflow:auto;overscroll-behavior:contain}
+  .stock-watch-scroll{max-height:min(48vh,380px);max-height:min(48dvh,380px);overflow:auto;overscroll-behavior:contain}
   .stock-watch-scroll table{min-width:0;width:100%;white-space:normal;table-layout:fixed}
   .stock-watch-scroll thead{display:none}
   .stock-watch-scroll tbody{display:grid;gap:8px;padding:8px}

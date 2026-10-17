@@ -51,6 +51,8 @@ async function refreshServerLoad() {
 }
 refreshTopbarClock();
 setInterval(refreshTopbarClock, 1000);
+// The app script is running, so remove the "unsupported browser" notice if it was shown.
+document.querySelectorAll(".browser-warning").forEach(node => node.remove());
 
 const screenTitles = { dashboard: "Dashboard", inventory: "Inventory", sales: "Sales", "online-orders": "Online orders", repairs: "Repairs", devices: "Device sales & warranty", expenses: "Expenses", reports: "Reports", users: "Team access", "backup-tools": "Backup and restore" };
 function showScreen(screen, updateHash = false) {
@@ -326,6 +328,142 @@ function productLabel(product) {
   const details = [["Brand", product.brand], ["Color", product.color], ["Size", product.size], ["Material", product.material]].filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`);
   return details.length ? `${product.name} (${details.join(" · ")})` : product.name;
 }
+// Shared product picker used by New bill, Record sale and Online orders.
+// <datalist> is deliberately avoided: Firefox filters datalist entries by their
+// label text instead of the item name, so typing an item name showed no results.
+function itemSearchHaystack(item) {
+  return [item.name, item.sku, item.barcode, item.category, item.brand, item.color, item.size, item.material, item.unit]
+    .filter(Boolean).join(" ").toLocaleLowerCase();
+}
+function closeItemSearches(root = document) {
+  let closed = false;
+  root.querySelectorAll(".item-search-results").forEach(box => {
+    if (box.classList.contains("hidden")) return;
+    box.classList.add("hidden");
+    box.innerHTML = "";
+    box.closest(".item-search")?.querySelector("input")?.setAttribute("aria-expanded", "false");
+    closed = true;
+  });
+  return closed;
+}
+function initItemSearch({ input, results, toggle, getItems, onPick, emptyText = "No matching item found." }) {
+  if (!input || !results) return null;
+  let matches = [], active = -1;
+  const hide = () => {
+    results.classList.add("hidden");
+    results.innerHTML = "";
+    input.setAttribute("aria-expanded", "false");
+    input.removeAttribute("aria-activedescendant");
+    active = -1;
+    matches = [];
+  };
+  const highlight = () => {
+    results.querySelectorAll(".item-search-option").forEach((option, index) => {
+      const selected = index === active;
+      option.classList.toggle("active", selected);
+      option.setAttribute("aria-selected", selected ? "true" : "false");
+      if (selected) {
+        option.scrollIntoView?.({ block: "nearest" });
+        input.setAttribute("aria-activedescendant", option.id);
+      }
+    });
+    if (active < 0) input.removeAttribute("aria-activedescendant");
+  };
+  const render = () => {
+    const query = input.value.trim().toLocaleLowerCase(), items = getItems() || [], ranked = [];
+    for (const item of items) {
+      const name = String(item.name || "").toLocaleLowerCase();
+      const sku = String(item.sku || "").toLocaleLowerCase();
+      const barcode = String(item.barcode || "").toLocaleLowerCase();
+      let score = -1;
+      if (!query) score = 0;
+      else if (name === query) score = 1;
+      else if (sku === query) score = 2;
+      else if (barcode === query) score = 3;
+      else if (name.startsWith(query)) score = 4;
+      else if (sku.startsWith(query) || barcode.startsWith(query)) score = 5;
+      else if (itemSearchHaystack(item).includes(query)) score = 6;
+      if (score >= 0) ranked.push({ item, score });
+    }
+    ranked.sort((a, b) => a.score - b.score);
+    matches = ranked.slice(0, 60).map(entry => entry.item);
+    active = -1;
+    input.removeAttribute("aria-activedescendant");
+    if (!matches.length) {
+      results.innerHTML = `<p class="item-search-empty">${esc(emptyText)}</p>`;
+    } else {
+      results.innerHTML = matches.map((item, index) => {
+        const details = [item.brand, item.color, item.size, item.material, item.category].filter(Boolean).map(value => esc(value)).join(" · ");
+        const codes = [item.sku && item.sku !== "—" ? `SKU ${item.sku}` : "", item.barcode ? `Barcode ${item.barcode}` : ""].filter(Boolean).map(value => esc(value)).join(" · ");
+        const stock = `${fmtQty(Number(item.qty) || 0, item.unit || "piece")} in stock`;
+        return `<button type="button" class="item-search-option" role="option" id="${results.id}-opt-${index}" data-index="${index}" aria-selected="false"><span class="item-search-main"><b>${esc(item.name)}</b>${details ? `<small>${details}</small>` : ""}${codes ? `<small>${codes}</small>` : ""}</span><span class="item-search-meta"><b>${esc(money(item.price))}</b><small>${esc(stock)}</small></span></button>`;
+      }).join("");
+    }
+    results.classList.remove("hidden");
+    input.setAttribute("aria-expanded", "true");
+  };
+  const pickItem = item => {
+    if (!item) return false;
+    hide();
+    input.value = "";
+    onPick(item);
+    return true;
+  };
+  const pick = index => pickItem(matches[index]);
+  const exactMatch = query => (getItems() || []).find(item =>
+    [item.name, item.sku, item.barcode].some(value => String(value || "").toLocaleLowerCase() === query) ||
+    productLabel(item).toLocaleLowerCase() === query
+  );
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-autocomplete", "list");
+  input.setAttribute("aria-controls", results.id);
+  input.setAttribute("aria-expanded", "false");
+  input.addEventListener("input", () => { if (input.value.trim()) render(); else hide(); });
+  input.addEventListener("click", () => { if (!input.value.trim()) render(); });
+  input.addEventListener("blur", () => { setTimeout(() => { if (document.activeElement !== input) hide(); }, 200); });
+  input.addEventListener("keydown", event => {
+    if (event.key === "Escape") {
+      if (!results.classList.contains("hidden")) { event.preventDefault(); event.stopPropagation(); hide(); }
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (results.classList.contains("hidden")) { render(); return; }
+      if (!matches.length) return;
+      active = event.key === "ArrowDown" ? (active + 1) % matches.length : (active <= 0 ? matches.length - 1 : active - 1);
+      highlight();
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const query = input.value.trim().toLocaleLowerCase();
+      const exact = query ? exactMatch(query) : null;
+      if (exact) { pickItem(exact); return; }
+      if (matches.length) { pick(active >= 0 ? active : 0); return; }
+      if (query) toast(emptyText);
+    }
+  });
+  results.addEventListener("mousedown", event => event.preventDefault());
+  results.addEventListener("click", event => {
+    const option = event.target.closest("[data-index]");
+    if (option && results.contains(option)) pick(Number(option.dataset.index));
+  });
+  toggle?.addEventListener("click", () => {
+    if (results.classList.contains("hidden")) { render(); input.focus(); }
+    else hide();
+  });
+  return { hide, render };
+}
+document.addEventListener("click", event => {
+  document.querySelectorAll(".item-search").forEach(field => {
+    if (field.contains(event.target)) return;
+    const box = field.querySelector(".item-search-results");
+    if (!box || box.classList.contains("hidden")) return;
+    box.classList.add("hidden");
+    box.innerHTML = "";
+    field.querySelector("input")?.setAttribute("aria-expanded", "false");
+  });
+});
 function renderInventoryProducts() {
   const query = $("#search").value.trim().toLocaleLowerCase();
   const products = data.products.filter(item => [item.name, item.sku, item.barcode, item.unit, item.category, item.brand, item.color, item.size, item.material].some(value => String(value || "").toLocaleLowerCase().includes(query)));
@@ -755,16 +893,15 @@ function openOnlineOrderModal(orderId = 0) {
       </label>
     </div>
     <hr style="border:0;border-top:1px solid var(--line);margin:14px 0">
-    <label>Add clothing product to order
-      <input id="order-product-search" list="order-product-options" placeholder="Type product name, size, color, SKU, or barcode to add" autocomplete="off">
-      <datalist id="order-product-options">
-        ${stockedProducts.map(p => {
-          const detail = [p.size ? `Size: ${p.size}` : "", p.color ? `Color: ${p.color}` : "", p.brand ? `Brand: ${p.brand}` : ""].filter(Boolean).join(" · ");
-          return `<option value="${esc(productLabel(p))}" data-id="${p.id}" label="${esc(`Stock: ${p.qty} ${p.unit || 'piece'} · ${money(p.price)}`)}"></option>`;
-        }).join("")}
-      </datalist>
-      <small class="form-hint">Type product name or scan barcode and press Enter to add to the order list below.</small>
-    </label>
+    <div class="item-search">
+      <label for="order-product-search">Add product to order</label>
+      <div class="item-search-wrap">
+        <input id="order-product-search" type="search" autocomplete="off" placeholder="Product name, size, color, SKU, or barcode">
+        <button type="button" class="item-search-toggle" id="order-product-search-toggle" aria-label="Show all in-stock products" title="Show all in-stock products">▾</button>
+        <div class="item-search-results hidden" id="order-product-search-results" role="listbox" aria-label="Matching in-stock products"></div>
+      </div>
+      <small class="form-hint">Pick a product from the list, or scan a barcode and press Enter, to add it to the order below.</small>
+    </div>
     <div class="order-items-builder">
       <table>
         <thead>
@@ -901,19 +1038,8 @@ function openOnlineOrderModal(orderId = 0) {
     calculate();
   };
 
-  const addItemFromSearch = () => {
-    const input = $("#order-product-search");
-    const query = (input?.value || "").trim().toLocaleLowerCase();
-    if (!query) return;
-    const product = stockedProducts.find(p => {
-      const fullLabel = productLabel(p).toLocaleLowerCase();
-      return p.name.toLocaleLowerCase() === query ||
-        fullLabel === query ||
-        (p.sku && p.sku.toLocaleLowerCase() === query) ||
-        (p.barcode && p.barcode.toLocaleLowerCase() === query) ||
-        fullLabel.includes(query);
-    });
-    if (!product) return toast("No in-stock clothing item matched. Pick from list or enter exact barcode/SKU.");
+  const addProductLine = product => {
+    if (!product) return;
     const existingLine = cart.find(l => Number(l.productId) === Number(product.id));
     if (!existingLine) {
       cart.push({
@@ -934,13 +1060,17 @@ function openOnlineOrderModal(orderId = 0) {
     } else {
       return toast(`Only ${existingLine.max} ${existingLine.unit} of ${existingLine.name} in stock.`);
     }
-    input.value = "";
     drawCart();
-    input.focus();
+    $("#order-product-search")?.focus();
   };
-
-  $("#order-product-search").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); addItemFromSearch(); } };
-  $("#order-product-search").oninput = e => { if (!e.inputType || e.inputType === "insertReplacementText") addItemFromSearch(); };
+  initItemSearch({
+    input: $("#order-product-search"),
+    results: $("#order-product-search-results"),
+    toggle: $("#order-product-search-toggle"),
+    getItems: () => stockedProducts,
+    onPick: addProductLine,
+    emptyText: "No in-stock product matches that name, SKU, or barcode."
+  });
 
   $("#order-cart-lines").oninput = e => {
     const input = e.target;
@@ -1031,12 +1161,7 @@ function downloadOnlineOrdersExcel() {
     ]);
   }
   const csv = "﻿" + rows.map(row => row.map(val => csvCell(val)).join(",")).join("\r\n");
-  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `online-orders-${dateKey(new Date())}.csv`;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  downloadFile(`online-orders-${dateKey(new Date())}.csv`, csv);
   toast("Online orders downloaded");
 }
 
@@ -1139,7 +1264,7 @@ function openOnlineOrderCustomers() {
     $("#online-customer-body").innerHTML = filtered.map(customer => `<tr data-customer-search="${esc(customer.search)}"><td>${esc(customer.name)}</td><td>${esc(customer.phone || "—")}</td><td>${customer.count}</td><td>${money(customer.total)}</td><td>${customer.latest ? esc(dateLabel(customer.latest)) : "—"}</td></tr>`).join("");
     $("#online-customer-count").textContent = `${filtered.length} customer${filtered.length === 1 ? "" : "s"} · Select a row to filter orders`;
     $("#online-customer-empty").classList.toggle("hidden", filtered.length > 0);
-    $("#online-customer-body").querySelectorAll("tr[data-customer-search]").forEach(row => row.onclick = () => { $("#online-order-search").value = row.dataset.customerSearch; dialog.close(); renderOnlineOrders(); });
+    $("#online-customer-body").querySelectorAll("tr[data-customer-search]").forEach(row => row.onclick = () => { $("#online-order-search").value = row.dataset.customerSearch; closeModal(); renderOnlineOrders(); });
   };
   $("#online-customer-search").oninput = renderCustomers;
   renderCustomers();
@@ -1313,7 +1438,20 @@ const bulkInventoryHeaders = ["Product ID", "Product Name", "SKU", "Selling Pric
 function csvCell(value) {
   let text = String(value ?? "");
   if (typeof value === "string" && /^[=+@\- \t\r]/.test(text)) text = "'" + text;
-  return `"${text.replaceAll('"', '""')}"`;
+  return `"${text.split('"').join('""')}"`;
+}
+// Firefox (and older Safari) only start a download when the temporary link is in the document.
+function downloadFile(filename, content, type = "text/csv;charset=utf-8") {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.rel = "noopener";
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 function parseCsv(text) {
   const rows = [];
@@ -1335,6 +1473,24 @@ function parseCsv(text) {
   if (cell.length || row.length) { row.push(cell); rows.push(row); }
   return rows.filter(values => values.some(value => value.trim() !== ""));
 }
+// <dialog> is fairly new (Firefox 98+, Safari 15.4+). These helpers keep the same
+// behaviour in older browsers by driving the open attribute and a manual backdrop.
+const supportsNativeDialog = typeof dialog.showModal === "function" && typeof dialog.close === "function";
+const modalIsOpen = () => dialog.hasAttribute("open");
+function syncModalLayer() {
+  const open = modalIsOpen(), fallback = open && !supportsNativeDialog;
+  document.body.classList.toggle("modal-open", open);
+  $("#modal-backdrop")?.classList.toggle("hidden", !fallback);
+  dialog.classList.toggle("modal-fallback", fallback);
+}
+function closeDialogElement(element) {
+  if (!element || !element.hasAttribute("open")) return;
+  if (typeof element.close === "function") element.close();
+  else {
+    element.removeAttribute("open");
+    element.dispatchEvent(new Event("close"));
+  }
+}
 function openModal(title, markup, onSave) {
   $("#modal-title").textContent = title;
   const errorBanner = $("#modal-error-banner");
@@ -1354,26 +1510,55 @@ function openModal(title, markup, onSave) {
     $("#submit-modal").disabled = true;
     try {
       const shouldClose = await onSave(new FormData(form));
-      if (shouldClose !== false && dialog.open) dialog.close();
+      if (shouldClose !== false && modalIsOpen()) closeModal();
     } catch (error) {
       if (errorBanner) {
         errorBanner.textContent = error.message;
         errorBanner.classList.remove("hidden");
-        errorBanner.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        errorBanner.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
       }
       toast(error.message);
     }
     finally { $("#submit-modal").disabled = false; }
   };
-  if (!dialog.open && typeof dialog.showModal === "function") dialog.showModal();
-  else if (!dialog.open) dialog.setAttribute("open", "");
+  if (!modalIsOpen()) {
+    if (supportsNativeDialog) {
+      try { dialog.showModal(); }
+      catch { dialog.setAttribute("open", ""); }
+    } else dialog.setAttribute("open", "");
+  }
+  syncModalLayer();
+  if (!markup.includes("autofocus")) {
+    const firstField = $("#modal-fields input:not([type=hidden]), #modal-fields select, #modal-fields textarea");
+    if (firstField && document.activeElement !== firstField) setTimeout(() => firstField.focus(), 30);
+  }
 }
 function closeModal() {
-  if (typeof dialog.close === "function" && dialog.open) dialog.close();
-  else dialog.removeAttribute("open");
+  if (!modalIsOpen()) { syncModalLayer(); return; }
+  closeDialogElement(dialog);
+  syncModalLayer();
 }
 $("#cancel-modal").onclick = closeModal;
 $("#modal-cancel").onclick = closeModal;
+dialog.addEventListener("close", syncModalLayer);
+dialog.addEventListener("cancel", event => {
+  // Escape first closes an open item-search suggestion list, not the whole modal.
+  if (closeItemSearches(dialog)) event.preventDefault();
+});
+$("#modal-backdrop")?.addEventListener("click", closeModal);
+document.addEventListener("keydown", event => {
+  if (event.key !== "Escape") return;
+  // Escape closes an open suggestion list first; a second Escape closes the modal.
+  if (closeItemSearches(document)) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
+  if (modalIsOpen() && !supportsNativeDialog) {
+    event.preventDefault();
+    closeModal();
+  }
+}, true);
 
 $("#edit-workspace").onclick = () => {
   if (!data.permissions.settings) {
@@ -1516,7 +1701,7 @@ $("#add-product").onclick = () => {
   const categories = data.categories || [];
   const existingNames = [...new Map(data.products.map(item => [item.name.toLocaleLowerCase(), item])).values()];
   const clothing = clothingFormFields();
-  openModal("Add a product", `<label>Product name<input name="name" list="product-name-suggestions" autocomplete="off" required placeholder="Start typing an item name"><datalist id="product-name-suggestions">${existingNames.map(item => `<option value="${esc(item.name)}" label="${esc([item.category || "Other", item.sku].filter(Boolean).join(" · "))}"></option>`).join("")}</datalist><small class="suggestion-hint">Start typing to see existing item names.</small></label><label>Category<select name="category">${categories.map(item => `<option>${esc(item.name)}</option>`).join("")}</select></label><div class="form-row"><label>SKU / item code<input name="sku" placeholder="Optional"></label><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" placeholder="Scan or enter barcode"></label></div>${clothing}<label>Unit of measure<input name="unit" value="piece" maxlength="30" placeholder="piece, box, kg, meter, roll" required></label><div class="form-row"><label>Selling price (${esc(currencySymbol())}) per unit<input name="price" type="number" min="0" step="0.01" required></label><label>Buying cost (${esc(currencySymbol())}) per unit<input name="cost" type="number" min="0" step="0.01" required></label></div><div class="form-row"><label>Quantity (<span class="unit-label">piece</span>)<input name="qty" type="number" min="0" required></label><label>Low-stock alert at (<span class="unit-label">piece</span>)<input name="min" type="number" min="0" value="5" required></label></div>`, async form => {
+  openModal("Add a product", `<label>Product name<input name="name" list="product-name-suggestions" autocomplete="off" required placeholder="Start typing an item name"><datalist id="product-name-suggestions">${existingNames.map(item => `<option value="${esc(item.name)}" label="${esc(item.name)}">${esc(item.name)}</option>`).join("")}</datalist><small class="suggestion-hint">Start typing to see existing item names.</small></label><label>Category<select name="category">${categories.map(item => `<option>${esc(item.name)}</option>`).join("")}</select></label><div class="form-row"><label>SKU / item code<input name="sku" placeholder="Optional"></label><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" placeholder="Scan or enter barcode"></label></div>${clothing}<label>Unit of measure<input name="unit" value="piece" maxlength="30" placeholder="piece, box, kg, meter, roll" required></label><div class="form-row"><label>Selling price (${esc(currencySymbol())}) per unit<input name="price" type="number" min="0" step="0.01" required></label><label>Buying cost (${esc(currencySymbol())}) per unit<input name="cost" type="number" min="0" step="0.01" required></label></div><div class="form-row"><label>Quantity (<span class="unit-label">piece</span>)<input name="qty" type="number" min="0" required></label><label>Low-stock alert at (<span class="unit-label">piece</span>)<input name="min" type="number" min="0" value="5" required></label></div>`, async form => {
     await updateState("/api/products", { name: form.get("name").trim(), category: form.get("category"), sku: form.get("sku").trim(), barcode: form.get("barcode").trim(), brand: form.get("brand") || "", color: form.get("color") || "", size: form.get("size") || "", material: form.get("material") || "", unit: form.get("unit").trim(), price: Number(form.get("price")), cost: Number(form.get("cost")), qty: Number(form.get("qty")), min: Number(form.get("min")), pack_name: (form.get("pack_name") || "").trim(), pack_size: Number(form.get("pack_size") || 0) });
     toast("Product added");
   });
@@ -1576,7 +1761,7 @@ $("#manage-categories").onclick = () => {
 $("#new-sale").onclick = $("#sale-shortcut").onclick = () => {
   const available = data.products.filter(item => item.qty > 0);
   if (!available.length) return toast("No products in stock.");
-  openModal("Record a sale", `<label>Search items<input id="sale-search" type="search" list="sale-item-suggestions" autocomplete="off" placeholder="Type or scan name, SKU, or barcode"><datalist id="sale-item-suggestions">${available.map(item => `<option value="${esc(productLabel(item))}" label="${esc(`${item.sku || "No SKU"} · ${item.qty} ${item.unit || "piece"} available`)}"></option>${item.sku ? `<option value="${esc(item.sku)}" label="${esc(`${productLabel(item)} · ${item.qty} ${item.unit || "piece"} available`)}"></option>` : ""}`).join("")}</datalist></label><label>Product<select id="sale-product" name="productId" required>${available.map(item => `<option value="${item.id}" data-unit="${esc(item.unit || "piece")}" data-price="${Number(item.price)}" data-cost="${Number(item.cost)}" data-search="${esc([productLabel(item),item.sku,item.unit,item.category].join(" ").toLocaleLowerCase())}">${esc(productLabel(item))} · ${item.qty} ${esc(item.unit || "piece")} available</option>`).join("")}</select></label><div class="form-row"><label>Quantity (<span id="sale-unit-label">${esc(available[0].unit || "piece")}</span>)<input name="qty" type="number" value="1" min="1" step="1" required></label><label>Sale price per unit (${esc(currencySymbol())})<input id="sale-price" name="price" type="number" min="0" step="0.01" value="${Number(available[0].price)}" required></label></div><p id="sale-margin" class="sale-margin"></p><label>Payment method<select name="payment">${paymentOptions(undefined, quickPaymentChoices())}</select></label><p class="form-hint">Sale price is entered per item unit. Purchase cost is shown to help you check your margin.</p>`, async form => {
+  openModal("Record a sale", `<div class="item-search"><label for="sale-search">Search items <span class="form-hint">Pick a product to fill the form below.</span></label><div class="item-search-wrap"><input id="sale-search" type="search" autocomplete="off" placeholder="Type part of a name, SKU, or barcode"><button type="button" class="item-search-toggle" id="sale-search-toggle" aria-label="Show all products" title="Show all products">▾</button><div class="item-search-results hidden" id="sale-search-results" role="listbox" aria-label="Matching products"></div></div></div><label>Product<select id="sale-product" name="productId" required>${available.map(item => `<option value="${item.id}" data-unit="${esc(item.unit || "piece")}" data-price="${Number(item.price)}" data-cost="${Number(item.cost)}" data-search="${esc([productLabel(item),item.sku,item.unit,item.category].join(" ").toLocaleLowerCase())}">${esc(productLabel(item))} · ${item.qty} ${esc(item.unit || "piece")} available</option>`).join("")}</select></label><div class="form-row"><label>Quantity (<span id="sale-unit-label">${esc(available[0].unit || "piece")}</span>)<input name="qty" type="number" value="1" min="1" step="1" required></label><label>Sale price per unit (${esc(currencySymbol())})<input id="sale-price" name="price" type="number" min="0" step="0.01" value="${Number(available[0].price)}" required></label></div><p id="sale-margin" class="sale-margin"></p><label>Payment method<select name="payment">${paymentOptions(undefined, quickPaymentChoices())}</select></label><p class="form-hint">Sale price is entered per item unit. Purchase cost is shown to help you check your margin.</p>`, async form => {
     const selected = $("#sale-product").selectedOptions[0];
     const salePrice = Number(form.get("price"));
     const purchaseCost = Number(selected?.dataset.cost || 0);
@@ -1610,23 +1795,21 @@ $("#new-sale").onclick = $("#sale-shortcut").onclick = () => {
   $("#sale-price").oninput = updateSaleMargin;
   $("#modal-fields [name=qty]").oninput = updateSaleMargin;
   updateSaleMargin();
-  $("#sale-search").oninput = event => {
-    const query = event.target.value.trim().toLocaleLowerCase();
-    const select = $("#sale-product");
-    
-    let firstVisible = null;
-    for (const option of select.options) {
-      option.hidden = !option.dataset.search.includes(query);
-      if (!option.hidden && firstVisible === null) firstVisible = option;
-    }
-    if (select.selectedOptions[0]?.hidden && firstVisible) {
-      select.value = firstVisible.value;
-      $("#sale-price").value = select.selectedOptions[0]?.dataset.price || "0";
-    }
-    if (firstVisible) updateSaleMargin();
-    select.disabled = !firstVisible;
-    $("#submit-modal").disabled = !firstVisible;
-  };
+  initItemSearch({
+    input: $("#sale-search"),
+    results: $("#sale-search-results"),
+    toggle: $("#sale-search-toggle"),
+    getItems: () => available,
+    onPick: item => {
+      const select = $("#sale-product");
+      if (!select) return;
+      select.value = String(item.id);
+      $("#sale-price").value = item.price;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      $("#sale-search")?.focus();
+    },
+    emptyText: "No in-stock product matches that name, SKU, or barcode."
+  });
 };
 $("#add-expense").onclick = () => openModal("Add an expense", `<label>Category<select name="category"><option>Rent</option><option>Utilities</option><option>Wages</option><option>Transport</option><option>Supplies</option><option>Repairs</option><option>Other</option></select></label><label>Note<input name="note" placeholder="What was this cost for?"></label><div class="form-row"><label>Amount (৳)<input name="amount" type="number" min="0.01" step="0.01" required></label><label>Date<input name="date" type="date" value="${dateKey(new Date())}" required></label></div>`, async form => {
   await updateState("/api/expenses", { category: form.get("category"), note: form.get("note").trim(), amount: Number(form.get("amount")), date: form.get("date") });
@@ -1693,11 +1876,9 @@ $("#download-report").onclick = () => {
   const csv = "\uFEFF" + rows.map(row => row.map(value => {
     let cell = String(value ?? "");
     if (typeof value === "string" && /^[=+@\- \t\r]/.test(cell)) cell = "'" + cell;
-    return '"' + cell.replaceAll('"', '""') + '"';
+    return '"' + cell.split('"').join('""') + '"';
   }).join(",")).join("\r\n");
-  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-  const link = document.createElement("a"); link.href = url; link.download = `shop-report-${range.start}-to-${range.end}.csv`;
-  link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  downloadFile(`shop-report-${range.start}-to-${range.end}.csv`, csv);
   toast("Excel-compatible report downloaded");
 };
 $("#print-report").onclick = () => {
@@ -1725,12 +1906,9 @@ $("#download-stock-watch").onclick = () => {
   const csv = "﻿" + rows.map(row => row.map(value => {
     let cell = String(value ?? "");
     if (typeof value === "string" && /^[=+@\- \t\r]/.test(cell)) cell = "'" + cell;
-    return '"' + cell.replaceAll('"', '""') + '"';
+    return '"' + cell.split('"').join('""') + '"';
   }).join(",")).join("\r\n");
-  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-  const link = document.createElement("a"); link.href = url;
-  link.download = `stock-watch-${dateKey(new Date())}.csv`;
-  link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  downloadFile(`stock-watch-${dateKey(new Date())}.csv`, csv);
   toast("Stock watch downloaded");
 };
 // ---- Team access: owner, administrators and staff, each with powers that can be given or taken away ----
@@ -1925,19 +2103,14 @@ $("#download-inventory-template").onclick = () => {
     item.id, item.name, item.sku, item.price, item.cost, item.qty, item.min, item.unit || "piece", item.category || "Other", item.barcode || "", item.brand || "", item.color || "", item.size || "", item.material || ""
   ])];
   const csv = "\uFEFF" + rows.map(row => row.map(csvCell).join(",")).join("\r\n");
-  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "shop-inventory-template.csv";
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  downloadFile("shop-inventory-template.csv", csv);
   toast("Excel-compatible inventory template downloaded");
 };
 $("#bulk-inventory-file").onchange = async event => {
   const file = event.target.files?.[0];
   if (!file) return;
   try {
-    if (file.size > 400_000) throw new Error("Please keep the CSV file under 400 KB.");
+    if (file.size > 400000) throw new Error("Please keep the CSV file under 400 KB.");
     const csvRows = parseCsv((await file.text()).replace(/^\uFEFF/, ""));
     const headers = csvRows.shift()?.map(value => value.trim().toLowerCase());
     const expected = bulkInventoryHeaders.map(value => value.toLowerCase());
@@ -2055,11 +2228,7 @@ h1{font-size:18px;margin:0;text-align:center}.c{text-align:center}small{color:#3
 <p>Payment: ${esc(bill.payments ? (bill.payments.map(p => `${p.method} ${money(p.amount)}`).join(", ") || "None yet") : bill.payment)}<br>Served by: ${esc(bill.cashier)}</p>${clothingNotice}<p class="c">Thank you for shopping with us!</p></body></html>`;
 }
 function printBill(bill) {
-  const frame = document.createElement("iframe");
-  frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
-  document.body.appendChild(frame);
-  frame.contentDocument.open(); frame.contentDocument.write(billHtml(bill)); frame.contentDocument.close();
-  setTimeout(() => { frame.contentWindow.focus(); frame.contentWindow.print(); setTimeout(() => frame.remove(), 2000); }, 300);
+  printHtml(billHtml(bill));
 }
 $("#sales-table").addEventListener("click", async event => {
   const button = event.target.closest("[data-print-bill]");
@@ -2072,7 +2241,7 @@ function openBillEditor(editing) {
   const stocked = data.products.filter(item => item.qty > 0 || extra[item.id]);
   if (!stocked.length) return toast("No products in stock.");
   let cart = (editing?.lines || []).map(l => { const p = data.products.find(x => x.id === pid(l)); return p && { id: p.id, name: productLabel(p), category: l.category || p.category || "", unit: p.unit || "piece", packSize: p.pack_size || 0, packName: p.pack_name, price: l.price, cost: p.cost, qty: l.qty, max: +(p.qty + l.qty).toFixed(6), serials: l.serials || [], warrantyMonths: Number(l.warrantyMonths || 0) }; }).filter(Boolean);
-  openModal(editing ? `Edit ${billNo(editing.id)}` : "New bill", `<label>Add item <span class="form-hint">Type a name or scan a SKU/barcode, then press Enter</span><input id="bill-search" list="bill-items" autocomplete="off" placeholder="Item name, SKU, or barcode"><datalist id="bill-items">${stocked.map(item => `<option value="${esc(productLabel(item))}" label="${esc(`${item.sku || "No SKU"} · ${item.qty} ${item.unit || "piece"} · ${money(item.price)}`)}"></option>`).join("")}</datalist></label>
+  openModal(editing ? `Edit ${billNo(editing.id)}` : "New bill", `<div class="item-search"><label for="bill-search">Add item <span class="form-hint">Type part of a name, SKU, or barcode. Pick from the list or press Enter to add.</span></label><div class="item-search-wrap"><input id="bill-search" type="search" autocomplete="off" placeholder="Item name, SKU, or barcode"><button type="button" class="item-search-toggle" id="bill-search-toggle" aria-label="Show all in-stock items" title="Show all in-stock items">▾</button><div class="item-search-results hidden" id="bill-search-results" role="listbox" aria-label="Matching in-stock items"></div></div></div>
 <div class="table-scroll bill-cart"><table><thead><tr><th>Item</th><th>Price / unit</th><th>Qty</th><th>Amount</th><th class="${data.shopType === "mobile" ? "" : "hidden"}">IMEI / serial &amp; warranty</th><th></th></tr></thead><tbody id="bill-lines"></tbody></table><div class="empty" id="bill-empty">No items yet. Search above to add the first one.</div></div>
 <div class="form-row"><label>Customer name${data.requireCustomer ? "" : " (optional)"}<input name="customer" maxlength="80" value="${esc(editing?.customer || "")}" ${data.requireCustomer && !editing ? "required" : ""}></label><label>Phone (optional)<input name="phone" maxlength="30" inputmode="tel" value="${esc(editing?.phone || "")}"></label></div>
 <div class="form-row"><label class="${editing ? "hidden" : ""}">Payment method<select name="payment">${paymentOptions(editing?.payment || "Cash")}</select></label>${data.allowDiscounts ? `<label>Discount (৳)<input id="bill-discount" name="discount" type="number" min="0" step="any" value="${editing ? editing.discount : 0}"></label>` : ""}</div>
@@ -2162,19 +2331,23 @@ ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive f
     $("#bill-empty").classList.toggle("hidden", cart.length > 0);
     totals();
   };
-  const add = () => {
-    const input = $("#bill-search"), query = input.value.trim().toLowerCase();
-    if (!query) return;
-    const item = stocked.find(p => p.name.toLowerCase() === query || productLabel(p).toLowerCase() === query || (p.sku && p.sku.toLowerCase() === query) || (p.barcode && p.barcode.toLowerCase() === query));
-    if (!item) return toast("No in-stock item matches. Pick one from the list or check the SKU or barcode.");
+  const addProduct = item => {
+    if (!item) return;
     const existing = cart.find(line => line.id === item.id);
     if (!existing) cart.push({ id: item.id, name: productLabel(item), category: item.category || "", serials: [], warrantyMonths: 12, unit: item.unit || "piece", packSize: item.pack_size || 0, packName: item.pack_name, price: item.price, cost: item.cost, qty: 1, max: +(item.qty + (extra[item.id] || 0)).toFixed(6) });
     else if (existing.qty < existing.max) existing.qty++;
-    else toast(`Only ${existing.max} ${existing.unit} of ${existing.name} in stock.`);
-    input.value = ""; draw(); input.focus();
+    else { toast(`Only ${existing.max} ${existing.unit} of ${existing.name} in stock.`); return; }
+    draw();
+    $("#bill-search")?.focus();
   };
-  $("#bill-search").onkeydown = event => { if (event.key === "Enter") { event.preventDefault(); add(); } };
-  $("#bill-search").oninput = event => { if (!event.inputType || event.inputType === "insertReplacementText") add(); };
+  initItemSearch({
+    input: $("#bill-search"),
+    results: $("#bill-search-results"),
+    toggle: $("#bill-search-toggle"),
+    getItems: () => stocked,
+    onPick: addProduct,
+    emptyText: "No in-stock item matches that name, SKU, or barcode."
+  });
   $("#bill-lines").oninput = event => {
     const input = event.target, line = cart[input.dataset.i];
     if (!line) return;
@@ -2249,10 +2422,27 @@ dialog.wide{width:min(900px,calc(100% - 28px));max-height:calc(100vh - 28px);ove
 </style>`);
 function printHtml(html) {
   const frame = document.createElement("iframe");
+  frame.setAttribute("aria-hidden", "true");
   frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
   document.body.appendChild(frame);
-  frame.contentDocument.open(); frame.contentDocument.write(html); frame.contentDocument.close();
-  setTimeout(() => { frame.contentWindow.focus(); frame.contentWindow.print(); setTimeout(() => frame.remove(), 2000); }, 300);
+  try {
+    frame.contentDocument.open();
+    frame.contentDocument.write(html);
+    frame.contentDocument.close();
+  } catch (error) {
+    frame.remove();
+    return toast("Could not prepare the print view. Please try again.");
+  }
+  setTimeout(() => {
+    try {
+      frame.contentWindow.focus();
+      frame.contentWindow.print();
+    } catch (error) {
+      toast("The browser blocked printing. Use the downloaded copy or allow printing for this site.");
+    } finally {
+      setTimeout(() => frame.remove(), 2000);
+    }
+  }, 400);
 }
 const today10 = () => new Date().toISOString().slice(0, 10);
 
@@ -2266,10 +2456,7 @@ $("#inv-download").onclick = () => {
   const items = inventoryRows(), hasCost = items.some(p => p.cost !== undefined);
   const rows = [["Product", "SKU", "Category", "Brand", "Color", "Size", "Material", "Unit", "Quantity", "Minimum", "Selling price", ...(hasCost ? ["Purchase cost", "Stock value (cost)"] : [])],
     ...items.map(p => [p.name, p.sku, p.category || "Other", p.brand || "", p.color || "", p.size || "", p.material || "", p.unit || "piece", p.qty, p.min, p.price, ...(hasCost ? [p.cost, p.cost * p.qty] : [])])];
-  const url = URL.createObjectURL(new Blob(["\uFEFF" + rows.map(r => r.map(csvCell).join(",")).join("\r\n")], { type: "text/csv;charset=utf-8" }));
-  const link = document.createElement("a");
-  link.href = url; link.download = `inventory-${today10()}.csv`; link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  downloadFile(`inventory-${today10()}.csv`, "\uFEFF" + rows.map(r => r.map(csvCell).join(",")).join("\r\n"));
   toast(`${items.length} products downloaded`);
 };
 $("#inv-print").onclick = () => {
@@ -2470,7 +2657,7 @@ async function openBills(duesOnly, previousFilters = {}) {
     if (button.dataset.a === "edit") return openBillEditor(bill);
     if (button.dataset.a === "delete") {
       if (!confirm(`Delete bill ${billNo(bill.id)} permanently? Its items go back into stock, and its sales and payment records are removed.`)) return;
-      try { data = await api("/api/bills/" + bill.id, { method: "DELETE" }); render(); toast(`${billNo(bill.id)} deleted`); dialog.close(); openBills(again, filters); } catch (error) { toast(error.message); }
+      try { data = await api("/api/bills/" + bill.id, { method: "DELETE" }); render(); toast(`${billNo(bill.id)} deleted`); closeModal(); openBills(again, filters); } catch (error) { toast(error.message); }
       return;
     }
     openModal(`Receive payment · ${billNo(bill.id)}`, `<p>Due now: <b>${money(bill.due)}</b></p><label>Amount received (৳)<input name="amount" type="number" min="0.01" max="${bill.due}" step="any" value="${bill.due}" required></label><label>Method<select name="method"><option>Cash</option><option>bKash</option><option>Nagad</option><option>Card</option></select></label>`, async form => {
@@ -2504,12 +2691,7 @@ render = function () {
 // ---- Shop tools: cash closing, reports, reorder list, due reminders, activity log, backups ----
 const OFFLINE_FONTS = true; // removes the Google Fonts link so screens look the same without internet
 if (OFFLINE_FONTS) document.querySelector('link[href*="fonts.googleapis.com"]')?.remove();
-const saveCsv = (filename, rows) => {
-  const url = URL.createObjectURL(new Blob(["\uFEFF" + rows.map(r => r.map(csvCell).join(",")).join("\r\n")], { type: "text/csv;charset=utf-8" }));
-  const link = document.createElement("a");
-  link.href = url; link.download = filename; link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-};
+const saveCsv = (filename, rows) => downloadFile(filename, "\uFEFF" + rows.map(r => r.map(csvCell).join(",")).join("\r\n"));
 const toolTable = (head, rows) => `<div class="table-scroll bill-cart" style="max-height:380px"><table><thead><tr>${head.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
 const stamp = at => new Date(at.replace(" ", "T") + "Z").toLocaleString("en-BD");
 let toolDays = 90;
@@ -2525,7 +2707,7 @@ const tools = {
       after: () => { $("#cash-date").onchange = e => { tools.cash.date = e.target.value; reload(); }; } };
   } },
   monthly: { label: "Monthly profit", show: hasPerm("sales"), render: async () => {
-    const by = {}, row = key => (by[key] ||= { sales: 0, cost: 0, spent: 0 });
+    const by = {}, row = key => (by[key] = by[key] || { sales: 0, cost: 0, spent: 0 });
     data.sales.forEach(s => { const r = row(s.date.slice(0, 7)); r.sales += s.total; r.cost += s.cost; });
     data.expenses.forEach(e => { row(e.date.slice(0, 7)).spent += e.amount; });
     const head = ["Month", "Sales", "Cost of goods", "Gross profit", "Expenses", "Net profit"];
@@ -2534,7 +2716,7 @@ const tools = {
   } },
   best: { label: "Best sellers", show: hasPerm("sales"), render: async reload => {
     const since = new Date(Date.now() - toolDays * 864e5).toISOString().slice(0, 10), by = {};
-    data.sales.filter(s => s.date >= since).forEach(s => { const r = (by[s.product] ||= { qty: 0, sales: 0, profit: 0 }); r.qty += s.qty; r.sales += s.total; r.profit += s.total - s.cost; });
+    data.sales.filter(s => s.date >= since).forEach(s => { const r = (by[s.product] = by[s.product] || { qty: 0, sales: 0, profit: 0 }); r.qty += s.qty; r.sales += s.total; r.profit += s.total - s.cost; });
     const list = Object.entries(by).sort((a, b) => b[1].profit - a[1].profit).slice(0, 25), head = ["Item", "Quantity sold", "Sales", "Profit"];
     return { csv: [head, ...list.map(([n, r]) => [n, r.qty, r.sales, r.profit])], html: periodPicker + (list.length ? toolTable(head, list.map(([n, r]) => [esc(n), +r.qty.toFixed(3), money(r.sales), money(r.profit)])) : "<p>No sales in this period.</p>"), after: wirePeriod(reload) };
   } },
@@ -2628,15 +2810,15 @@ async function renderBackupManager() {
     };
     $("#browse-backup-folder").onclick = async () => {
       await loadServerFolders($("#backup-schedule-directory").value);
-      if (folderDialog.showModal) folderDialog.showModal(); else folderDialog.setAttribute("open", "");
+      if (!folderDialog.hasAttribute("open")) { if (typeof folderDialog.showModal === "function") folderDialog.showModal(); else folderDialog.setAttribute("open", ""); }
     };
     $("#backup-folder-list").onclick = event => {
       const entry = event.target.closest("[data-folder-path]");
       if (entry) loadServerFolders(entry.dataset.folderPath);
     };
     $("#backup-folder-up").onclick = () => { const parent = $("#backup-folder-up").dataset.parentPath; if (parent) loadServerFolders(parent); };
-    $("#use-backup-folder").onclick = () => { $("#backup-schedule-directory").value = selectedServerFolder; folderDialog.close(); };
-    $("#close-backup-folder").onclick = $("#cancel-backup-folder").onclick = () => folderDialog.close();
+    $("#use-backup-folder").onclick = () => { $("#backup-schedule-directory").value = selectedServerFolder; closeDialogElement(folderDialog); };
+    $("#close-backup-folder").onclick = $("#cancel-backup-folder").onclick = () => closeDialogElement(folderDialog);
     $("#create-save-backup").onclick = createAndSaveBackup;
     $("#restore-from-file").onclick = restoreFromChosenFile;
     container.onclick = async event => {
@@ -2660,7 +2842,7 @@ async function saveStoredBackup(name) {
       const handle = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: "Shop Desk SQLite backup", accept: { "application/vnd.sqlite3": [".sqlite3"] } }] });
       const writable = await handle.createWritable(); await writable.write(await downloadBackupResponse(name)); await writable.close();
     } else {
-      const link = document.createElement("a"); link.href = `/api/backups/download/${encodeURIComponent(name)}`; link.download = name; link.click();
+      const link = document.createElement("a"); link.href = `/api/backups/download/${encodeURIComponent(name)}`; link.download = name; link.style.display = "none"; document.body.appendChild(link); link.click(); link.remove();
     }
     toast("Backup saved");
   } catch (error) { if (error.name !== "AbortError") toast(error.message); }
@@ -2673,7 +2855,7 @@ async function createAndSaveBackup() {
     const name = result.created || result.files?.[0]?.name;
     if (!name) throw new Error("The server created no backup file.");
     if (handle) { const writable = await handle.createWritable(); await writable.write(await downloadBackupResponse(name)); await writable.close(); }
-    else { const link = document.createElement("a"); link.href = `/api/backups/download/${encodeURIComponent(name)}`; link.download = name; link.click(); }
+    else { const link = document.createElement("a"); link.href = `/api/backups/download/${encodeURIComponent(name)}`; link.download = name; link.style.display = "none"; document.body.appendChild(link); link.click(); link.remove(); }
     toast("Backup created and saved");
     renderBackupManager();
   } catch (error) { if (error.name !== "AbortError") toast(error.message); }
