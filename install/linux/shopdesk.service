@@ -1,0 +1,24 @@
+[Unit]
+Description=Shop Desk billing and stock server
+Documentation=file://__INSTALL_DIR__/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=shopdesk
+Group=shopdesk
+WorkingDirectory=__INSTALL_DIR__
+EnvironmentFile=/etc/shopdesk.env
+ExecStart=__NODE__ __INSTALL_DIR__/server.mjs
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=__DATA_DIR__
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

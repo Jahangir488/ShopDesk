@@ -1,7 +1,12 @@
 FROM node:22-slim
 WORKDIR /app
-COPY package.json server.mjs app.js index.html styles.css ./
+COPY package.json server.mjs app.js index.html styles.css join.html manifest.webmanifest sw.js offline.html ./
+COPY lib ./lib
+COPY i18n ./i18n
+COPY icons ./icons
+COPY fonts ./fonts
 ENV NODE_ENV=production PORT=8765 SHOP_TRUST_PROXY=1 SHOP_DATA_DIR=/data
+RUN mkdir -p /data && chown node:node /data
 VOLUME /data
 EXPOSE 8765
 USER node
