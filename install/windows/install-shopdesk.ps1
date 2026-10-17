@@ -246,7 +246,7 @@ if ($cmdData -match '[^\x00-\x7F]') {
 }
 $lines = @(
   "@echo off",
-  "cd /d `"%~dp0`"",
+  "cd /d `"%~dp0app`"",
   "set `"PORT=$Port`"",
   "set `"SHOP_HOST=0.0.0.0`"",
   "set `"SHOP_DATA_DIR=$cmdData`""

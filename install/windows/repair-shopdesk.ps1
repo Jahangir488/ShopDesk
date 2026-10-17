@@ -155,7 +155,7 @@ if (-not (Test-Path $RunFile)) {
     }
     $lines = @(
       "@echo off",
-      "cd /d `"%~dp0`"",
+      "cd /d `"%~dp0app`"",
       "set `"PORT=$Port`"",
       "set `"SHOP_HOST=0.0.0.0`"",
       "set `"SHOP_DATA_DIR=$cmdData`"",
@@ -165,7 +165,21 @@ if (-not (Test-Path $RunFile)) {
     Done "Recreated run-shop.cmd"
   }
 } else {
-  Done "run-shop.cmd is present"
+  # v12.0.4 wrote the app's server.mjs command but left this launcher in the
+  # install root. Preserve all its settings while correcting only its working directory.
+  try {
+    $runContents = [System.IO.File]::ReadAllText($RunFile)
+    $oldWorkingDir = 'cd /d "%~dp0"'
+    if ($runContents.Contains($oldWorkingDir)) {
+      $runContents = $runContents.Replace($oldWorkingDir, 'cd /d "%~dp0app"')
+      [System.IO.File]::WriteAllText($RunFile, $runContents, [System.Text.Encoding]::ASCII)
+      Done "Corrected run-shop.cmd working directory"
+    } else {
+      Done "run-shop.cmd is present"
+    }
+  } catch {
+    Add-Problem "Could not correct run-shop.cmd. Re-run the installer or check that the file is writable."
+  }
 }
 
 # ---- 2. Automatic startup ----------------------------------------------

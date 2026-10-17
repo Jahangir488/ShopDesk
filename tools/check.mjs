@@ -152,6 +152,9 @@ try {
     if (!text.includes("function Write-UrlShortcut") || !text.includes("IconFile=$iconPath")) fail(`${name} must give the desktop shortcuts the Shop Desk icon`);
     if (!text.includes("http://127.0.0.1:$Port/")) fail(`${name} must use IPv4 loopback for the local desktop URL`);
   }
+  if (!installer.includes('cd /d `"%~dp0app`"')) fail("the install launcher must run from the app directory containing server.mjs");
+  const repair = readFileSync(join(root, "install", "windows", "repair-shopdesk.ps1"), "utf8");
+  if (!repair.includes("$oldWorkingDir = 'cd /d \"%~dp0\"'") || !repair.includes("$runContents.Replace($oldWorkingDir, 'cd /d \"%~dp0app\"')")) fail("repair must migrate an existing run-shop.cmd to the app directory");
   if (!installer.includes("Waiting for the local server") || !installer.includes("timed out")) fail("the installer should show progress while checking server startup");
   ok(`${scripts.length} Windows scripts probe drives, quote Robocopy exclusions, set the desktop icon and use IPv4 loopback`);
 } catch (error) { fail("Windows scripts: " + error.message); }
