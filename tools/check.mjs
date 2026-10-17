@@ -135,7 +135,12 @@ try {
   }
   const installer = readFileSync(join(root, "install", "windows", "install-shopdesk.ps1"), "utf8");
   if (!installer.includes("if (Test-AppFile $candidate) { return $candidate }")) fail("the drive scan must use Test-AppFile");
-  ok(`${scripts.length} Windows scripts probe drives without Join-Path`);
+  // Start-Process joins ArgumentList into one command-line string; quote this
+  // filename explicitly or Robocopy sees its spaces as separate parameters.
+  if (!installer.includes("'\"3 - Build Licence Kit.bat\"'")) fail("the installer must quote the licence-kit filename passed to Robocopy");
+  const updater = readFileSync(join(root, "install", "windows", "update-shopdesk.ps1"), "utf8");
+  if (!updater.includes('"3 - Build Licence Kit.bat"')) fail("the updater must quote the licence-kit filename passed to Robocopy");
+  ok(`${scripts.length} Windows scripts probe drives without Join-Path and quote Robocopy exclusions`);
 } catch (error) { fail("Windows scripts: " + error.message); }
 
 console.log("QR code");
