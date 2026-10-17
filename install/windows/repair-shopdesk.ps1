@@ -201,8 +201,8 @@ try {
   $desktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
   if (-not $desktop) { $desktop = [Environment]::GetFolderPath("Desktop") }
   $iconFile = Join-SafePath $InstallDir "app\icons\shopdesk.ico"
-  Write-UrlShortcut (Join-SafePath $desktop "Shop Desk.url") "http://localhost:$Port/" $iconFile
-  Write-UrlShortcut (Join-SafePath $desktop "Shop Desk - Connect a phone.url") "http://localhost:$Port/join" $iconFile
+  Write-UrlShortcut (Join-SafePath $desktop "Shop Desk.url") "http://127.0.0.1:$Port/" $iconFile
+  Write-UrlShortcut (Join-SafePath $desktop "Shop Desk - Connect a phone.url") "http://127.0.0.1:$Port/join" $iconFile
   Done "Desktop shortcuts"
 } catch {
   Add-Problem "The desktop shortcuts could not be created: $($_.Exception.Message)"
@@ -276,7 +276,7 @@ if ($script:Problems.Count -gt 0) {
 } else {
   Write-Host "  Startup, firewall, shortcuts and saved location are all in place."
 }
-Write-Host "  Open on this PC : http://localhost:$Port/"
+Write-Host "  Open on this PC : http://127.0.0.1:$Port/"
 Write-Host "  Data folder     : $DataDir"
 Write-Host "  Logs            : $LogDir\server.log"
 Write-Host "==============================================" -ForegroundColor Green

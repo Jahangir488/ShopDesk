@@ -150,9 +150,10 @@ try {
   for (const name of ["install-shopdesk.ps1", "repair-shopdesk.ps1"]) {
     const text = readFileSync(join(root, "install", "windows", name), "utf8");
     if (!text.includes("function Write-UrlShortcut") || !text.includes("IconFile=$iconPath")) fail(`${name} must give the desktop shortcuts the Shop Desk icon`);
+    if (!text.includes("http://127.0.0.1:$Port/")) fail(`${name} must use IPv4 loopback for the local desktop URL`);
   }
   if (!installer.includes("Waiting for the local server") || !installer.includes("timed out")) fail("the installer should show progress while checking server startup");
-  ok(`${scripts.length} Windows scripts probe drives, quote Robocopy exclusions and set the desktop icon`);
+  ok(`${scripts.length} Windows scripts probe drives, quote Robocopy exclusions, set the desktop icon and use IPv4 loopback`);
 } catch (error) { fail("Windows scripts: " + error.message); }
 
 console.log("QR code");
