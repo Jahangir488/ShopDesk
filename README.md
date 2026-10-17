@@ -7,7 +7,7 @@ Small shop inventory, sales, expenses, and reports with a separate SQLite databa
 See [INSTALL.md](INSTALL.md) for Windows, Linux and Docker installation, automatic start,
 Google Drive backups, licence keys, HTTPS and updates.
 
-- **Windows:** right-click `install/windows/install-shopdesk.bat` and choose **Run as administrator**. It copies the app to `C:\ShopDesk`, starts it at boot, opens the private-network firewall and creates desktop shortcuts.
+- **Windows:** double-click **`1 - Install Shop Desk.bat`** in the Shop Desk folder. It asks for administrator permission and for the install folder (press Enter for `C:\ShopDesk`), then starts Shop Desk at boot, opens the private-network firewall, creates desktop shortcuts and opens the browser. To remove it later, double-click **`2 - Uninstall Shop Desk.bat`**.
 - **Linux:** `sudo ./install/linux/install-shopdesk.sh` installs a systemd service with data in `/var/lib/shopdesk`.
 - **Docker:** `docker build -t shopdesk .` and run it with a volume mounted at `/data`.
 
@@ -25,8 +25,8 @@ Read [INSTALL.md §6](INSTALL.md#6-google-drive-offsite-backups) to create the O
 
 ## Licence and trial
 
-New installations start with a 14-day trial (existing databases get 30 days). During the
-last 7 days a banner reminds you to activate. After expiry the API switches to read-only:
+New installations start with a **30-day trial** (existing databases also get 30 days).
+During the last 7 days a banner reminds you to activate. After expiry the API switches to read-only:
 new bills and other changes are blocked, while viewing data, reports, exports, local
 backups and offsite backups keep working. Enter the Ed25519-signed key in
 **Settings → Licence & plan**. The installation ID shown there must match the key.

@@ -31,19 +31,29 @@ properly secured HTTPS reverse proxy.
    option to install for **all users**. If Node.js lives inside `C:\Users\...`, the
    background task may not see it.
 2. Copy the Shop Desk folder to the shop PC (for example `D:\ShopDesk-setup`).
-3. Right-click **`install\windows\install-shopdesk.bat`** → **Run as administrator**.
-   The wrapper opens PowerShell with the required privileges and runs
-   `install-shopdesk.ps1`.
+3. Double-click **`1 - Install Shop Desk.bat`** in the Shop Desk folder. Windows asks for
+   administrator permission — choose **Yes**.
 
-The installer:
+The installer then:
 
-- copies the app to `C:\ShopDesk\app` and keeps data in `C:\ShopDesk\data`;
-- writes `C:\ShopDesk\run-shop.cmd` (port, data folder and any Google keys);
+- asks **where to install**. Press **Enter** for `C:\ShopDesk`, or type another folder
+  such as `D:\ShopDesk`. It shows the program folder, data folder and port and asks you
+  to confirm before copying anything;
+- copies the app to `<install folder>\app` and keeps data in `<install folder>\data`;
+- writes `run-shop.cmd` (port, data folder and any Google keys);
 - registers the Scheduled Task **Shop Desk**, which starts at boot and at sign-in as
   `SYSTEM` and restarts after a failure;
 - opens inbound TCP **8765** for the **Private** and **Domain** firewall profiles only;
 - creates desktop shortcuts for **Shop Desk** and **Shop Desk – Connect a phone**;
-- waits for `/healthz` and prints the LAN address.
+- waits for `/healthz`, prints the LAN address and opens the browser.
+
+The chosen folders are saved in `%ProgramData%\ShopDesk\install.json`, so updates and the
+uninstaller always find the installation, even when it is not in `C:\ShopDesk`. The
+installer also writes **`Uninstall Shop Desk.bat`** into the chosen folder, so the shop can
+remove Shop Desk later without looking for the original download.
+
+If Shop Desk is already installed in that folder, the installer offers to **update** it and
+keeps the existing data.
 
 Optional parameters (run from PowerShell in the repo folder):
 
@@ -57,11 +67,12 @@ powershell -ExecutionPolicy Bypass -File .\install\windows\install-shopdesk.ps1 
   -PublicUrl "https://shop.example.com"
 ```
 
-Use `-SkipFirewall` if another firewall product manages the port.
+Use `-SkipFirewall` if another firewall product manages the port. Add `-Yes` for an
+unattended install (no prompts), or `-NoBrowser` to skip opening the browser.
 
 **First run:** open the Shop Desk shortcut, read the one-time setup code from
-`C:\ShopDesk\logs\server.log`, create the owner account (12+ character password), then
-finish **Shop settings**. Delete the setup code from `run-shop.cmd` afterwards if you
+`<install folder>\logs\server.log`, create the owner account (12+ character password),
+then finish **Shop settings**. Delete the setup code from `run-shop.cmd` afterwards if you
 passed `-SetupCode`.
 
 **Phones:** connect them to the same Wi-Fi and open `http://SERVER-IP:8765`, or scan the
@@ -142,7 +153,7 @@ docker run -d --name shopdesk --restart unless-stopped \
 2. **Shop settings**: shop name, location, currency, region, language (বাংলা/English),
    Bangla digits, tax mode, payment methods.
 3. **Settings → Licence & plan**: paste the licence key from your supplier. New installs
-   start a 14-day trial; existing databases get 30 days.
+   start a 30-day trial; existing databases also get 30 days.
 4. **Backup and restore → Offsite backup**: connect Google Drive, run **Test connection**,
    then **Back up now**.
 5. Copy **`data/offsite.key`** to a safe place. Without it, downloaded offsite backups
@@ -226,8 +237,8 @@ encrypted original until you have confirmed the restored database.
 
 ## 7. Licence keys and trial
 
-- **Trial:** 14 days for a new database, 30 days when Shop Desk upgrades an existing
-  database without a licence.
+- **Trial:** 30 days for every installation, including existing databases upgraded
+  without a licence.
 - **Warning:** a banner appears during the last 7 days.
 - **Expired:** the app becomes **read-only**. Billing and other writes are blocked by the
   API (HTTP 402), but signing in, viewing data, reports, exports, local backups and
@@ -330,6 +341,10 @@ powershell -ExecutionPolicy Bypass -File .\install\windows\update-shopdesk.ps1 `
   -ZipPath "D:\ShopDesk-12.0.1.zip"
 ```
 
+The updater finds the install folder automatically (it reads
+`%ProgramData%\ShopDesk\install.json`), so it also works when Shop Desk was installed in a
+custom folder such as `D:\ShopDesk`.
+
 Or `-SourceDir "D:\new-files"`. The updater stops the task, copies the app to
 `update-backup-<stamp>`, backs up the database, swaps in the new files, starts the task,
 and waits 60 seconds for `/healthz`. If health fails it restores the previous app and
@@ -371,29 +386,47 @@ testing only, `SHOP_UPDATE_ALLOW_HTTP=1` permits a loopback `http://127.0.0.1` U
 
 ## 10. Uninstall
 
-**Windows:**
+**Windows:** double-click **`2 - Uninstall Shop Desk.bat`** in the Shop Desk folder — or
+**`Uninstall Shop Desk.bat`** in the folder where you installed Shop Desk — and choose
+**Yes** on the administrator prompt.
+
+The uninstaller finds the installation automatically (including custom folders), then asks:
+
+```
+What do you want to remove?
+  [1] The program only - keep shop data and backups  (recommended)
+  [2] Everything        - delete the program, shop data and backups
+Choose 1 or 2 [1]:
+```
+
+Option 2 also asks you to type `DELETE`. When it finishes it prints exactly what was
+removed and, if you kept the data, the database, `offsite.key` and backup files with their
+sizes.
+
+It can also be run from PowerShell:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install\windows\uninstall-shopdesk.ps1
+powershell -ExecutionPolicy Bypass -File .\install\windows\uninstall-shopdesk.ps1 -RemoveData
 ```
-
-This removes the scheduled task, firewall rule and shortcuts. It keeps `C:\ShopDesk\data`
-by default. Add `-RemoveData` to delete the database and backups too; the script asks you
-to type `DELETE`.
 
 **Linux:**
 
 ```bash
-sudo systemctl disable --now shopdesk
-sudo rm /etc/systemd/system/shopdesk.service
-sudo systemctl daemon-reload
-sudo rm -rf /opt/shopdesk
-# data is kept:
-sudo ls /var/lib/shopdesk
+sudo ./install/linux/uninstall-shopdesk.sh
 ```
 
-Delete the service user and `/var/lib/shopdesk` only after you have copied the database
-and `offsite.key` somewhere safe.
+It stops and disables the service, removes the systemd unit and `/opt/shopdesk`, and asks
+whether to keep the shop data. It then prints the same summary with the files that were
+kept. Non-interactive use:
+
+```bash
+sudo ./install/linux/uninstall-shopdesk.sh --keep-data
+sudo ./install/linux/uninstall-shopdesk.sh --remove-data --yes
+```
+
+Delete `/var/lib/shopdesk` and the service user only after you have copied the database and
+`offsite.key` somewhere safe.
 
 ---
 

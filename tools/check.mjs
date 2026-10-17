@@ -6,7 +6,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { signLicense, verifyLicense, licenseStatus } from "../lib/license.mjs";
+import { TRIAL_DAYS, installIdMatches, signLicense, verifyLicense, licenseStatus } from "../lib/license.mjs";
 import { encodeQr, qrSvg } from "../lib/qr.mjs";
 import { decryptBuffer, encryptBuffer } from "../lib/offsite.mjs";
 import { compareVersions, parseManifest, signManifest, verifyManifest } from "../lib/release.mjs";
@@ -48,20 +48,31 @@ try {
 
 console.log("Licensing");
 try {
-  const expires = new Date(Date.now() + 86400000 * 30);
-  const token = signLicense({ id: "check", shop: "Check Shop", plan: "pro", seats: 2, issued: new Date(), expires });
-  const verified = verifyLicense(token, { installId: "abc123" });
+  // Self-contained check: use a throwaway key pair so no vendor key is needed.
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const installId = "da7b5514ceb6404b48a27a78";
+  const expires = new Date(Date.now() + 86400000 * 365);
+  const token = signLicense({ id: "check", shop: "Check Shop", plan: "pro", seats: 2, issued: new Date(), expires, install: installId }, privateKey);
+  const verified = verifyLicense(token, { installId, publicKey });
   if (!verified.valid || verified.expired) fail("licence roundtrip");
-  const status = licenseStatus({ license: { token }, trialStartedAt: new Date(), installId: "abc123" });
+  const shortToken = signLicense({ id: "short", shop: "Check Shop", plan: "pro", issued: new Date(), expires, install: "da7b-5514-7a78" }, privateKey);
+  if (!verifyLicense(shortToken, { installId, publicKey }).valid) fail("short installation ID rejected");
+  const status = licenseStatus({ license: { token }, trialStartedAt: new Date(), installId, publicKey });
   if (status.state !== "active") fail("active licence state");
+  if (TRIAL_DAYS !== 30) fail(`trial should be 30 days, found ${TRIAL_DAYS}`);
+  const trial = licenseStatus({ license: null, trialStartedAt: new Date(), trialDays: TRIAL_DAYS, installId, publicKey });
+  if (trial.state !== "trial" || trial.daysLeft !== 30) fail(`30-day trial status: ${trial.state} ${trial.daysLeft}`);
+  if (!installIdMatches(installId, installId)) fail("full installation ID should match");
+  if (!installIdMatches("da7b-5514-7a78", installId)) fail("short installation ID should match");
+  if (installIdMatches("1111-2222-3333", installId)) fail("another installation ID should not match");
   // Change a signed field while keeping the original signature.
   const [prefix, encoded, signature] = token.split(".");
   const payload = JSON.parse(Buffer.from(encoded.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
   payload.shop = "Tampered Shop";
   const changed = Buffer.from(JSON.stringify(payload)).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-  const tampered = verifyLicense([prefix, changed, signature].join("."), { installId: "abc123" });
+  const tampered = verifyLicense([prefix, changed, signature].join("."), { installId, publicKey });
   if (tampered.valid) fail("tampered licence accepted");
-  ok("Ed25519 sign/verify, expiry and tamper detection");
+  ok("Ed25519 sign/verify, 30-day trial, install IDs and tamper detection");
 } catch (error) { fail("licensing: " + error.message); }
 
 console.log("Release manifest");
@@ -86,9 +97,11 @@ console.log("Install files");
 try {
   const required = [
     "INSTALL.md", "Dockerfile", "docker-compose.yml", ".env.example",
+    "1 - Install Shop Desk.bat", "2 - Uninstall Shop Desk.bat",
     "install/windows/install-shopdesk.ps1", "install/windows/install-shopdesk.bat",
     "install/windows/update-shopdesk.ps1", "install/windows/uninstall-shopdesk.ps1",
-    "install/linux/install-shopdesk.sh", "install/linux/shopdesk.service",
+    "install/windows/uninstall-shopdesk.bat",
+    "install/linux/install-shopdesk.sh", "install/linux/uninstall-shopdesk.sh", "install/linux/shopdesk.service",
     "lib/license-public.mjs", "join.html", "offline.html"
   ];
   const missing = required.filter(file => !existsSync(join(root, file)));
