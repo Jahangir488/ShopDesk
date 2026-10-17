@@ -19,9 +19,27 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
+
+# ---- Safe path helpers --------------------------------------------------
+# These use .NET instead of Join-Path/Test-Path, which throw a terminating error
+# when a path names a drive letter that does not exist (for example F: on a PC
+# without that drive). That used to stop the installer. The .NET checks below
+# simply return false for a missing drive.
+function Join-SafePath([string]$Base, [string]$Child) {
+  if ([string]::IsNullOrWhiteSpace($Base)) { return $Child }
+  return [System.IO.Path]::Combine($Base, $Child)
+}
+function Test-AppFile([string]$folder) {
+  if ([string]::IsNullOrWhiteSpace($folder)) { return $false }
+  try { return [System.IO.File]::Exists([System.IO.Path]::Combine($folder, "app\server.mjs")) } catch { return $false }
+}
+function Test-FileExists([string]$file) {
+  if ([string]::IsNullOrWhiteSpace($file)) { return $false }
+  try { return [System.IO.File]::Exists($file) } catch { return $false }
+}
 $TaskName = "Shop Desk"
-$MarkerDir = Join-Path $env:ProgramData "ShopDesk"
-$MarkerFile = Join-Path $MarkerDir "install.json"
+$MarkerDir = Join-SafePath $env:ProgramData "ShopDesk"
+$MarkerFile = Join-SafePath $MarkerDir "install.json"
 
 function Ask($prompt, $default) {
   $answer = Read-Host "$prompt [$default]"
@@ -34,22 +52,18 @@ function Read-Marker() {
   try { return Get-Content $MarkerFile -Raw | ConvertFrom-Json } catch { return $null }
 }
 function Find-ExistingInstall() {
-  if ($InstallDir -and (Test-Path (Join-Path $InstallDir "app\server.mjs"))) { return $InstallDir }
-  if (Test-Path $MarkerFile) {
-    try {
-      $info = Get-Content $MarkerFile -Raw | ConvertFrom-Json
-      if ($info.installDir -and (Test-Path (Join-Path $info.installDir "app\server.mjs"))) { return $info.installDir }
-    } catch { }
-  }
+  if (Test-AppFile $InstallDir) { return $InstallDir }
+  $marker = Read-Marker
+  if ($marker -and (Test-AppFile $marker.installDir)) { return $marker.installDir }
   $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
   if ($task) {
     $action = @($task.Actions)[0]
     if ($action -and $action.Arguments -match '/c\s+"?([^"]+run-shop\.cmd)"?') {
       $folder = Split-Path $Matches[1] -Parent
-      if (Test-Path (Join-Path $folder "app\server.mjs")) { return $folder }
+      if (Test-AppFile $folder) { return $folder }
     }
   }
-  if (Test-Path "C:\ShopDesk\app\server.mjs") { return "C:\ShopDesk" }
+  if (Test-AppFile "C:\ShopDesk") { return "C:\ShopDesk" }
   return ""
 }
 function Test-SafeDataFolder($folder) {
@@ -61,14 +75,14 @@ function Test-SafeDataFolder($folder) {
 }
 function Show-DataFiles($folder) {
   if (-not (Test-Path $folder)) { Write-Host "  Data folder: $folder (not found)"; return }
-  $db = Join-Path $folder "shop.sqlite3"
+  $db = Join-SafePath $folder "shop.sqlite3"
   if (Test-Path $db) {
     $size = [math]::Round((Get-Item $db).Length / 1048576, 2)
     Write-Host ("    shop.sqlite3       {0} MB" -f $size)
   }
-  $key = Join-Path $folder "offsite.key"
+  $key = Join-SafePath $folder "offsite.key"
   if (Test-Path $key) { Write-Host "    offsite.key        needed to open Google Drive backups" }
-  $backups = Join-Path $folder "backups"
+  $backups = Join-SafePath $folder "backups"
   if (Test-Path $backups) {
     $count = @(Get-ChildItem $backups -File -ErrorAction SilentlyContinue).Count
     Write-Host ("    backups\           {0} file(s)" -f $count)
@@ -91,10 +105,10 @@ if (-not $InstallDir) {
   exit 1
 }
 $InstallDir = $InstallDir.TrimEnd('\')
-$AppDir = Join-Path $InstallDir "app"
-$DataDir = if ($marker -and $marker.dataDir) { $marker.dataDir } else { Join-Path $InstallDir "data" }
-$LogDir = Join-Path $InstallDir "logs"
-$RunFile = Join-Path $InstallDir "run-shop.cmd"
+$AppDir = Join-SafePath $InstallDir "app"
+$DataDir = if ($marker -and $marker.dataDir) { $marker.dataDir } else { Join-SafePath $InstallDir "data" }
+$LogDir = Join-SafePath $InstallDir "logs"
+$RunFile = Join-SafePath $InstallDir "run-shop.cmd"
 
 if (-not $Port) {
   if ($marker -and $marker.port) {
@@ -129,7 +143,7 @@ if ($removeData) {
     Write-Host ""
     Write-Host "  This permanently deletes the shop database and backups in:" -ForegroundColor Yellow
     Write-Host "    $DataDir" -ForegroundColor Yellow
-    if (Test-Path (Join-Path $DataDir "offsite.key")) {
+    if (Test-FileExists (Join-SafePath $DataDir "offsite.key")) {
       Write-Host "  The offsite.key file is also deleted. Without it, Google Drive backups cannot be opened." -ForegroundColor Yellow
     }
     if (-not $Yes) {
@@ -163,13 +177,13 @@ $desktops = @(
   [Environment]::GetFolderPath("Desktop")
 ) | Where-Object { $_ }
 foreach ($desktop in $desktops) {
-  Remove-Item (Join-Path $desktop "Shop Desk.url") -Force -ErrorAction SilentlyContinue
-  Remove-Item (Join-Path $desktop "Shop Desk - Connect a phone.url") -Force -ErrorAction SilentlyContinue
+  Remove-Item (Join-SafePath $desktop "Shop Desk.url") -Force -ErrorAction SilentlyContinue
+  Remove-Item (Join-SafePath $desktop "Shop Desk - Connect a phone.url") -Force -ErrorAction SilentlyContinue
 }
 Done "Removed the desktop shortcuts"
 
 Remove-Item $RunFile -Force -ErrorAction SilentlyContinue
-Remove-Item (Join-Path $InstallDir "Uninstall Shop Desk.bat") -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-SafePath $InstallDir "Uninstall Shop Desk.bat") -Force -ErrorAction SilentlyContinue
 Get-ChildItem $InstallDir -Directory -ErrorAction SilentlyContinue |
   Where-Object { $_.Name -like "update-backup-*" -or $_.Name -like "app.old-*" -or $_.Name -eq "app.new" } |
   ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }

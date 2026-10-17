@@ -24,10 +24,28 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# ---- Safe path helpers --------------------------------------------------
+# These use .NET instead of Join-Path/Test-Path, which throw a terminating error
+# when a path names a drive letter that does not exist (for example F: on a PC
+# without that drive). That used to stop the installer. The .NET checks below
+# simply return false for a missing drive.
+function Join-SafePath([string]$Base, [string]$Child) {
+  if ([string]::IsNullOrWhiteSpace($Base)) { return $Child }
+  return [System.IO.Path]::Combine($Base, $Child)
+}
+function Test-AppFile([string]$folder) {
+  if ([string]::IsNullOrWhiteSpace($folder)) { return $false }
+  try { return [System.IO.File]::Exists([System.IO.Path]::Combine($folder, "app\server.mjs")) } catch { return $false }
+}
+function Test-FileExists([string]$file) {
+  if ([string]::IsNullOrWhiteSpace($file)) { return $false }
+  try { return [System.IO.File]::Exists($file) } catch { return $false }
+}
 $TaskName = "Shop Desk"
-$MarkerDir = Join-Path $env:ProgramData "ShopDesk"
-$MarkerFile = Join-Path $MarkerDir "install.json"
-$SourceDir = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$MarkerDir = Join-SafePath $env:ProgramData "ShopDesk"
+$MarkerFile = Join-SafePath $MarkerDir "install.json"
+$SourceDir = (Resolve-Path (Join-SafePath $PSScriptRoot "..\..")).Path
 $script:Step = 1
 $script:Problems = @()
 $script:TaskRegistered = $false
@@ -56,25 +74,22 @@ function Test-Folder($folder) {
   return ""
 }
 function Find-ExistingInstall() {
-  if (Test-Path $MarkerFile) {
-    try {
-      $info = Get-Content $MarkerFile -Raw | ConvertFrom-Json
-      if ($info.installDir -and (Test-Path (Join-Path $info.installDir "app\server.mjs"))) { return $info.installDir }
-    } catch { }
-  }
+  $marker = Read-Marker
+  if ($marker -and (Test-AppFile $marker.installDir)) { return $marker.installDir }
   $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
   if ($task) {
     $action = @($task.Actions)[0]
     if ($action -and $action.Arguments -match '/c\s+"?([^"]+run-shop\.cmd)"?') {
       $folder = Split-Path $Matches[1] -Parent
-      if (Test-Path (Join-Path $folder "app\server.mjs")) { return $folder }
+      if (Test-AppFile $folder) { return $folder }
     }
   }
-  if (Test-Path "C:\ShopDesk\app\server.mjs") { return "C:\ShopDesk" }
+  if (Test-AppFile "C:\ShopDesk") { return "C:\ShopDesk" }
   # A failed install may never have written the marker: look for ShopDesk folders on every drive.
+  # Test-AppFile never throws, so a missing drive letter is simply skipped.
   foreach ($letter in [char[]]"CDEFGHIJKLMNOPQRSTUVWXYZ") {
     $candidate = "${letter}:\ShopDesk"
-    if (Test-Path (Join-Path $candidate "app\server.mjs")) { return $candidate }
+    if (Test-AppFile $candidate) { return $candidate }
   }
   return ""
 }
@@ -142,19 +157,19 @@ if ($InstallDir) {
 $problem = Test-Folder $InstallDir
 if ($problem) { Fail $problem }
 
-$AppDir = Join-Path $InstallDir "app"
+$AppDir = Join-SafePath $InstallDir "app"
 if ($SourceDir.TrimEnd('\') -ieq $AppDir.TrimEnd('\')) {
   Fail "This copy of Shop Desk is already installed at $InstallDir. Run the installer from a newly downloaded folder to update it."
 }
-$LogDir = Join-Path $InstallDir "logs"
-$RunFile = Join-Path $InstallDir "run-shop.cmd"
-$isUpdate = Test-Path (Join-Path $AppDir "server.mjs")
+$LogDir = Join-SafePath $InstallDir "logs"
+$RunFile = Join-SafePath $InstallDir "run-shop.cmd"
+$isUpdate = Test-FileExists (Join-SafePath $AppDir "server.mjs")
 
 if (-not $DataDir) {
   if ($isUpdate -and $existingMarker -and $existingMarker.dataDir) {
     $DataDir = $existingMarker.dataDir
   } else {
-    $DataDir = Join-Path $InstallDir "data"
+    $DataDir = Join-SafePath $InstallDir "data"
   }
 }
 $DataDir = Normalize-Folder $DataDir
@@ -194,7 +209,11 @@ if ($isUpdate) {
   Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
   Start-Sleep -Seconds 2
 }
-New-Item -ItemType Directory -Force -Path $AppDir, $LogDir, $DataDir | Out-Null
+try {
+  New-Item -ItemType Directory -Force -Path $AppDir, $LogDir, $DataDir -ErrorAction Stop | Out-Null
+} catch {
+  Fail "Could not create $AppDir or $DataDir. Check that the drive letter exists and the folder is writable. ($($_.Exception.Message))"
+}
 $robocopy = Start-Process -FilePath "robocopy.exe" -ArgumentList @(
   "`"$SourceDir`"", "`"$AppDir`"", "/E",
   "/XD", "data", "vendor", "node_modules", ".git", "backups", "releases", "licences", "private", "ShopDesk-Licence-Kit",
@@ -263,10 +282,10 @@ try {
   $shell = New-Object -ComObject WScript.Shell
   $desktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
   if (-not $desktop) { $desktop = [Environment]::GetFolderPath("Desktop") }
-  $shortcut = $shell.CreateShortcut((Join-Path $desktop "Shop Desk.url"))
+  $shortcut = $shell.CreateShortcut((Join-SafePath $desktop "Shop Desk.url"))
   $shortcut.TargetPath = "http://localhost:$Port/"
   $shortcut.Save()
-  $phone = $shell.CreateShortcut((Join-Path $desktop "Shop Desk - Connect a phone.url"))
+  $phone = $shell.CreateShortcut((Join-SafePath $desktop "Shop Desk - Connect a phone.url"))
   $phone.TargetPath = "http://localhost:$Port/join"
   $phone.Save()
   Write-Host "  Desktop shortcuts created" -ForegroundColor DarkGreen
@@ -277,8 +296,8 @@ try {
 
 # Helper launchers in the install folder. They are written before the service
 # starts, so a failed step can always be fixed later with Repair Shop Desk.bat.
-$uninstallBat = Join-Path $InstallDir "Uninstall Shop Desk.bat"
-$repairBat = Join-Path $InstallDir "Repair Shop Desk.bat"
+$uninstallBat = Join-SafePath $InstallDir "Uninstall Shop Desk.bat"
+$repairBat = Join-SafePath $InstallDir "Repair Shop Desk.bat"
 $batHeader = @(
   "@echo off",
   "setlocal",
