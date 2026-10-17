@@ -4,6 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#23282d">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/favicon.png" type="image/png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Shop Desk">
   <title>Mohammad Hardware — Shop desk</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -45,7 +51,7 @@
     <header class="topbar"><div><span class="breadcrumb">Shop desk</span><span class="crumb-sep">/</span><b>Dashboard</b></div><div class="top-actions"><div class="topbar-status" aria-label="Date, time, and server status"><span class="today" id="today"></span><span class="topbar-time" id="topbar-time"></span><span class="server-load hidden" id="server-load" title="Server resource status">Server · loading…</span></div><span id="signed-in-as" class="signed-in-as"></span><button class="button secondary" id="supplier-tools" type="button">Supplier history</button><button class="button secondary" id="logout">Sign out</button><button class="avatar profile-button" id="profile-button" aria-label="Edit your profile"><span id="profile-initial">S</span><img id="profile-photo" class="hidden" alt="Profile photo"></button></div></header>
     <div class="content">
       <div class="app-screen" data-screen="dashboard">
-      <section class="welcome"><div><p class="eyebrow" id="welcome-date"></p><h1 id="welcome-greeting">Good morning, Shopkeeper <span>✳</span></h1><p>Here’s what’s happening at your shop today.</p></div><button class="button primary" id="new-sale">＋ &nbsp;Record a sale</button></section>
+      <section class="welcome"><div><p class="eyebrow" id="welcome-date"></p><h1 id="welcome-greeting">Good morning, Shopkeeper <span>✳</span></h1><p>Here’s what’s happening at your shop today.</p></div><button class="button primary" id="new-sale">＋ Record a sale</button></section>
       <section class="metrics">
         <article class="metric"><div class="metric-top"><span>Today’s sales</span><span class="metric-icon green">↗</span></div><strong id="today-sales">৳0</strong><small><span class="neutral">●</span> <span id="today-count">0 transactions</span></small></article>
         <article class="metric"><div class="metric-top"><span>Estimated profit</span><span class="metric-icon violet">⌁</span></div><strong id="today-profit">৳0</strong><small>After cost of goods sold</small></article>

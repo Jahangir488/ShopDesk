@@ -1,0 +1,26 @@
+{
+  "name": "Shop Desk — billing, stock and dues",
+  "short_name": "Shop Desk",
+  "description": "Billing, inventory, dues, repairs and reports for your shop. Works on the shop Wi-Fi.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "browser"],
+  "orientation": "any",
+  "background_color": "#f2f4f6",
+  "theme_color": "#23282d",
+  "lang": "bn",
+  "dir": "ltr",
+  "categories": ["business", "productivity", "finance"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "New bill", "short_name": "New bill", "url": "/#sales", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Inventory", "short_name": "Inventory", "url": "/#inventory", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Backups", "short_name": "Backups", "url": "/#backup-tools", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

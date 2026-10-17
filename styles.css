@@ -1,3 +1,8 @@
+/* Bundled Bengali UI font (SIL OFL, see fonts/OFL.txt). */
+@font-face{font-family:"Noto Sans Bengali";font-style:normal;font-weight:400;font-display:swap;src:url("/fonts/noto-sans-bengali-400-normal.woff2") format("woff2")}
+@font-face{font-family:"Noto Sans Bengali";font-style:normal;font-weight:600;font-display:swap;src:url("/fonts/noto-sans-bengali-600-normal.woff2") format("woff2")}
+@font-face{font-family:"Noto Sans Bengali";font-style:normal;font-weight:700;font-display:swap;src:url("/fonts/noto-sans-bengali-700-normal.woff2") format("woff2")}
+
 /* Mohammad Hardware Shop Desk - workshop theme. Change colours in :root only. */
 :root{--ink:#1f2328;--steel:#5b6670;--muted:#6f7a84;--line:#dfe3e6;--paper:#f2f4f6;--white:#fff;
 --side:#23282d;--side2:#2e353b;--side-ink:#b4bcc3;--accent:#f2b705;--accent-ink:#1f2328;
@@ -624,4 +629,55 @@ dialog.backup-folder-dialog{width:min(620px,calc(100vw - 32px));max-width:620px;
   #users .team-access-scroll tbody td:nth-child(5) { grid-column: 1 / -1; border-bottom: 0; }
   #users .team-access-scroll tbody td:nth-child(5)::before { content: "Actions"; }
   #users .team-access-scroll td .user-action { min-height: 36px; margin: 3px 5px 2px 0; padding: 7px 10px; font-size: 12px; }
+}
+
+/* ===== Bangla UI, licence banner, offsite backup, phone install ===== */
+body.lang-bn{
+  --sans:"Noto Sans Bengali","Nirmala UI","SolaimanLipi","Shonar Bangla","Segoe UI",system-ui,sans-serif;
+  --display:"Noto Sans Bengali","Nirmala UI","SolaimanLipi","Barlow Semi Condensed",system-ui,sans-serif;
+}
+body.lang-bn .brand b,body.lang-bn .brand small{letter-spacing:0}
+body.lang-bn th,body.lang-bn .nav-caption,body.lang-bn .eyebrow,body.lang-bn .report-totals small,body.lang-bn .store-label{text-transform:none}
+body.lang-bn th::first-letter,body.lang-bn .nav-caption::first-letter,body.lang-bn .eyebrow::first-letter,body.lang-bn .report-totals small::first-letter,body.lang-bn .store-label::first-letter{text-transform:none}
+.license-banner{
+  position:sticky;top:0;z-index:6;display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:space-between;
+  margin:0 0 14px;padding:10px 14px;border-radius:10px;background:#fff6dd;border:1px solid #eccb84;color:#6b5200;font-weight:600;
+  box-shadow:0 8px 20px #1f23280f;
+}
+.license-banner-text{flex:1 1 240px;line-height:1.45}
+.license-banner .button{padding:8px 12px;font-size:13px}
+.license-banner-hint{font-weight:500;color:#7a5f14}
+body.license-locked .license-banner{background:#fbe6e3;border-color:#e5b1aa;color:#8a2c20}
+.license-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:0 0 14px;padding:12px;background:var(--paper);border-radius:10px}
+.license-summary small{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+.license-summary b{display:block;font-size:15px;margin-top:2px;word-break:break-word}
+.settings-license-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0 0;padding-top:12px;border-top:1px solid var(--line)}
+.join-link{display:flex;align-items:center;gap:8px;margin-top:12px;padding:9px 10px;border-radius:8px;background:#ffffff14;color:#dce9e4;font-size:13px;font-weight:600}
+.join-link:hover,.join-link:focus-visible{background:#ffffff24;color:#fff}
+.offsite-panel{border:1px solid var(--line);border-radius:12px;padding:16px;margin:0 0 16px;background:#fbfcfc}
+.offsite-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.offsite-heading h3{margin:0 0 2px;font-size:16px}
+.offsite-heading p{margin:0;color:var(--muted);font-size:13px}
+.offsite-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;background:var(--paper);color:var(--muted);font-size:12px;font-weight:700;white-space:nowrap}
+.offsite-pill.on{background:var(--ok-bg);color:var(--ok)}
+.offsite-pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.offsite-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:12px 0}
+.offsite-summary small{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+.offsite-summary b{display:block;margin-top:2px;font-size:14px;word-break:break-word}
+.offsite-config{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin:10px 0}
+.offsite-config label{flex:1 1 160px}
+.offsite-config label.backup-schedule-toggle{flex:1 1 100%}
+.offsite-warning{margin:10px 0;padding:9px 12px;border-radius:8px;background:#fff6dd;border:1px solid #eccb84;color:#6b5200;font-size:13px;font-weight:600}
+.offsite-error{color:#8a2c20;background:#fbe6e3;padding:8px 10px;border-radius:8px}
+.backup-warning{display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:space-between;margin:0 0 14px;padding:10px 14px;border-radius:10px;background:#fbe6e3;border:1px solid #e5b1aa;color:#8a2c20;font-weight:600;box-shadow:0 8px 20px #1f23280f}
+.backup-warning span{flex:1 1 240px;line-height:1.45}
+.backup-warning .button{padding:8px 12px;font-size:13px;background:#fff;border-color:#e5b1aa;color:#8a2c20}
+.settings-update-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0 0}
+.settings-update-row .form-hint{flex:1 1 220px}
+.settings-update-row a{color:var(--teal,#157a6e);font-weight:700}
+#install-app{white-space:nowrap}
+@media (max-width:720px){
+  .license-banner{position:static;margin-bottom:10px}
+  .offsite-config{flex-direction:column;align-items:stretch}
+  .offsite-config .button{width:100%}
 }
