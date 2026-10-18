@@ -465,6 +465,25 @@ function upgradeRestoredDatabase() {
   );
   CREATE INDEX IF NOT EXISTS online_orders_status_date_idx ON online_orders(order_status, date DESC);
   CREATE INDEX IF NOT EXISTS online_orders_phone_idx ON online_orders(customer_phone);`);
+  db.exec(`CREATE TABLE IF NOT EXISTS medicine_batches (
+    id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL, batch_number TEXT NOT NULL,
+    expiry_date TEXT NOT NULL DEFAULT '', quantity_received REAL NOT NULL DEFAULT 0 CHECK(quantity_received>=0),
+    quantity_remaining REAL NOT NULL DEFAULT 0 CHECK(quantity_remaining>=0), quantity_quarantined REAL NOT NULL DEFAULT 0 CHECK(quantity_quarantined>=0),
+    unit_cost REAL NOT NULL DEFAULT 0 CHECK(unit_cost>=0), supplier_id INTEGER, purchase_id INTEGER,
+    received_date TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS medicine_batch_product_number_idx ON medicine_batches(product_id,batch_number COLLATE NOCASE);
+  CREATE INDEX IF NOT EXISTS medicine_batches_expiry_idx ON medicine_batches(expiry_date,product_id);
+  CREATE TABLE IF NOT EXISTS medicine_batch_sales (
+    sale_id INTEGER NOT NULL, batch_id INTEGER NOT NULL, quantity REAL NOT NULL CHECK(quantity>0), PRIMARY KEY(sale_id,batch_id)
+  );
+  CREATE TABLE IF NOT EXISTS medicine_batch_returns (
+    return_id INTEGER NOT NULL, batch_id INTEGER NOT NULL, quantity REAL NOT NULL CHECK(quantity>0), PRIMARY KEY(return_id,batch_id)
+  );
+  CREATE TABLE IF NOT EXISTS medicine_details (
+    product_id INTEGER PRIMARY KEY, generic_name TEXT NOT NULL DEFAULT '', strength TEXT NOT NULL DEFAULT '',
+    dosage_form TEXT NOT NULL DEFAULT '', manufacturer TEXT NOT NULL DEFAULT ''
+  );
   upgradeSalesReturnsSchema();
   ensure("bills", "tax_amount", "REAL NOT NULL DEFAULT 0");
   ensure("bills", "tax_rate", "REAL NOT NULL DEFAULT 0");
@@ -488,6 +507,10 @@ function upgradeRestoredDatabase() {
     connected_email TEXT NOT NULL DEFAULT '', last_attempt_at TEXT NOT NULL DEFAULT '', last_success_at TEXT NOT NULL DEFAULT '',
     last_error TEXT NOT NULL DEFAULT '', last_file TEXT NOT NULL DEFAULT '');
     INSERT OR IGNORE INTO offsite_backup(id) VALUES(1);`);
+  // A backup from an older Shop Desk version may not contain Pharmacy tables.
+  // Recreate compatible empty tables and preserve its existing product data.
+  ensurePharmacyDetails();
+  refreshLicense();
 }
 
 const mime = {
@@ -1328,13 +1351,10 @@ async function handleApi(request, response, url) {
     const verified = verifyLicense(token, { installId });
     if (!verified.valid) return json(response, 400, { error: licenceProblemMessage(verified.problem), code: verified.problem || "invalid" });
     if (verified.expired) return json(response, 400, { error: licenceProblemMessage("expired"), code: "expired" });
-    db.prepare("INSERT INTO license(id,token,activated_at) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET token=excluded.token,activated_at=excluded.activated_at").run(token, new Date().toISOString());
-    if (verified.payload.shopType === "pharmacy" && !Array.isArray(verified.payload.features)) {
-      // Do not allow a signed package to select pharmacy without the pharmacy module claim.
-      db.prepare("UPDATE license SET token='',activated_at='' WHERE id=1").run();
-      refreshLicense();
+    if (verified.payload.shopType === "pharmacy" && (!Array.isArray(verified.payload.features) || !verified.payload.features.includes("pharmacy"))) {
       return json(response,400,{error:"This supplier key is missing its Pharmacy module entitlement. Ask the supplier to issue a corrected key."});
     }
+    db.prepare("INSERT INTO license(id,token,activated_at) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET token=excluded.token,activated_at=excluded.activated_at").run(token, new Date().toISOString());
     if (verified.payload.shopType) {
       db.prepare("UPDATE settings SET shop_type=? WHERE id=1").run(verified.payload.shopType);
       addProfileCategories(verified.payload.shopType);
