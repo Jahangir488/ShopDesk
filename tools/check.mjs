@@ -178,7 +178,12 @@ try {
   // The installer must never copy the signing key or issued licences onto a shop PC.
   const installer = readFileSync(join(root, "install", "windows", "install-shopdesk.ps1"), "utf8");
   for (const token of ["vendor", "licences", "*.pem"]) if (!installer.includes(token)) fail(`installer should exclude ${token}`);
-  ok("installer excludes the signing key, PEM files and licence receipts");
+  const updater = readFileSync(join(root, "install", "windows", "update-shopdesk.ps1"), "utf8");
+  const linuxInstaller = readFileSync(join(root, "install", "linux", "install-shopdesk.sh"), "utf8");
+  if (!installer.includes('"tools"') || !installer.includes("4 - Issue Customer Licence.bat")) fail("Windows installer must exclude supplier-only licence tools");
+  if (!updater.includes("tools") || !updater.includes("4 - Issue Customer Licence.bat")) fail("Windows updater must exclude supplier-only licence tools");
+  if (!linuxInstaller.includes("--exclude 'tools'") || !linuxInstaller.includes("4 - Issue Customer Licence.bat")) fail("Linux installer must exclude supplier-only licence tools");
+  ok("customer installers exclude supplier tools, the signing key, PEM files and licence receipts");
   const licenceBuilder = readFileSync(join(root, "3 - Build Licence Kit.bat"), "utf8");
   for (const token of ["license-keygen.mjs", "license-key-sync-pending.txt", "lib\\license-public.mjs", "NEVER send vendor\\license-private-key.pem"]) {
     if (!licenceBuilder.includes(token)) fail(`licence builder must provide the safe one-click setup (${token})`);
