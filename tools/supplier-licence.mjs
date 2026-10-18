@@ -39,7 +39,7 @@ try {
   const plan = await ask("Plan name", "standard");
   const rawDays = await ask("Licence duration in days", "365");
   const days = Number(rawDays);
-  if (!Number.isInteger(days) || days < 1 || days > 3650) throw new Error("Duration must be a whole number between 1 and 3650 days.");
+  if (!Number.isInteger(days) || days < 1 || days > 9999) throw new Error("Duration must be a whole number between 1 and 9999 days.");
   const issued = new Date();
   const expires = new Date(issued.getTime() + days * 86400000);
 
