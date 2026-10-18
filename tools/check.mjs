@@ -23,6 +23,14 @@ for (const file of files) {
   if (result.status === 0) ok(file); else fail(`${file}: ${result.stderr.split("\n")[0]}`);
 }
 
+console.log("Responsive header");
+try {
+  const css = readFileSync(join(root, "styles.css"), "utf8");
+  const topbar = css.match(/\.topbar\{([^}]+)\}/)?.[1] || "";
+  if (!topbar.includes("height:auto") || !topbar.includes("min-height:58px") || !topbar.includes("flex-wrap:wrap")) fail("topbar must grow when browser zoom or narrow width wraps its controls");
+  ok("header can grow instead of clipping wrapped controls");
+} catch (error) { fail("responsive header: " + error.message); }
+
 console.log("Translations");
 try {
   const bn = JSON.parse(readFileSync(join(root, "i18n", "bn.json"), "utf8"));
