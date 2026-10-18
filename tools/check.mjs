@@ -65,6 +65,20 @@ try {
   const token = signLicense({ id: "check", shop: "Check Shop", plan: "pro", seats: 2, issued: new Date(), expires, install: installId }, privateKey);
   const verified = verifyLicense(token, { installId, publicKey });
   if (!verified.valid || verified.expired) fail("licence roundtrip");
+  const pharmacyToken = signLicense({
+    id: "pharmacy-check", shop: "Check Pharmacy", plan: "pro", issued: new Date(), expires, install: installId,
+    shopType: "pharmacy", features: ["pharmacy"]
+  }, privateKey);
+  const pharmacyLicence = verifyLicense(pharmacyToken, { installId, publicKey });
+  if (!pharmacyLicence.valid || pharmacyLicence.payload.shopType !== "pharmacy" ||
+      !Array.isArray(pharmacyLicence.payload.features) || !pharmacyLicence.payload.features.includes("pharmacy")) {
+    fail("signed Pharmacy package should preserve its shop type and feature entitlement");
+  }
+  const invalidPackageToken = signLicense({
+    id: "invalid-package", shop: "Check Shop", plan: "pro", issued: new Date(), expires, install: installId,
+    shopType: "not-a-shop-type", features: ["pharmacy"]
+  }, privateKey);
+  if (verifyLicense(invalidPackageToken, { installId, publicKey }).valid) fail("unknown shop type must be rejected");
   const shortToken = signLicense({ id: "short", shop: "Check Shop", plan: "pro", issued: new Date(), expires, install: "da7b-5514-7a78" }, privateKey);
   if (!verifyLicense(shortToken, { installId, publicKey }).valid) fail("short installation ID rejected");
   const status = licenseStatus({ license: { token }, trialStartedAt: new Date(), installId, publicKey });
@@ -82,7 +96,7 @@ try {
   const changed = Buffer.from(JSON.stringify(payload)).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
   const tampered = verifyLicense([prefix, changed, signature].join("."), { installId, publicKey });
   if (tampered.valid) fail("tampered licence accepted");
-  ok("Ed25519 sign/verify, 30-day trial, install IDs and tamper detection");
+  ok("Ed25519 sign/verify, signed shop packages, 30-day trial, install IDs and tamper detection");
 } catch (error) { fail("licensing: " + error.message); }
 
 console.log("Release manifest");
@@ -107,8 +121,8 @@ console.log("Install files");
 try {
   const required = [
     "INSTALL.md", "LICENSING.md", "Dockerfile", "docker-compose.yml", ".env.example",
-    "1 - Install Shop Desk.bat", "2 - Uninstall Shop Desk.bat", "3 - Build Licence Kit.bat",
-    "install/windows/install-shopdesk.ps1", "install/windows/install-shopdesk.bat",
+    "1 - Install Shop Desk.bat", "2 - Uninstall Shop Desk.bat", "3 - Build Licence Kit.bat", "4 - Issue Customer Licence.bat",
+    "tools/supplier-licence.mjs", "install/windows/install-shopdesk.ps1", "install/windows/install-shopdesk.bat",
     "install/windows/update-shopdesk.ps1", "install/windows/uninstall-shopdesk.ps1",
     "install/windows/uninstall-shopdesk.bat",
     "install/windows/repair-shopdesk.ps1", "install/windows/repair-shopdesk.bat",
@@ -120,7 +134,7 @@ try {
   if (missing.length) fail("missing install files: " + missing.join(", "));
   else ok(`${required.length} install, licence and PWA files present`);
   // Batch files must keep Windows line endings; LF-only copies break cmd.exe blocks.
-  for (const bat of ["1 - Install Shop Desk.bat", "2 - Uninstall Shop Desk.bat", "3 - Build Licence Kit.bat", "install/windows/install-shopdesk.bat", "install/windows/uninstall-shopdesk.bat", "install/windows/repair-shopdesk.bat"]) {
+  for (const bat of ["1 - Install Shop Desk.bat", "2 - Uninstall Shop Desk.bat", "3 - Build Licence Kit.bat", "4 - Issue Customer Licence.bat", "install/windows/install-shopdesk.bat", "install/windows/uninstall-shopdesk.bat", "install/windows/repair-shopdesk.bat"]) {
     const bytes = readFileSync(join(root, bat));
     if (!bytes.includes("\r\n") || bytes.toString("latin1").replace(/\r\n/g, "").includes("\n")) fail(`${bat} must use CRLF line endings`);
   }
