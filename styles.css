@@ -681,3 +681,20 @@ body.license-locked .license-banner{background:#fbe6e3;border-color:#e5b1aa;colo
   .offsite-config{flex-direction:column;align-items:stretch}
   .offsite-config .button{width:100%}
 }
+
+
+/* Pharmacy medicine metadata and expiry-first stock management */
+.pharmacy-fields{border:1px solid var(--line);border-radius:10px;padding:12px;margin:12px 0;min-width:0}
+.pharmacy-fields legend{font-weight:800;padding:0 6px}
+.pharmacy-batch-opening{background:#f6f8f9;border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:10px}
+.pharmacy-batch-opening h4{margin:0 0 8px}
+.pharmacy-batch-toolbar{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:14px}
+.pharmacy-batch-toolbar p{margin:5px 0 0}
+.pharmacy-expiry-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:12px 0 16px}
+.pharmacy-expiry-summary>div{border:1px solid var(--line);background:#fff;border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:3px}
+.pharmacy-expiry-summary b{font-size:21px}
+.pharmacy-expiry-summary span{font-size:12px;color:var(--muted)}
+.pharmacy-purchase-batch{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;min-width:250px}
+.pharmacy-purchase-batch label{font-size:11px;color:var(--muted)}
+.pharmacy-purchase-batch input{width:100%;min-width:0;padding:6px;font-size:12px}
+@media(max-width:700px){.pharmacy-batch-toolbar{display:grid}.pharmacy-expiry-summary{grid-template-columns:1fr}.pharmacy-purchase-batch{grid-template-columns:1fr}}

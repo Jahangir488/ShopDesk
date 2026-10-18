@@ -239,6 +239,9 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS supplier_payments_supplier_date_idx ON supplier_payments(supplier_id,date);
   CREATE INDEX IF NOT EXISTS stock_movements_product_idx ON stock_movements(product_id, id DESC);
 `);
+const purchaseLineColumns = new Set(db.prepare("PRAGMA table_info(purchase_lines)").all().map(column => column.name));
+if (!purchaseLineColumns.has("batch_number")) db.exec("ALTER TABLE purchase_lines ADD COLUMN batch_number TEXT NOT NULL DEFAULT ''");
+if (!purchaseLineColumns.has("expiry_date")) db.exec("ALTER TABLE purchase_lines ADD COLUMN expiry_date TEXT NOT NULL DEFAULT ''");
 db.exec(`CREATE TABLE IF NOT EXISTS sales_returns (
   id INTEGER PRIMARY KEY,
   date TEXT NOT NULL,
@@ -284,6 +287,42 @@ const salesReturnColumns = new Set(db.prepare("PRAGMA table_info(sales_returns)"
 if (!salesReturnColumns.has("online_order_id")) db.exec("ALTER TABLE sales_returns ADD COLUMN online_order_id INTEGER");
 if (!salesReturnColumns.has("order_line_index")) db.exec("ALTER TABLE sales_returns ADD COLUMN order_line_index INTEGER NOT NULL DEFAULT -1");
 db.exec("CREATE INDEX IF NOT EXISTS sales_returns_online_order_idx ON sales_returns(online_order_id,id)");
+db.exec(`CREATE TABLE IF NOT EXISTS medicine_batches (
+  id INTEGER PRIMARY KEY,
+  product_id INTEGER NOT NULL,
+  batch_number TEXT NOT NULL,
+  expiry_date TEXT NOT NULL DEFAULT '',
+  quantity_received REAL NOT NULL DEFAULT 0 CHECK(quantity_received>=0),
+  quantity_remaining REAL NOT NULL DEFAULT 0 CHECK(quantity_remaining>=0),
+  quantity_quarantined REAL NOT NULL DEFAULT 0 CHECK(quantity_quarantined>=0),
+  unit_cost REAL NOT NULL DEFAULT 0 CHECK(unit_cost>=0),
+  supplier_id INTEGER,
+  purchase_id INTEGER,
+  received_date TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS medicine_batch_product_number_idx ON medicine_batches(product_id,batch_number COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS medicine_batches_expiry_idx ON medicine_batches(expiry_date,product_id);
+CREATE TABLE IF NOT EXISTS medicine_batch_sales (
+  sale_id INTEGER NOT NULL,
+  batch_id INTEGER NOT NULL,
+  quantity REAL NOT NULL CHECK(quantity>0),
+  PRIMARY KEY(sale_id,batch_id)
+);
+CREATE TABLE IF NOT EXISTS medicine_batch_returns (
+  return_id INTEGER NOT NULL,
+  batch_id INTEGER NOT NULL,
+  quantity REAL NOT NULL CHECK(quantity>0),
+  PRIMARY KEY(return_id,batch_id)
+);
+CREATE TABLE IF NOT EXISTS medicine_details (
+  product_id INTEGER PRIMARY KEY,
+  generic_name TEXT NOT NULL DEFAULT '',
+  strength TEXT NOT NULL DEFAULT '',
+  dosage_form TEXT NOT NULL DEFAULT '',
+  manufacturer TEXT NOT NULL DEFAULT ''
+);`);
 db.exec(`CREATE TABLE IF NOT EXISTS bills (
   id INTEGER PRIMARY KEY, date TEXT NOT NULL, customer TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '',
   payment TEXT NOT NULL, discount REAL NOT NULL DEFAULT 0 CHECK(discount>=0), total REAL NOT NULL CHECK(total>=0),
@@ -429,7 +468,29 @@ function upgradeRestoredDatabase() {
   );
   CREATE INDEX IF NOT EXISTS online_orders_status_date_idx ON online_orders(order_status, date DESC);
   CREATE INDEX IF NOT EXISTS online_orders_phone_idx ON online_orders(customer_phone);`);
+  db.exec(`CREATE TABLE IF NOT EXISTS medicine_batches (
+    id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL, batch_number TEXT NOT NULL,
+    expiry_date TEXT NOT NULL DEFAULT '', quantity_received REAL NOT NULL DEFAULT 0 CHECK(quantity_received>=0),
+    quantity_remaining REAL NOT NULL DEFAULT 0 CHECK(quantity_remaining>=0), quantity_quarantined REAL NOT NULL DEFAULT 0 CHECK(quantity_quarantined>=0),
+    unit_cost REAL NOT NULL DEFAULT 0 CHECK(unit_cost>=0), supplier_id INTEGER, purchase_id INTEGER,
+    received_date TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS medicine_batch_product_number_idx ON medicine_batches(product_id,batch_number COLLATE NOCASE);
+  CREATE INDEX IF NOT EXISTS medicine_batches_expiry_idx ON medicine_batches(expiry_date,product_id);
+  CREATE TABLE IF NOT EXISTS medicine_batch_sales (
+    sale_id INTEGER NOT NULL, batch_id INTEGER NOT NULL, quantity REAL NOT NULL CHECK(quantity>0), PRIMARY KEY(sale_id,batch_id)
+  );
+  CREATE TABLE IF NOT EXISTS medicine_batch_returns (
+    return_id INTEGER NOT NULL, batch_id INTEGER NOT NULL, quantity REAL NOT NULL CHECK(quantity>0), PRIMARY KEY(return_id,batch_id)
+  );
+  CREATE TABLE IF NOT EXISTS medicine_details (
+    product_id INTEGER PRIMARY KEY, generic_name TEXT NOT NULL DEFAULT '', strength TEXT NOT NULL DEFAULT '',
+    dosage_form TEXT NOT NULL DEFAULT '', manufacturer TEXT NOT NULL DEFAULT ''
+  );
+  `);
   upgradeSalesReturnsSchema();
+  ensure("purchase_lines", "batch_number", "TEXT NOT NULL DEFAULT ''");
+  ensure("purchase_lines", "expiry_date", "TEXT NOT NULL DEFAULT ''");
   ensure("bills", "tax_amount", "REAL NOT NULL DEFAULT 0");
   ensure("bills", "tax_rate", "REAL NOT NULL DEFAULT 0");
   ensure("bills", "tax_mode", "TEXT NOT NULL DEFAULT 'none'");
@@ -452,6 +513,23 @@ function upgradeRestoredDatabase() {
     connected_email TEXT NOT NULL DEFAULT '', last_attempt_at TEXT NOT NULL DEFAULT '', last_success_at TEXT NOT NULL DEFAULT '',
     last_error TEXT NOT NULL DEFAULT '', last_file TEXT NOT NULL DEFAULT '');
     INSERT OR IGNORE INTO offsite_backup(id) VALUES(1);`);
+  // Keep installation identity/trial state local to this installed copy. These values
+  // must not be transferred from another shop's restored database.
+  setMetaValue("install_id", installId);
+  setMetaValue("trial_started_at", localTrialStartedAt);
+  setMetaValue("trial_days", String(localTrialDays));
+  refreshLicense();
+  const restoredPackage = currentLicense();
+  if (restoredPackage.state === "active" && restoredPackage.shopType) {
+    const restoredShopType = db.prepare("SELECT shop_type FROM settings WHERE id=1").get()?.shop_type || "general";
+    if (restoredShopType !== restoredPackage.shopType) {
+      db.prepare("UPDATE settings SET shop_type=? WHERE id=1").run(restoredPackage.shopType);
+      addProfileCategories(restoredPackage.shopType);
+    }
+  }
+  // A backup from an older Shop Desk version may not contain Pharmacy tables.
+  // Recreate compatible empty tables and preserve its existing product data.
+  ensurePharmacyDetails();
 }
 
 const mime = {
@@ -473,6 +551,8 @@ if (!metaValue("trial_started_at")) {
   setMetaValue("trial_started_at", new Date().toISOString());
   setMetaValue("trial_days", String(existingUsers > 0 ? UPGRADE_TRIAL_DAYS : TRIAL_DAYS));
 }
+const localTrialStartedAt = metaValue("trial_started_at");
+const localTrialDays = Number(metaValue("trial_days") || TRIAL_DAYS);
 const licenseRow = () => db.prepare("SELECT token, activated_at FROM license WHERE id=1").get();
 let licenseCache = { at: 0, value: null };
 function currentLicense() {
@@ -480,8 +560,8 @@ function currentLicense() {
   const row = licenseRow();
   const status = licenseStatus({
     license: row ? { token: row.token, activatedAt: row.activated_at } : null,
-    trialStartedAt: metaValue("trial_started_at"),
-    trialDays: Number(metaValue("trial_days") || TRIAL_DAYS),
+    trialStartedAt: localTrialStartedAt,
+    trialDays: localTrialDays,
     installId
   });
   status.installId = installId;
@@ -504,6 +584,8 @@ function publicLicense(status = currentLicense()) {
     state: status.state, readOnly: status.readOnly, plan: status.plan, licensedTo: status.licensedTo,
     seats: status.seats, daysLeft: status.daysLeft, warning: status.warning, warningDays: status.warningDays,
     expiresAt: status.expiresAt, installId: status.installId, installShort: status.installShort, problem: status.problem,
+    shopType: status.shopType || null, features: Array.isArray(status.features) ? status.features : null,
+    packageLocked: Boolean(status.packageLocked),
     trialDaysLeft: status.trial?.daysLeft ?? 0, trialEndsAt: status.trial?.endsAt || null
   };
 }
@@ -566,6 +648,95 @@ const addDaysToDate = (date, days) => {
   result.setUTCDate(result.getUTCDate() + days);
   return result.toISOString().slice(0, 10);
 };
+
+const currentShopType = () => db.prepare("SELECT shop_type FROM settings WHERE id=1").get()?.shop_type || "general";
+function licensedFeatureEnabled(feature) {
+  const status = currentLicense();
+  // Old signed keys and trials without module claims keep their previous behavior.
+  return status.state !== "active" || !Array.isArray(status.features) || status.features.includes(feature);
+}
+const pharmacyMode = () => currentShopType() === "pharmacy" && licensedFeatureEnabled("pharmacy");
+
+function ensurePharmacyBatches() {
+  if (currentShopType() !== "pharmacy") return;
+  // Never guess an expiry date. Legacy stock remains recorded but cannot be sold
+  // until the supplier/owner verifies the date and corrects the legacy batch.
+  const legacy = db.prepare(`SELECT p.id,p.name,p.qty,p.cost FROM products p
+    WHERE p.qty>0 AND NOT EXISTS (SELECT 1 FROM medicine_batches b WHERE b.product_id=p.id)`).all();
+  for (const product of legacy) {
+    const qty = Number(product.qty || 0);
+    if (qty <= 0) continue;
+    db.prepare(`INSERT OR IGNORE INTO medicine_batches
+      (product_id,batch_number,expiry_date,quantity_received,quantity_remaining,quantity_quarantined,unit_cost,received_date,created_by)
+      VALUES(?,?, '',?,?,0,?,?,?)`)
+      .run(product.id,`LEGACY-${product.id}`,qty,qty,Number(product.cost||0),today(),"migration - expiry review required");
+  }
+}
+
+function pharmacyAvailableQty(productId, asOf = today()) {
+  const result = db.prepare(`SELECT COALESCE(SUM(MAX(0,quantity_remaining-quantity_quarantined)),0) AS qty
+    FROM medicine_batches
+    WHERE product_id=? AND expiry_date<>'' AND expiry_date>=? AND quantity_remaining>quantity_quarantined`).get(Number(productId),asOf);
+  return Number(result?.qty || 0);
+}
+
+function allocatePharmacyBatchStock(productId, quantity, saleId) {
+  let remaining = Number(quantity);
+  const batches = db.prepare(`SELECT id,quantity_remaining,quantity_quarantined
+    FROM medicine_batches
+    WHERE product_id=? AND expiry_date<>'' AND expiry_date>=? AND quantity_remaining>quantity_quarantined
+    ORDER BY expiry_date ASC,id ASC`).all(Number(productId),today());
+  for (const batch of batches) {
+    if (remaining <= 0.000001) break;
+    const sellable = Math.max(0,Number(batch.quantity_remaining)-Number(batch.quantity_quarantined));
+    const take = Math.min(sellable,remaining);
+    if (take <= 0) continue;
+    db.prepare("UPDATE medicine_batches SET quantity_remaining=quantity_remaining-? WHERE id=?").run(take,batch.id);
+    db.prepare("INSERT INTO medicine_batch_sales(sale_id,batch_id,quantity) VALUES(?,?,?)").run(Number(saleId),batch.id,take);
+    remaining = Math.max(0,Number((remaining-take).toFixed(6)));
+  }
+  if (remaining > 0.000001) throw httpError(409,"Available unexpired medicine stock changed. Refresh the bill and try again.");
+}
+
+function quarantinePharmacyReturn(saleId, quantity, returnId, product, actor) {
+  let remaining = Number(quantity);
+  const allocations = db.prepare("SELECT batch_id,quantity FROM medicine_batch_sales WHERE sale_id=? ORDER BY batch_id").all(Number(saleId));
+  for (const allocation of allocations) {
+    if (remaining <= 0.000001) break;
+    const already = Number(db.prepare(`SELECT COALESCE(SUM(mbr.quantity),0) AS qty
+      FROM medicine_batch_returns mbr JOIN sales_returns sr ON sr.id=mbr.return_id
+      WHERE sr.sale_id=? AND mbr.batch_id=?`).get(Number(saleId),Number(allocation.batch_id)).qty || 0);
+    const eligible = Math.max(0,Number(allocation.quantity)-already);
+    const take = Math.min(eligible,remaining);
+    if (take <= 0) continue;
+    db.prepare("UPDATE medicine_batches SET quantity_remaining=quantity_remaining+?,quantity_quarantined=quantity_quarantined+? WHERE id=?").run(take,take,allocation.batch_id);
+    db.prepare("INSERT INTO medicine_batch_returns(return_id,batch_id,quantity) VALUES(?,?,?)").run(Number(returnId),Number(allocation.batch_id),take);
+    remaining = Math.max(0,Number((remaining-take).toFixed(6)));
+  }
+  if (remaining > 0.000001) {
+    const batchNumber = `RETURN-${returnId}`;
+    const created = db.prepare(`INSERT INTO medicine_batches
+      (product_id,batch_number,expiry_date,quantity_received,quantity_remaining,quantity_quarantined,unit_cost,received_date,created_by)
+      VALUES(?,?, '',?,?,?, ?,?,?)`).run(product.id,batchNumber,remaining,remaining,remaining,Number(product.cost||0),today(),actor||"");
+    db.prepare("INSERT INTO medicine_batch_returns(return_id,batch_id,quantity) VALUES(?,?,?)").run(Number(returnId),Number(created.lastInsertRowid),remaining);
+  }
+}
+
+function ensurePharmacyDetails() {
+  if (currentShopType() !== "pharmacy") return;
+  db.prepare(`INSERT OR IGNORE INTO medicine_details(product_id) SELECT id FROM products`).run();
+  ensurePharmacyBatches();
+}
+// A seller-signed shop package is authoritative. Repair stale profile settings after a restore.
+const startupPackage = currentLicense();
+if (startupPackage.state === "active" && startupPackage.shopType) {
+  const storedShopType = db.prepare("SELECT shop_type FROM settings WHERE id=1").get()?.shop_type || "general";
+  if (storedShopType !== startupPackage.shopType) {
+    db.prepare("UPDATE settings SET shop_type=? WHERE id=1").run(startupPackage.shopType);
+    addProfileCategories(startupPackage.shopType);
+  }
+}
+ensurePharmacyDetails();
 function recordStockMovement(product, kind, quantityChange, quantityAfter, actor, reference = "", note = "", unitCost = product.cost || 0) {
   db.prepare(`INSERT INTO stock_movements(product_id,product_name,kind,quantity_change,quantity_after,unit,unit_cost,reference,note,actor)
     VALUES(?,?,?,?,?,?,?,?,?,?)`).run(product.id || null, product.name, kind, quantityChange, quantityAfter, product.unit || "piece", unitCost, reference, note, actor || "");
@@ -639,6 +810,7 @@ function saveBill(body, user, editId = 0) {
   const discount = Number(body.discount || 0);
   const settings = db.prepare("SELECT tax_rate,tax_mode,require_customer,allow_discounts,payment_methods,shop_type FROM settings WHERE id=1").get() || {};
   const allowedPayments = String(settings.payment_methods || "Cash,bKash,Nagad,Card,Due").split(",").map(value => value.trim()).filter(Boolean);
+  if (editId && settings.shop_type === "pharmacy") throw httpError(409,"Pharmacy bills cannot be edited or deleted because the original medicine batches must remain traceable. Process a return and create a corrected bill instead.");
   const method = String(body.payment || "Cash").slice(0, 40);
   const customer = String(body.customer || "").trim().slice(0, 80), phone = String(body.phone || "").trim().slice(0, 30);
   if (!items.length) throw httpError(400, "Please add at least one product item to the bill.");
@@ -661,10 +833,11 @@ function saveBill(body, user, editId = 0) {
       if (!validQty(qty, product.unit, product.pack_size > 0 ? 0.000001 : 0.001, product.pack_size > 0)) throw httpError(400, `Enter a valid quantity for "${product.name}" in unit "${product.unit}".`);
       if (!validAmount(item.price)) throw httpError(400, `Enter a valid price for "${product.name}".`);
       used.set(id, (used.get(id) || 0) + qty);
-      if (used.get(id) > product.qty + 0.000001) throw httpError(409, `Not enough stock for "${product.name}". Available in stock: ${product.qty} ${product.unit || 'piece'}, Requested on bill: ${used.get(id)}.`);
+      const availableStock = settings.shop_type === "pharmacy" ? pharmacyAvailableQty(id) : Number(product.qty);
+      if (used.get(id) > availableStock + 0.000001) throw httpError(409, `Not enough ${settings.shop_type === "pharmacy" ? "unexpired, non-quarantined " : ""}stock for "${product.name}". Available: ${availableStock} ${product.unit || "piece"}, requested on bill: ${used.get(id)}.`);
       const serials = Array.isArray(item.serials) ? item.serials.map(value => String(value || "").trim()) : [];
       const warrantyMonths = Number(item.warrantyMonths || 0);
-      const deviceTracked = settings.shop_type === "mobile" && /smartphone|feature phone|tablet|mobile phone/i.test(String(product.category || ""));
+      const deviceTracked = settings.shop_type === "mobile" && licensedFeatureEnabled("devices") && /smartphone|feature phone|tablet|mobile phone/i.test(String(product.category || ""));
       if (!Number.isInteger(warrantyMonths) || warrantyMonths < 0 || warrantyMonths > 120 ||
           (deviceTracked && (!Number.isInteger(qty) || serials.length !== qty || serials.some(value => value.length < 4 || value.length > 60))) ||
           serials.some(value => value.length > 60)) throw httpError(400, `${product.name} needs one valid IMEI/serial for each whole device sold. Warranty must be 0 to 120 months.`);
@@ -742,6 +915,7 @@ function saveBill(body, user, editId = 0) {
       recordStockMovement(product, "sale", -qty, after, user.username, "B-" + String(billId).padStart(8, "0"), "Sold on bill.");
       const saleId = Number(db.prepare("INSERT INTO sales(date,product,qty,total,payment,cost,unit,product_id,bill_id,tax_amount) VALUES(?,?,?,?,?,?,?,?,?,?)")
         .run(date, productLabel(product), qty, gross - share - (taxMode === "inclusive" ? lineTax : 0), method, qty * product.cost, product.unit, product.id, billId, lineTax).lastInsertRowid);
+      if (settings.shop_type === "pharmacy") allocatePharmacyBatchStock(product.id,qty,saleId);
       for (const serial of serials) {
         const expiry = warrantyMonths > 0 ? warrantyExpiry(date, warrantyMonths) : "";
         db.prepare("INSERT INTO sold_devices(serial,product_id,product_name,bill_id,sale_id,sold_date,warranty_months,warranty_expires,customer,phone) VALUES(?,?,?,?,?,?,?,?,?,?)")
@@ -915,6 +1089,14 @@ function stateFor(user) {
     whatsappNumber: settings?.whatsapp_number || "",
     contactAddress: settings?.contact_address || "",
     shopType: settings?.shop_type || "general",
+    shopTypeLocked: true,
+    licenseFeatures: currentLicense().features || null,
+    pharmacyBatches: inventory && settings?.shop_type === "pharmacy"
+      ? db.prepare(`SELECT b.*,p.name AS product_name,p.unit AS product_unit,md.generic_name,md.strength,md.dosage_form,md.manufacturer,
+          MAX(0,b.quantity_remaining-b.quantity_quarantined) AS sellable_quantity
+        FROM medicine_batches b JOIN products p ON p.id=b.product_id LEFT JOIN medicine_details md ON md.product_id=p.id
+        ORDER BY CASE WHEN b.expiry_date='' THEN 0 ELSE 1 END,b.expiry_date,p.name COLLATE NOCASE,b.id`).all()
+      : [],
     currencyCode: settings?.currency_code || "BDT",
     locale: settings?.locale || "en-BD",
     language: settings ? (settings.language === "bn" ? "bn" : "en") : "bn",
@@ -927,11 +1109,13 @@ function stateFor(user) {
     paymentMethods: String(settings?.payment_methods || "Cash,bKash,Nagad,Card,Due").split(",").map(value => value.trim()).filter(Boolean),
     permissions: publicUser(user).permissions,
     categories: db.prepare("SELECT id,name FROM categories ORDER BY CASE WHEN name='Other' THEN 1 ELSE 0 END, name COLLATE NOCASE").all(),
-    products: inventory || supplierEditPermission
-      ? db.prepare("SELECT * FROM products ORDER BY name").all()
+    products: (inventory || supplierEditPermission
+      ? db.prepare(`SELECT p.*,md.generic_name,md.strength,md.dosage_form,md.manufacturer FROM products p LEFT JOIN medicine_details md ON md.product_id=p.id ORDER BY p.name`).all()
       : (salesPermission || onlineOrdersPermission)
-        ? db.prepare("SELECT id,name,sku,barcode,price,cost,qty,min,icon,unit,pack_name,pack_size,category,brand,color,size,material FROM products ORDER BY name").all()
-        : [],
+        ? db.prepare(`SELECT p.id,p.name,p.sku,p.barcode,p.price,p.cost,p.qty,p.min,p.icon,p.unit,p.pack_name,p.pack_size,p.category,p.brand,p.color,p.size,p.material,
+            md.generic_name,md.strength,md.dosage_form,md.manufacturer
+          FROM products p LEFT JOIN medicine_details md ON md.product_id=p.id ORDER BY p.name`).all()
+        : []).map(product => settings?.shop_type === "pharmacy" ? { ...product, available_to_sell: pharmacyAvailableQty(product.id) } : product),
     dues: salesPermission ? duesSummary() : null,
     sales: salesPermission ? db.prepare(`SELECT s.*,
       COALESCE(r.qty,0) AS returned_qty,
@@ -949,7 +1133,7 @@ function stateFor(user) {
       }) : [],
     salesReturns: salesPermission ? db.prepare("SELECT * FROM sales_returns ORDER BY id DESC LIMIT 2000").all() : [],
     onlineOrderReturns: onlineOrdersPermission ? db.prepare("SELECT * FROM sales_returns WHERE online_order_id IS NOT NULL ORDER BY id DESC LIMIT 2000").all() : [],
-    serviceJobs: salesPermission && settings?.shop_type === "mobile" ? db.prepare("SELECT * FROM service_jobs ORDER BY id DESC LIMIT 2000").all().map(job => {
+    serviceJobs: salesPermission && settings?.shop_type === "mobile" && licensedFeatureEnabled("repairs") ? db.prepare("SELECT * FROM service_jobs ORDER BY id DESC LIMIT 2000").all().map(job => {
       const payments = db.prepare("SELECT date,amount,method,received_by FROM service_job_payments WHERE job_id=? ORDER BY id").all(job.id);
       const parts = db.prepare("SELECT product_id,product_name,qty,unit,unit_cost FROM service_job_parts WHERE job_id=? ORDER BY id").all(job.id);
       const paid = payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
@@ -961,11 +1145,11 @@ function stateFor(user) {
       ...order,
       lines: JSON.parse(order.lines || "[]")
     })) : [],
-    devices: salesPermission && settings?.shop_type === "mobile" ? db.prepare("SELECT * FROM sold_devices ORDER BY sold_date DESC,id DESC LIMIT 5000").all() : [],
+    devices: salesPermission && settings?.shop_type === "mobile" && licensedFeatureEnabled("devices") ? db.prepare("SELECT * FROM sold_devices ORDER BY sold_date DESC,id DESC LIMIT 5000").all() : [],
     expenses: expensesPermission ? db.prepare("SELECT * FROM expenses ORDER BY id DESC").all() : []
   };
 }
-const mobileServiceEnabled = () => db.prepare("SELECT shop_type FROM settings WHERE id=1").get()?.shop_type === "mobile";
+const mobileServiceEnabled = () => db.prepare("SELECT shop_type FROM settings WHERE id=1").get()?.shop_type === "mobile" && licensedFeatureEnabled("repairs");
 
 // The owner is the "jahangir" account (or, if that does not exist, the first administrator) and always has every power. Everyone else has only what is granted to them.
 const CAPS = ["inventory", "sales", "expenses", "server_load", "team", "admins", "records", "repair_records", "settings", "supplier_purchases", "backups", "online_orders", "delete_online_orders"];
@@ -973,7 +1157,7 @@ const ownerId = () => (db.prepare("SELECT id FROM users WHERE username='jahangir
 const can = (user, permission) => permission === "repair_records"
   ? user.id === ownerId() || user.role === "admin" || Boolean(user.can_repair_records)
   : permission === "online_orders"
-  ? user.id === ownerId() || Boolean(user.can_online_orders)
+  ? licensedFeatureEnabled("online_orders") && !pharmacyMode() && (user.id === ownerId() || Boolean(user.can_online_orders))
   : permission === "delete_online_orders"
   ? user.id === ownerId() || Boolean(user.can_delete_online_orders)
   : permission === "server_load"
@@ -1175,6 +1359,9 @@ async function handleApi(request, response, url) {
   const user = currentUser(request);
   response.on("finish", () => { if (user && method !== "GET" && response.statusCode < 400) logActivity(user, method, route); });
   if (!user) return json(response, 401, { error: "Please sign in." });
+  if (pharmacyMode() && route.startsWith("/api/online-orders") && method !== "GET") {
+    return json(response,403,{error:"Online-order stock handling is not enabled for Pharmacy yet. Use New bill so all dispensed medicines are linked to their batch and expiry date."});
+  }
   if (method !== "GET" && currentLicense().readOnly && !licenseAllowsMutation(route)) {
     return json(response, 402, {
       error: "The Shop Desk licence has expired. New bills and changes are paused, but your data, reports, exports and backups still work. Enter a licence key in Settings to continue.",
@@ -1194,7 +1381,15 @@ async function handleApi(request, response, url) {
     const verified = verifyLicense(token, { installId });
     if (!verified.valid) return json(response, 400, { error: licenceProblemMessage(verified.problem), code: verified.problem || "invalid" });
     if (verified.expired) return json(response, 400, { error: licenceProblemMessage("expired"), code: "expired" });
+    if (verified.payload.shopType === "pharmacy" && (!Array.isArray(verified.payload.features) || !verified.payload.features.includes("pharmacy"))) {
+      return json(response,400,{error:"This supplier key is missing its Pharmacy module entitlement. Ask the supplier to issue a corrected key."});
+    }
     db.prepare("INSERT INTO license(id,token,activated_at) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET token=excluded.token,activated_at=excluded.activated_at").run(token, new Date().toISOString());
+    if (verified.payload.shopType) {
+      db.prepare("UPDATE settings SET shop_type=? WHERE id=1").run(verified.payload.shopType);
+      addProfileCategories(verified.payload.shopType);
+      ensurePharmacyDetails();
+    }
     const status = refreshLicense();
     try { db.prepare("INSERT INTO activity_log(username,action) VALUES(?,?)").run(user.username, `Activated a ${status.plan} licence for ${verified.payload.shop}`); } catch { /* logging must never block activation */ }
     return json(response, 200, publicLicense(status));
@@ -1304,7 +1499,7 @@ async function handleApi(request, response, url) {
   }
   if (route === "/api/export" && method === "GET") {
     if (user.role !== "admin") return json(response, 403, { error: "Administrator access required." });
-    const tables = ["settings", "products", "categories", "sales", "sales_returns", "expenses", "bills", "bill_payments", "online_orders", "service_jobs", "service_job_payments", "service_job_parts", "sold_devices", "customers", "suppliers", "purchases", "purchase_lines", "supplier_payments", "stock_movements", "activity_log"];
+    const tables = ["settings", "products", "categories", "medicine_details", "medicine_batches", "medicine_batch_sales", "medicine_batch_returns", "sales", "sales_returns", "expenses", "bills", "bill_payments", "online_orders", "service_jobs", "service_job_payments", "service_job_parts", "sold_devices", "customers", "suppliers", "purchases", "purchase_lines", "supplier_payments", "stock_movements", "activity_log"];
     const backup = { format: "shop-desk-json-backup-v2", exportedAt: new Date().toISOString(), tables: {} };
     for (const table of tables) backup.tables[table] = db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all();
     return json(response, 200, backup, { "Content-Disposition": "attachment; filename=shop-desk-backup.json" });
@@ -1324,7 +1519,10 @@ async function handleApi(request, response, url) {
     const whatsappNumber = String(body.whatsappNumber || "").trim();
     const contactAddress = String(body.contactAddress || "").trim();
     const taxRate = Number(body.taxRate);
-    const existingSettings = db.prepare("SELECT language, bangla_digits FROM settings WHERE id=1").get() || {};
+    const existingSettings = db.prepare("SELECT language,bangla_digits,shop_type FROM settings WHERE id=1").get() || {};
+    if (body.shopType !== existingSettings.shop_type) {
+      return json(response, 403, { error: "Shop type and licensed package can only be changed by the supplier with a new offline signed licence. Contact your ShopDesk supplier." });
+    }
     const language = body.language === undefined ? (existingSettings.language || "en") : (body.language === "bn" ? "bn" : "en");
     const banglaDigits = body.banglaDigits === undefined ? Boolean(existingSettings.bangla_digits) : Boolean(body.banglaDigits);
     if (!validText(body.shopName) || !validText(body.workspace) || !validTypes.includes(body.shopType) || !validCurrencies.includes(body.currencyCode) || !validLocales.includes(body.locale) ||
@@ -1341,6 +1539,67 @@ async function handleApi(request, response, url) {
     return json(response, 200, stateFor(user));
   }
 
+  if (route === "/api/pharmacy/expiry" && method === "GET") {
+    if (!pharmacyMode()) return json(response,403,{error:"Pharmacy inventory is not enabled for this licensed shop."});
+    if (!requirePermission(user,"inventory")) return json(response,403,{error:"Inventory access is required to view medicine expiry details."});
+    const cutoff = addDaysToDate(today(),90);
+    const batches = db.prepare(`SELECT b.*,p.name AS product_name,p.unit AS product_unit,
+      MAX(0,b.quantity_remaining-b.quantity_quarantined) AS sellable_quantity
+      FROM medicine_batches b JOIN products p ON p.id=b.product_id
+      WHERE b.quantity_remaining>0 AND (b.expiry_date='' OR b.expiry_date<=?)
+      ORDER BY CASE WHEN b.expiry_date='' THEN 0 ELSE 1 END,b.expiry_date,p.name COLLATE NOCASE`).all(cutoff);
+    return json(response,200,{batches,today:today(),cutoff});
+  }
+  const pharmacyBatchesMatch = route.match(/^\/api\/pharmacy\/products\/(\d+)\/batches$/);
+  if (pharmacyBatchesMatch && method === "GET") {
+    if (!pharmacyMode()) return json(response,403,{error:"Pharmacy inventory is not enabled for this licensed shop."});
+    if (!requirePermission(user,"inventory")) return json(response,403,{error:"Inventory access is required to view medicine batches."});
+    const productId = Number(pharmacyBatchesMatch[1]);
+    const product = db.prepare("SELECT id,name,unit FROM products WHERE id=?").get(productId);
+    if (!product) return json(response,404,{error:"Medicine not found."});
+    const batches = db.prepare(`SELECT b.*,MAX(0,b.quantity_remaining-b.quantity_quarantined) AS sellable_quantity
+      FROM medicine_batches b WHERE b.product_id=? ORDER BY CASE WHEN b.expiry_date='' THEN 0 ELSE 1 END,b.expiry_date,b.id`).all(productId);
+    return json(response,200,{product,batches,today:today()});
+  }
+  if (route === "/api/pharmacy/batches" && method === "POST") {
+    if (!pharmacyMode()) return json(response,403,{error:"Pharmacy inventory is not enabled for this licensed shop."});
+    if (!requirePermission(user,"inventory")) return json(response,403,{error:"Inventory access is required to receive medicine stock."});
+    const body = await readJson(request), productId = Number(body.productId);
+    const batchNumber = String(body.batchNumber || "").trim().slice(0,80), expiryDate = String(body.expiryDate || "").trim();
+    const quantity = Number(body.quantity), unitCost = Number(body.unitCost);
+    const product = db.prepare("SELECT * FROM products WHERE id=?").get(productId);
+    if (!product) return json(response,404,{error:"Medicine not found."});
+    if (!validText(batchNumber) || !validDate(expiryDate) || !validQty(quantity,product.unit,0.001,Number(product.pack_size)>0) || !validAmount(unitCost)) {
+      return json(response,400,{error:"Enter a batch number, valid expiry date, positive quantity, and non-negative unit cost."});
+    }
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = db.prepare("SELECT id,expiry_date FROM medicine_batches WHERE product_id=? AND batch_number=? COLLATE NOCASE").get(productId,batchNumber);
+      if (existing && existing.expiry_date !== expiryDate) throw httpError(409,"That batch number already exists with a different expiry date.");
+      if (existing) db.prepare("UPDATE medicine_batches SET quantity_received=quantity_received+?,quantity_remaining=quantity_remaining+?,unit_cost=? WHERE id=?").run(quantity,quantity,unitCost,existing.id);
+      else db.prepare(`INSERT INTO medicine_batches(product_id,batch_number,expiry_date,quantity_received,quantity_remaining,quantity_quarantined,unit_cost,received_date,created_by)
+        VALUES(?,?,?,?,?,0,?,?,?)`).run(productId,batchNumber,expiryDate,quantity,quantity,unitCost,today(),user.username);
+      const after = Number((Number(product.qty)+quantity).toFixed(6));
+      const averageCost = after > 0 ? Math.round(((Number(product.qty)*Number(product.cost)+quantity*unitCost)/after)*100)/100 : unitCost;
+      db.prepare("UPDATE products SET qty=?,cost=? WHERE id=?").run(after,averageCost,productId);
+      recordStockMovement(product,"pharmacy batch receipt",quantity,after,user.username,batchNumber,`Batch ${batchNumber}; expires ${expiryDate}.`,unitCost);
+      db.exec("COMMIT");
+      return json(response,201,stateFor(user));
+    } catch (error) { try { db.exec("ROLLBACK"); } catch {} if (error.status) return json(response,error.status,{error:error.message}); if (String(error.message).includes("UNIQUE")) return json(response,409,{error:"That batch number already exists for this medicine."}); throw error; }
+  }
+  const pharmacyBatchMatch = route.match(/^\/api\/pharmacy\/batches\/(\d+)$/);
+  if (pharmacyBatchMatch && method === "PATCH") {
+    if (!pharmacyMode()) return json(response,403,{error:"Pharmacy inventory is not enabled for this licensed shop."});
+    if (!requirePermission(user,"inventory") || !can(user,"records")) return json(response,403,{error:"Inventory and edit-record access are required to correct batch details."});
+    const id=Number(pharmacyBatchMatch[1]), body=await readJson(request), batchNumber=String(body.batchNumber||"").trim().slice(0,80), expiryDate=String(body.expiryDate||"").trim();
+    const batch=db.prepare("SELECT * FROM medicine_batches WHERE id=?").get(id);
+    if (!batch) return json(response,404,{error:"Medicine batch not found."});
+    if (!validText(batchNumber) || !validDate(expiryDate)) return json(response,400,{error:"Enter a valid batch number and expiry date."});
+    try { db.prepare("UPDATE medicine_batches SET batch_number=?,expiry_date=? WHERE id=?").run(batchNumber,expiryDate,id); }
+    catch(error) { if(String(error.message).includes("UNIQUE")) return json(response,409,{error:"That batch number is already used for this medicine."}); throw error; }
+    try { db.prepare("INSERT INTO activity_log(username,action) VALUES(?,?)").run(user.username,`Corrected medicine batch ${batchNumber} (batch ID ${id})`); } catch {}
+    return json(response,200,stateFor(user));
+  }
   if (route === "/api/categories" && method === "POST") {
     if (!canManageCategories(user)) return json(response, 403, { error: "Edit-record and inventory access are required to manage categories." });
     const body = await readJson(request);
@@ -1407,6 +1666,17 @@ async function handleApi(request, response, url) {
     const qty = Number(body.qty);
     const min = Number(body.min);
     const packSize = Number(body.pack_size || 0), packName = String(body.pack_name || "").trim().slice(0, 20);
+    const batchNumber = String(body.batchNumber || "").trim().slice(0,80), expiryDate = String(body.expiryDate || "").trim();
+    const medicineDetails = {
+      generic_name: String(body.genericName || "").trim().slice(0,160),
+      strength: String(body.strength || "").trim().slice(0,80),
+      dosage_form: String(body.dosageForm || "").trim().slice(0,80),
+      manufacturer: String(body.manufacturer || "").trim().slice(0,160)
+    };
+    const pharmacy = pharmacyMode();
+    if (pharmacy && qty > 0 && (!validText(batchNumber) || !validDate(expiryDate))) {
+      return json(response,400,{error:"For opening stock, enter the medicine batch number and expiry date. You can receive more stock later from Batches & expiry."});
+    }
 
     if (!name) return json(response, 400, { error: "Product name is required." });
     if (name.length > 200) return json(response, 400, { error: "Product name must be 200 characters or fewer." });
@@ -1421,11 +1691,30 @@ async function handleApi(request, response, url) {
       const existing = db.prepare("SELECT name FROM products WHERE barcode=? COLLATE NOCASE").get(barcode);
       return json(response, 409, { error: `Barcode "${barcode}" is already assigned to "${existing.name}".` });
     }
-    const clothing = Object.fromEntries(["brand", "color", "size", "material"].map(key => [key, String(body[key] || "").trim().slice(0, 60)]));
-    const created = db.prepare("INSERT INTO products(name,sku,price,cost,qty,min,icon,unit,category,pack_name,pack_size,barcode,brand,color,size,material) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-      .run(name, sku, price, cost, qty, min, String(body.icon || "📦").slice(0, 16), unit, category, packName, packSize, barcode, clothing.brand, clothing.color, clothing.size, clothing.material);
-    if (Number(qty) > 0) recordStockMovement({ id: Number(created.lastInsertRowid), name, unit, cost }, "opening stock", qty, qty, user.username, "New product");
-    return json(response, 201, stateFor(user));
+    const clothingKeys = ["brand", "color", "size", "material"];
+    const clothing = Object.fromEntries(clothingKeys.map(key => [key, String(body[key] || "").trim().slice(0, 60)]));
+    if (currentShopType() === "clothing" && !licensedFeatureEnabled("clothing") && clothingKeys.some(key => clothing[key])) {
+      return json(response,403,{error:"Clothing-specific fields are not included in this licence. Ask your supplier to add the Clothing module."});
+    }
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const created = db.prepare("INSERT INTO products(name,sku,price,cost,qty,min,icon,unit,category,pack_name,pack_size,barcode,brand,color,size,material) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        .run(name, sku, price, cost, qty, min, String(body.icon || "📦").slice(0, 16), unit, category, packName, packSize, barcode, clothing.brand, clothing.color, clothing.size, clothing.material);
+      const productId = Number(created.lastInsertRowid);
+      if (pharmacy) {
+        db.prepare("INSERT INTO medicine_details(product_id,generic_name,strength,dosage_form,manufacturer) VALUES(?,?,?,?,?)")
+          .run(productId,medicineDetails.generic_name,medicineDetails.strength,medicineDetails.dosage_form,medicineDetails.manufacturer);
+        if (Number(qty)>0) db.prepare(`INSERT INTO medicine_batches(product_id,batch_number,expiry_date,quantity_received,quantity_remaining,quantity_quarantined,unit_cost,received_date,created_by)
+          VALUES(?,?,?,?,?,0,?,?,?)`).run(productId,batchNumber,expiryDate,qty,qty,cost,today(),user.username);
+      }
+      if (Number(qty) > 0) recordStockMovement({ id: productId, name, unit, cost }, "opening stock", qty, qty, user.username, "New product", pharmacy ? `Batch ${batchNumber}; expires ${expiryDate}.` : "");
+      db.exec("COMMIT");
+      return json(response, 201, stateFor(user));
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch {}
+      if (String(error.message).includes("UNIQUE")) return json(response,409,{error:"A batch with that number already exists for this medicine."});
+      throw error;
+    }
   }
   const productMatch = route.match(/^\/api\/products\/(\d+)$/);
   if (productMatch && method === "PATCH") {
@@ -1440,11 +1729,17 @@ async function handleApi(request, response, url) {
     const price = Object.hasOwn(body, "price") ? Number(body.price) : product.price;
     const cost = Object.hasOwn(body, "cost") ? Number(body.cost) : product.cost;
     const qty = Object.hasOwn(body, "qty") ? Number(body.qty) : product.qty;
+    if (pharmacyMode() && Math.abs(qty-Number(product.qty))>0.000001) return json(response,409,{error:"Direct stock edits are disabled for Pharmacy so batch totals remain accurate. Use Batches & expiry or Record supplier purchase."});
     const min = Object.hasOwn(body, "min") ? Number(body.min) : product.min;
     const unit = typeof body.unit === "string" ? body.unit.trim() : product.unit;
     const packSize = Object.hasOwn(body, "pack_size") ? Number(body.pack_size || 0) : product.pack_size;
     const packName = typeof body.pack_name === "string" ? body.pack_name.trim().slice(0, 20) : product.pack_name;
-    const clothing = Object.fromEntries(["brand", "color", "size", "material"].map(key => [key, typeof body[key] === "string" ? body[key].trim().slice(0, 60) : product[key]]));
+    const clothingKeys = ["brand", "color", "size", "material"];
+    const clothing = Object.fromEntries(clothingKeys.map(key => [key, typeof body[key] === "string" ? body[key].trim().slice(0, 60) : product[key]]));
+    if (currentShopType() === "clothing" && !licensedFeatureEnabled("clothing") &&
+        clothingKeys.some(key => Object.hasOwn(body,key) && String(clothing[key]||"") !== String(product[key]||""))) {
+      return json(response,403,{error:"Clothing-specific fields are not included in this licence. Ask your supplier to add the Clothing module."});
+    }
     const category = typeof body.category === "string" ? body.category.trim() : product.category;
 
     if (!name) return json(response, 400, { error: "Product name is required." });
@@ -1462,10 +1757,13 @@ async function handleApi(request, response, url) {
     const result = db.prepare("UPDATE products SET name=?,sku=?,barcode=?,price=?,cost=?,qty=?,min=?,unit=?,category=?,pack_name=?,pack_size=?,brand=?,color=?,size=?,material=? WHERE id=?")
       .run(name, sku, barcode, price, cost, qty, min, unit, category, packName, packSize, clothing.brand, clothing.color, clothing.size, clothing.material, Number(productMatch[1]));
     if (!result.changes) return json(response, 404, { error: "Inventory item not found." });
+    if (pharmacyMode()) db.prepare("INSERT INTO medicine_details(product_id,generic_name,strength,dosage_form,manufacturer) VALUES(?,?,?,?,?) ON CONFLICT(product_id) DO UPDATE SET generic_name=excluded.generic_name,strength=excluded.strength,dosage_form=excluded.dosage_form,manufacturer=excluded.manufacturer")
+      .run(Number(productMatch[1]),String(body.genericName||"").trim().slice(0,160),String(body.strength||"").trim().slice(0,80),String(body.dosageForm||"").trim().slice(0,80),String(body.manufacturer||"").trim().slice(0,160));
     if (Math.abs(qty - product.qty) > 1e-6) recordStockMovement({ ...product, name, unit, cost }, "manual adjustment", qty - product.qty, qty, user.username, "Inventory edit", "Quantity set from item editor.");
     return json(response, 200, stateFor(user));
   }
   if (productMatch && method === "DELETE") {
+    if (pharmacyMode() && db.prepare("SELECT 1 FROM medicine_batches WHERE product_id=? LIMIT 1").get(Number(productMatch[1]))) return json(response,409,{error:"This medicine has batch history. Keep the record for audit and set sellable stock to zero instead of deleting it."});
     if (!can(user, "records") || !requirePermission(user, "inventory")) {
       return json(response, 403, { error: "Edit-record and inventory access are required to delete inventory items." });
     }
@@ -1477,6 +1775,7 @@ async function handleApi(request, response, url) {
     return json(response, 200, stateFor(user));
   }
   if (route === "/api/inventory/bulk" && method === "POST") {
+    if (pharmacyMode()) return json(response,409,{error:"Bulk stock replacement is disabled for Pharmacy because it cannot preserve batch and expiry traceability. Receive batches through Batches & expiry or Record supplier purchase."});
     if (user.role !== "admin" || !can(user, "records") || !requirePermission(user, "inventory")) {
       return json(response, 403, { error: "Administrator, edit-record, and inventory access are required for bulk inventory upload." });
     }
@@ -1585,7 +1884,7 @@ async function handleApi(request, response, url) {
       (SELECT COUNT(*) FROM purchase_lines l WHERE l.purchase_id=p.id) AS line_count
       FROM purchases p JOIN suppliers s ON s.id=p.supplier_id ORDER BY p.id DESC`).all().map(p => ({
         ...p,
-        items: db.prepare("SELECT product_id AS productId,product_name AS productName,qty,unit,unit_cost AS cost FROM purchase_lines WHERE purchase_id=? ORDER BY id").all(p.id)
+        items: db.prepare("SELECT product_id AS productId,product_name AS productName,qty,unit,unit_cost AS cost,batch_number AS batchNumber,expiry_date AS expiryDate FROM purchase_lines WHERE purchase_id=? ORDER BY id").all(p.id)
       }));
     const movements = can(user, "inventory")
       ? db.prepare("SELECT * FROM stock_movements ORDER BY id DESC LIMIT 300").all()
@@ -1595,6 +1894,17 @@ async function handleApi(request, response, url) {
   }
   const purchaseEditMatch = route.match(/^\/api\/purchases\/(\d+)$/);
   if (purchaseEditMatch && method === "PATCH") {
+    if (pharmacyMode()) {
+      const body = await readJson(request);
+      if (body.items !== undefined) return json(response,409,{error:"Editing Pharmacy purchase quantities is disabled to preserve batch history. Keep the original supplier receipt and make a new stock receipt or documented batch correction."});
+      const date=String(body.date||""),reference=String(body.reference||"").trim(),note=String(body.note||"").trim(),id=Number(purchaseEditMatch[1]);
+      if (!validDate(date) || reference.length>100 || note.length>500) return json(response,400,{error:"Enter a valid purchase date, reference, and note."});
+      const purchase=db.prepare("SELECT id FROM purchases WHERE id=?").get(id);
+      if (!purchase) return json(response,404,{error:"Purchase not found."});
+      if (!can(user,"supplier_purchases")) return json(response,403,{error:"Supplier purchase edit access is required."});
+      db.prepare("UPDATE purchases SET date=?,reference=?,note=? WHERE id=?").run(date,reference,note,id);
+      return json(response,200,{ok:true});
+    }
     if (!can(user, "supplier_purchases")) return json(response, 403, { error: "Supplier purchase edit access is required." });
     const body = await readJson(request), id = Number(purchaseEditMatch[1]);
     const date = String(body.date || ""), reference = String(body.reference || "").trim(), note = String(body.note || "").trim();
@@ -1669,6 +1979,7 @@ async function handleApi(request, response, url) {
     if (!requirePermission(user, "inventory")) return json(response, 403, { error: "You do not have inventory permission." });
     const body = await readJson(request), supplierId = Number(body.supplierId), lines = Array.isArray(body.items) ? body.items : [];
     const date = body.date || today(), paid = Number(body.paid || 0), method = String(body.method || "Cash").trim().slice(0, 40);
+    const pharmacyPurchase = pharmacyMode();
     const reference = String(body.reference || "").trim().slice(0, 100), note = String(body.note || "").trim().slice(0, 500);
     if (!Number.isInteger(supplierId) || !validDate(date) || !lines.length || lines.length > 100 || !validAmount(paid)) return json(response, 400, { error: "Purchase details are invalid." });
     db.exec("BEGIN IMMEDIATE");
@@ -1678,8 +1989,10 @@ async function handleApi(request, response, url) {
       const items = lines.map(line => {
         const product = db.prepare("SELECT * FROM products WHERE id=?").get(Number(line.productId));
         const qty = Number(line.qty), cost = Number(line.cost);
+        const batchNumber = String(line.batchNumber||"").trim().slice(0,80), expiryDate = String(line.expiryDate||"").trim();
         if (!product || !validQty(qty, product.unit, 0.001, product.pack_size > 0) || !validAmount(cost)) throw httpError(400, "A purchase line is invalid. Check the product, quantity, and buying cost.");
-        return { product, qty, cost, total: Math.round(qty * cost * 100) / 100 };
+        if (pharmacyPurchase && (!validText(batchNumber) || !validDate(expiryDate))) throw httpError(400,"Every Pharmacy purchase line needs a batch number and expiry date.");
+        return { product, qty, cost, batchNumber, expiryDate, total: Math.round(qty * cost * 100) / 100 };
       });
       const total = Math.round(items.reduce((sum, item) => sum + item.total, 0) * 100) / 100;
       if (paid > total + 0.001) throw httpError(400, "Payment cannot be more than this purchase total.");
@@ -1691,9 +2004,16 @@ async function handleApi(request, response, url) {
         const before = Number(current.qty), after = Number((before + qty).toFixed(6));
         const averageCost = after > 0 ? Math.round(((before * Number(current.cost) + qty * cost) / after) * 100) / 100 : cost;
         db.prepare("UPDATE products SET qty=?,cost=? WHERE id=?").run(after, averageCost, current.id);
-        db.prepare("INSERT INTO purchase_lines(purchase_id,product_id,product_name,qty,unit,unit_cost,line_total) VALUES(?,?,?,?,?,?,?)")
-          .run(id, product.id, product.name, qty, product.unit || "piece", cost, item.total);
-        recordStockMovement(current, "purchase", qty, after, user.username, "P-" + String(id).padStart(8, "0"), `Supplier: ${supplier.name}`, cost);
+        db.prepare("INSERT INTO purchase_lines(purchase_id,product_id,product_name,qty,unit,unit_cost,line_total,batch_number,expiry_date) VALUES(?,?,?,?,?,?,?,?,?)")
+          .run(id, product.id, product.name, qty, product.unit || "piece", cost, item.total, pharmacyPurchase ? item.batchNumber : "", pharmacyPurchase ? item.expiryDate : "");
+        if (pharmacyPurchase) {
+          const existingBatch = db.prepare("SELECT id,expiry_date FROM medicine_batches WHERE product_id=? AND batch_number=? COLLATE NOCASE").get(product.id,item.batchNumber);
+          if (existingBatch && existingBatch.expiry_date !== item.expiryDate) throw httpError(409,`Batch ${item.batchNumber} already exists for ${product.name} with a different expiry date.`);
+          if (existingBatch) db.prepare("UPDATE medicine_batches SET quantity_received=quantity_received+?,quantity_remaining=quantity_remaining+?,unit_cost=?,supplier_id=?,purchase_id=? WHERE id=?").run(qty,qty,cost,supplierId,id,existingBatch.id);
+          else db.prepare(`INSERT INTO medicine_batches(product_id,batch_number,expiry_date,quantity_received,quantity_remaining,quantity_quarantined,unit_cost,supplier_id,purchase_id,received_date,created_by)
+            VALUES(?,?,?,?,?,0,?,?,?,?,?)`).run(product.id,item.batchNumber,item.expiryDate,qty,qty,cost,supplierId,id,date,user.username);
+        }
+        recordStockMovement(current, "purchase", qty, after, user.username, "P-" + String(id).padStart(8, "0"), pharmacyPurchase ? `Supplier: ${supplier.name}; batch ${item.batchNumber}; expiry ${item.expiryDate}` : `Supplier: ${supplier.name}`, cost);
       }
       if (paid > 0) db.prepare("INSERT INTO supplier_payments(supplier_id,date,amount,method,note,received_by) VALUES(?,?,?,?,?,?)")
         .run(supplierId, date, paid, method, `Payment on purchase P-${String(id).padStart(8, "0")}`, user.username);
@@ -1748,6 +2068,7 @@ async function handleApi(request, response, url) {
 
   if (route === "/api/sales" && method === "POST") {
     if (!requirePermission(user, "sales")) return json(response, 403, { error: "You do not have sales permission." });
+    if (pharmacyMode()) return json(response,400,{error:"Use New bill for Pharmacy sales so unexpired batches are selected and recorded."});
     const body = await readJson(request);
     const quantity = Number(body.qty);
     const productId = Number(body.productId);
@@ -1773,7 +2094,7 @@ async function handleApi(request, response, url) {
         db.exec("ROLLBACK");
         return json(response, 409, { error: `Not enough stock for "${product.name}". Available in stock: ${product.qty} ${product.unit || 'piece'}, Requested: ${quantity}.` });
       }
-      if (settings.shop_type === "mobile" && /smartphone|feature phone|tablet|mobile phone/i.test(String(product.category || ""))) {
+      if (settings.shop_type === "mobile" && licensedFeatureEnabled("devices") && /smartphone|feature phone|tablet|mobile phone/i.test(String(product.category || ""))) {
         db.exec("ROLLBACK");
         return json(response, 400, { error: "Use New bill for phones and tablets so their IMEI/serial and warranty are recorded." });
       }
@@ -1944,6 +2265,7 @@ async function handleApi(request, response, url) {
     try { const id = saveBill(await readJson(request), user); return json(response, 201, { ...stateFor(user), bill: billById(id) }); } catch (error) { return billFail(error); }
   }
   if (billPath && !billPath[2] && (method === "PUT" || method === "DELETE")) {
+    if (pharmacyMode()) return json(response,409,{error:"Pharmacy bills are read-only after saving to preserve medicine batch traceability. Process a return and create a corrected bill."});
     if (!requirePermission(user, "sales") || !can(user, "records")) return json(response, 403, { error: "You do not have permission to edit or delete bills." });
     const id = Number(billPath[1]);
     try {
@@ -2009,10 +2331,11 @@ async function handleApi(request, response, url) {
       const refundMethod = refundAmount > 0 ? String(body.refundMethod || "").trim().slice(0, 40) : "";
       if (refundAmount > 0 && !validText(refundMethod)) throw httpError(400, "Choose a refund method.");
       const after = Number((product.qty + qty).toFixed(6));
-      db.prepare("UPDATE products SET qty=? WHERE id=?").run(after, product.id);
-      recordStockMovement(product, "sales return", qty, after, user.username, sale.bill_id ? "B-" + String(sale.bill_id).padStart(8, "0") : "Sale #" + sale.id, reason || "Customer return.", sale.qty > 0 ? sale.cost / sale.qty : product.cost);
-      db.prepare(`INSERT INTO sales_returns(date,product,qty,total,payment,cost,unit,product_id,reason,sale_id,bill_id,refund_amount,refund_method,actor)
+      const returnRecord = db.prepare(`INSERT INTO sales_returns(date,product,qty,total,payment,cost,unit,product_id,reason,sale_id,bill_id,refund_amount,refund_method,actor)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(today(), sale.product, qty, returnedValue, refundAmount > 0 ? refundMethod : "Credit adjustment", sale.qty > 0 ? sale.cost / sale.qty * qty : 0, sale.unit || "piece", product.id, reason, sale.id, sale.bill_id, refundAmount, refundMethod, user.username);
+      db.prepare("UPDATE products SET qty=? WHERE id=?").run(after, product.id);
+      if (pharmacyMode()) quarantinePharmacyReturn(sale.id,qty,Number(returnRecord.lastInsertRowid),product,user.username);
+      recordStockMovement(product, "sales return", qty, after, user.username, sale.bill_id ? "B-" + String(sale.bill_id).padStart(8, "0") : "Sale #" + sale.id, reason || (pharmacyMode() ? "Customer return quarantined from resale." : "Customer return."), sale.qty > 0 ? sale.cost / sale.qty : product.cost);
       for (const serial of returnSerials) db.prepare("UPDATE sold_devices SET status='Returned' WHERE sale_id=? AND serial=? COLLATE NOCASE AND status='Sold'").run(saleId, serial);
       if (sale.bill_id) syncSales(sale.bill_id);
       db.exec("COMMIT");
@@ -2021,6 +2344,7 @@ async function handleApi(request, response, url) {
   }
   const saleMatch = route.match(/^\/api\/sales\/(\d+)$/);
   if (saleMatch && method === "PATCH") {
+    if (pharmacyMode()) return json(response,409,{error:"Pharmacy sales cannot be edited directly because that would break the medicine-batch audit trail. Process a return and create a corrected bill."});
     if (!canManageSalesRecords(user)) return json(response, 403, { error: "Sales and edit-record access are required to edit sales records." });
     const body = await readJson(request);
     db.exec("BEGIN IMMEDIATE");
@@ -2123,6 +2447,7 @@ async function handleApi(request, response, url) {
     }
   }
   if (saleMatch && method === "DELETE") {
+    if (pharmacyMode()) return json(response,409,{error:"Pharmacy sales cannot be deleted directly because that would break the medicine-batch audit trail."});
     if (!canManageSalesRecords(user)) return json(response, 403, { error: "Sales and edit-record access are required to delete sales records." });
     db.exec("BEGIN IMMEDIATE");
     try {
@@ -2332,6 +2657,7 @@ async function handleApi(request, response, url) {
       const order = db.prepare("SELECT * FROM online_orders WHERE id=?").get(id);
       if (!order) throw httpError(404, "Online order not found.");
       const recordingLegacyReturnedOrder = order.order_status === "Returned" && !order.stock_deducted;
+      if (pharmacyMode()) throw httpError(403, "Online-order returns are unavailable for Pharmacy until batch-aware returns are supported. Process pharmacy returns through the Sales history workflow.");
       if (order.order_status !== "Delivered" && !recordingLegacyReturnedOrder) throw httpError(409, "Only delivered orders can be returned.");
       if (!order.stock_deducted && !recordingLegacyReturnedOrder) throw httpError(409, "This order has no deducted inventory to return. Confirm and deliver it before recording a return.");
       const lines = JSON.parse(order.lines || "[]"), seen = new Set(), selected = [];
@@ -2692,15 +3018,17 @@ async function handleApi(request, response, url) {
     catch (error) { return json(response, 500, { error: "A safety backup could not be created, so no data was cleared: " + error.message }); }
     db.exec("BEGIN IMMEDIATE");
     try {
-      for (const table of ["service_job_parts", "service_job_payments", "service_jobs", "online_orders", "sold_devices", "bill_payments", "sales_returns", "sales", "bills", "expenses", "purchase_lines", "purchases", "supplier_payments", "stock_movements", "customers", "suppliers", "products", "categories", "activity_log"]) db.exec(`DELETE FROM ${table}`);
+      for (const table of ["medicine_batch_sales", "medicine_batch_returns", "medicine_batches", "medicine_details", "service_job_parts", "service_job_payments", "service_jobs", "online_orders", "sold_devices", "bill_payments", "sales_returns", "sales", "bills", "expenses", "purchase_lines", "purchases", "supplier_payments", "stock_movements", "customers", "suppliers", "products", "categories", "activity_log"]) db.exec(`DELETE FROM ${table}`);
       db.prepare("DELETE FROM sessions WHERE user_id<>?").run(owner.id);
       db.prepare("DELETE FROM users WHERE id<>?").run(owner.id);
+      const freshShopType = currentLicense().state === "active" && currentLicense().shopType ? currentLicense().shopType : "general";
       db.prepare(`INSERT INTO settings(id,shop_name,workspace,shop_type,currency_code,locale,tax_rate,tax_mode,require_customer,allow_discounts,payment_methods,contact_number,website,email,facebook_page,whatsapp_number,contact_address)
-        VALUES(1,'Shop Desk','Set workspace','general','BDT','en-BD',0,'none',0,1,'Cash,bKash,Nagad,Card,Due','','','','','','')
+        VALUES(1,'Shop Desk','Set workspace',?,'BDT','en-BD',0,'none',0,1,'Cash,bKash,Nagad,Card,Due','','','','','','')
         ON CONFLICT(id) DO UPDATE SET shop_name=excluded.shop_name,workspace=excluded.workspace,shop_type=excluded.shop_type,
         currency_code=excluded.currency_code,locale=excluded.locale,tax_rate=excluded.tax_rate,tax_mode=excluded.tax_mode,
-        require_customer=excluded.require_customer,allow_discounts=excluded.allow_discounts,payment_methods=excluded.payment_methods,contact_number=excluded.contact_number,website=excluded.website,email=excluded.email,facebook_page=excluded.facebook_page,whatsapp_number=excluded.whatsapp_number,contact_address=excluded.contact_address`).run();
-      for (const name of profileCategories.general) seedCategory(name);
+        require_customer=excluded.require_customer,allow_discounts=excluded.allow_discounts,payment_methods=excluded.payment_methods,contact_number=excluded.contact_number,website=excluded.website,email=excluded.email,facebook_page=excluded.facebook_page,whatsapp_number=excluded.whatsapp_number,contact_address=excluded.contact_address`).run(freshShopType);
+      for (const name of (profileCategories[freshShopType] || profileCategories.general)) seedCategory(name);
+      ensurePharmacyDetails();
       db.exec("COMMIT");
       return json(response, 200, { ok: true, backup: backupName });
     } catch (error) {

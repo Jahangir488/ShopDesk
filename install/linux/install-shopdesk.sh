@@ -31,16 +31,16 @@ say "Copying Shop Desk to $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR" "$DATA_DIR"
 if command -v rsync >/dev/null 2>&1; then
   rsync -a --delete \
-    --exclude '.git' --exclude 'node_modules' --exclude 'data' --exclude 'vendor' \
+    --exclude '.git' --exclude 'node_modules' --exclude 'tools' --exclude 'data' --exclude 'vendor' \
     --exclude 'releases' --exclude 'licences' --exclude 'private' --exclude 'ShopDesk-Licence-Kit' \
     --exclude '*.sqlite3' --exclude '*.sqlite3-wal' --exclude '*.sqlite3-shm' --exclude 'server.log' \
-    --exclude '*.pem' --exclude 'licences.csv' --exclude '3 - Build Licence Kit.bat' \
+    --exclude '*.pem' --exclude 'licences.csv' --exclude '3 - Build Licence Kit.bat' --exclude '4 - Issue Customer Licence.bat' \
     "$SOURCE_DIR"/ "$INSTALL_DIR"/
 else
   tar -C "$SOURCE_DIR" --exclude='.git' --exclude='node_modules' --exclude='data' --exclude='vendor' \
-      --exclude='releases' --exclude='licences' --exclude='private' --exclude='ShopDesk-Licence-Kit' \
+      --exclude='releases' --exclude='licences' --exclude='private' --exclude='ShopDesk-Licence-Kit' --exclude='tools' \
       --exclude='*.sqlite3*' --exclude='*.pem' --exclude='licences.csv' --exclude='server.log' \
-      --exclude='3 - Build Licence Kit.bat' \
+      --exclude='3 - Build Licence Kit.bat' --exclude='4 - Issue Customer Licence.bat' \
       -cf - . | tar -C "$INSTALL_DIR" -xf -
 fi
 

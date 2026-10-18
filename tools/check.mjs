@@ -65,6 +65,35 @@ try {
   const token = signLicense({ id: "check", shop: "Check Shop", plan: "pro", seats: 2, issued: new Date(), expires, install: installId }, privateKey);
   const verified = verifyLicense(token, { installId, publicKey });
   if (!verified.valid || verified.expired) fail("licence roundtrip");
+  const pharmacyToken = signLicense({
+    id: "pharmacy-check", shop: "Check Pharmacy", plan: "pro", issued: new Date(), expires, install: installId,
+    shopType: "pharmacy", features: ["pharmacy"]
+  }, privateKey);
+  const pharmacyLicence = verifyLicense(pharmacyToken, { installId, publicKey });
+  if (!pharmacyLicence.valid || pharmacyLicence.payload.shopType !== "pharmacy" ||
+      !Array.isArray(pharmacyLicence.payload.features) || !pharmacyLicence.payload.features.includes("pharmacy")) {
+    fail("signed Pharmacy package should preserve its shop type and feature entitlement");
+  }
+  const invalidPackageToken = signLicense({
+    id: "invalid-package", shop: "Check Shop", plan: "pro", issued: new Date(), expires, install: installId,
+    shopType: "not-a-shop-type", features: ["pharmacy"]
+  }, privateKey);
+  if (verifyLicense(invalidPackageToken, { installId, publicKey }).valid) fail("unknown shop type must be rejected");
+  const missingFeaturesToken = signLicense({
+    id: "missing-features", shop: "Check Shop", plan: "pro", issued: new Date(), expires, install: installId,
+    shopType: "general"
+  }, privateKey);
+  if (verifyLicense(missingFeaturesToken, { installId, publicKey }).valid) fail("new package keys must include an explicit feature list");
+  const featuresOnlyToken = signLicense({
+    id: "features-only", shop: "Check Shop", plan: "pro", issued: new Date(), expires, install: installId,
+    features: ["online_orders"]
+  }, privateKey);
+  if (verifyLicense(featuresOnlyToken, { installId, publicKey }).valid) fail("module entitlements without a shop type must be rejected");
+  const incompatibleFeatureToken = signLicense({
+    id: "incompatible-features", shop: "Check Shop", plan: "pro", issued: new Date(), expires, install: installId,
+    shopType: "general", features: ["pharmacy"]
+  }, privateKey);
+  if (verifyLicense(incompatibleFeatureToken, { installId, publicKey }).valid) fail("a Pharmacy module must not be assigned to a non-Pharmacy shop");
   const shortToken = signLicense({ id: "short", shop: "Check Shop", plan: "pro", issued: new Date(), expires, install: "da7b-5514-7a78" }, privateKey);
   if (!verifyLicense(shortToken, { installId, publicKey }).valid) fail("short installation ID rejected");
   const status = licenseStatus({ license: { token }, trialStartedAt: new Date(), installId, publicKey });
@@ -82,7 +111,7 @@ try {
   const changed = Buffer.from(JSON.stringify(payload)).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
   const tampered = verifyLicense([prefix, changed, signature].join("."), { installId, publicKey });
   if (tampered.valid) fail("tampered licence accepted");
-  ok("Ed25519 sign/verify, 30-day trial, install IDs and tamper detection");
+  ok("Ed25519 sign/verify, strict package entitlements, 30-day trial, install IDs and tamper detection");
 } catch (error) { fail("licensing: " + error.message); }
 
 console.log("Release manifest");
@@ -103,12 +132,37 @@ try {
   ok("Ed25519 release manifest, tamper detection and versions");
 } catch (error) { fail("release manifest: " + error.message); }
 
+console.log("Commercial seller licensing and Pharmacy workflow");
+try {
+  const licenser = readFileSync(join(root, "tools", "supplier-licence.mjs"), "utf8");
+  const cliIssuer = readFileSync(join(root, "tools", "license-issue.mjs"), "utf8");
+  const licenseCore = readFileSync(join(root, "lib", "license.mjs"), "utf8");
+  if (!licenser.includes("days > 9999") || !cliIssuer.includes("days > 9999")) fail("licence durations must be limited to whole days from 1 to 9999");
+  if (!licenseCore.includes("does not match lib/license-public.mjs")) fail("supplier signing must reject a private key that does not match the deployed public key");
+  const oldKit = readFileSync(join(root, "tools", "make-licence-kit.mjs"), "utf8");
+  const oldIssuer = readFileSync(join(root, "tools", "licence-kit.mjs"), "utf8");
+  const server = readFileSync(join(root, "server.mjs"), "utf8");
+  const app = readFileSync(join(root, "app.js"), "utf8");
+  for (const token of ["shopType", "features", "install: normalizedInstall", "signLicense"]) {
+    if (!licenser.includes(token)) fail(`supplier issuer is missing ${token}`);
+  }
+  if (!oldKit.includes("has been retired") || !oldIssuer.includes("disabled")) fail("legacy USB licence kit must be disabled");
+  if (oldKit.includes("privateKeyFile") || oldKit.includes("private/license-private-key.pem")) fail("legacy kit builder must not copy a private key");
+  for (const token of ["medicine_batches", "medicine_batch_sales", "pharmacyAvailableQty", "allocatePharmacyBatchStock", "quarantinePharmacyReturn", "shop_type=?"]) {
+    if (!server.includes(token)) fail(`server is missing Pharmacy/package safeguard: ${token}`);
+  }
+  for (const token of ["openPharmacyBatchManager", "purchase-batch", "genericName", "expiryDate", "productSellableQty"]) {
+    if (!app.includes(token)) fail(`Pharmacy interface is missing ${token}`);
+  }
+  ok("supplier-only key issuing, customer key isolation, package enforcement and Pharmacy batch flows");
+} catch (error) { fail("commercial licensing / Pharmacy workflow: " + error.message); }
+
 console.log("Install files");
 try {
   const required = [
     "INSTALL.md", "LICENSING.md", "Dockerfile", "docker-compose.yml", ".env.example",
-    "1 - Install Shop Desk.bat", "2 - Uninstall Shop Desk.bat", "3 - Build Licence Kit.bat",
-    "install/windows/install-shopdesk.ps1", "install/windows/install-shopdesk.bat",
+    "1 - Install Shop Desk.bat", "2 - Uninstall Shop Desk.bat", "3 - Build Licence Kit.bat", "4 - Issue Customer Licence.bat",
+    "tools/supplier-licence.mjs", "install/windows/install-shopdesk.ps1", "install/windows/install-shopdesk.bat",
     "install/windows/update-shopdesk.ps1", "install/windows/uninstall-shopdesk.ps1",
     "install/windows/uninstall-shopdesk.bat",
     "install/windows/repair-shopdesk.ps1", "install/windows/repair-shopdesk.bat",
@@ -120,7 +174,7 @@ try {
   if (missing.length) fail("missing install files: " + missing.join(", "));
   else ok(`${required.length} install, licence and PWA files present`);
   // Batch files must keep Windows line endings; LF-only copies break cmd.exe blocks.
-  for (const bat of ["1 - Install Shop Desk.bat", "2 - Uninstall Shop Desk.bat", "3 - Build Licence Kit.bat", "install/windows/install-shopdesk.bat", "install/windows/uninstall-shopdesk.bat", "install/windows/repair-shopdesk.bat"]) {
+  for (const bat of ["1 - Install Shop Desk.bat", "2 - Uninstall Shop Desk.bat", "3 - Build Licence Kit.bat", "4 - Issue Customer Licence.bat", "install/windows/install-shopdesk.bat", "install/windows/uninstall-shopdesk.bat", "install/windows/repair-shopdesk.bat"]) {
     const bytes = readFileSync(join(root, bat));
     if (!bytes.includes("\r\n") || bytes.toString("latin1").replace(/\r\n/g, "").includes("\n")) fail(`${bat} must use CRLF line endings`);
   }
@@ -128,7 +182,12 @@ try {
   // The installer must never copy the signing key or issued licences onto a shop PC.
   const installer = readFileSync(join(root, "install", "windows", "install-shopdesk.ps1"), "utf8");
   for (const token of ["vendor", "licences", "*.pem"]) if (!installer.includes(token)) fail(`installer should exclude ${token}`);
-  ok("installer excludes the signing key, PEM files and licence receipts");
+  const updater = readFileSync(join(root, "install", "windows", "update-shopdesk.ps1"), "utf8");
+  const linuxInstaller = readFileSync(join(root, "install", "linux", "install-shopdesk.sh"), "utf8");
+  if (!installer.includes('"tools"') || !installer.includes("4 - Issue Customer Licence.bat")) fail("Windows installer must exclude supplier-only licence tools");
+  if (!updater.includes("tools") || !updater.includes("4 - Issue Customer Licence.bat")) fail("Windows updater must exclude supplier-only licence tools");
+  if (!linuxInstaller.includes("--exclude 'tools'") || !linuxInstaller.includes("4 - Issue Customer Licence.bat")) fail("Linux installer must exclude supplier-only licence tools");
+  ok("customer installers exclude supplier tools, the signing key, PEM files and licence receipts");
   const licenceBuilder = readFileSync(join(root, "3 - Build Licence Kit.bat"), "utf8");
   for (const token of ["license-keygen.mjs", "license-key-sync-pending.txt", "lib\\license-public.mjs", "NEVER send vendor\\license-private-key.pem"]) {
     if (!licenceBuilder.includes(token)) fail(`licence builder must provide the safe one-click setup (${token})`);
