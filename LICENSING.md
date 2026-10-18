@@ -23,6 +23,8 @@ Perform all licence issuing on **your own supplier PC**.
 
 If the private key is missing, stop and check your existing key backup and the public key shipped by the installed ShopDesk version before issuing any licences. Do not create a new key pair just to make the wizard start.
 
+**Retire old USB kits:** earlier versions of `npm run licence:kit` could package a copy of `vendor/license-private-key.pem`. Do not distribute or use any old `ShopDesk-Licence-Kit` folder. Securely erase old USB-kit copies given to other people. If anyone outside your control may have copied the signing key, assume that key is exposed; plan a public-key migration and reissue customer licences deliberately, because changing the public key invalidates tokens signed by the old key.
+
 ## Issue a new customer's licence
 
 ### 1. Get the customer's Installation ID
