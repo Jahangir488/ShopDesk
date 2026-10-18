@@ -631,7 +631,7 @@ dialog.backup-folder-dialog{width:min(620px,calc(100vw - 32px));max-width:620px;
   #users .team-access-scroll td .user-action { min-height: 36px; margin: 3px 5px 2px 0; padding: 7px 10px; font-size: 12px; }
 }
 
-/* ===== Bangla UI, licence banner, offsite backup, phone install ===== */
+/* ===== Bangla UI, offsite backup, phone install ===== */
 body.lang-bn{
   --sans:"Noto Sans Bengali","Nirmala UI","SolaimanLipi","Shonar Bangla","Segoe UI",system-ui,sans-serif;
   --display:"Noto Sans Bengali","Nirmala UI","SolaimanLipi","Barlow Semi Condensed",system-ui,sans-serif;
@@ -639,19 +639,6 @@ body.lang-bn{
 body.lang-bn .brand b,body.lang-bn .brand small{letter-spacing:0}
 body.lang-bn th,body.lang-bn .nav-caption,body.lang-bn .eyebrow,body.lang-bn .report-totals small,body.lang-bn .store-label{text-transform:none}
 body.lang-bn th::first-letter,body.lang-bn .nav-caption::first-letter,body.lang-bn .eyebrow::first-letter,body.lang-bn .report-totals small::first-letter,body.lang-bn .store-label::first-letter{text-transform:none}
-.license-banner{
-  position:sticky;top:0;z-index:6;display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:space-between;
-  margin:0 0 14px;padding:10px 14px;border-radius:10px;background:#fff6dd;border:1px solid #eccb84;color:#6b5200;font-weight:600;
-  box-shadow:0 8px 20px #1f23280f;
-}
-.license-banner-text{flex:1 1 240px;line-height:1.45}
-.license-banner .button{padding:8px 12px;font-size:13px}
-.license-banner-hint{font-weight:500;color:#7a5f14}
-body.license-locked .license-banner{background:#fbe6e3;border-color:#e5b1aa;color:#8a2c20}
-.license-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:0 0 14px;padding:12px;background:var(--paper);border-radius:10px}
-.license-summary small{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px}
-.license-summary b{display:block;font-size:15px;margin-top:2px;word-break:break-word}
-.settings-license-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0 0;padding-top:12px;border-top:1px solid var(--line)}
 .join-link{display:flex;align-items:center;gap:8px;margin-top:12px;padding:9px 10px;border-radius:8px;background:#ffffff14;color:#dce9e4;font-size:13px;font-weight:600}
 .join-link:hover,.join-link:focus-visible{background:#ffffff24;color:#fff}
 .offsite-panel{border:1px solid var(--line);border-radius:12px;padding:16px;margin:0 0 16px;background:#fbfcfc}
@@ -672,12 +659,11 @@ body.license-locked .license-banner{background:#fbe6e3;border-color:#e5b1aa;colo
 .backup-warning{display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:space-between;margin:0 0 14px;padding:10px 14px;border-radius:10px;background:#fbe6e3;border:1px solid #e5b1aa;color:#8a2c20;font-weight:600;box-shadow:0 8px 20px #1f23280f}
 .backup-warning span{flex:1 1 240px;line-height:1.45}
 .backup-warning .button{padding:8px 12px;font-size:13px;background:#fff;border-color:#e5b1aa;color:#8a2c20}
-.settings-update-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0 0}
+.settings-update-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0 0;padding-top:12px;border-top:1px solid var(--line)}
 .settings-update-row .form-hint{flex:1 1 220px}
 .settings-update-row a{color:var(--teal,#157a6e);font-weight:700}
 #install-app{white-space:nowrap}
 @media (max-width:720px){
-  .license-banner{position:static;margin-bottom:10px}
   .offsite-config{flex-direction:column;align-items:stretch}
   .offsite-config .button{width:100%}
 }

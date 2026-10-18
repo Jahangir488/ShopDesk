@@ -6,7 +6,6 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes, randomInt, scryptSync, timingSafeEqual } from "node:crypto";
 import { connect as tlsConnect } from "node:tls";
 import { cpus as systemCpus, freemem, networkInterfaces, totalmem } from "node:os";
-import { TRIAL_DAYS, UPGRADE_TRIAL_DAYS, licenseAllowsMutation, licenseStatus, shortInstallId, verifyLicense } from "./lib/license.mjs";
 import { DEFAULT_FOLDER_NAME, DEFAULT_KEEP, GoogleDriveBackup, decryptSecret, encryptSecret, loadBackupKeyMaterial, prepareOffsitePayload } from "./lib/offsite.mjs";
 import { qrSvg } from "./lib/qr.mjs";
 import { compareVersions, parseManifest } from "./lib/release.mjs";
@@ -132,7 +131,6 @@ if (!backupScheduleColumns.has("directory")) db.exec("ALTER TABLE backup_schedul
 if (!backupScheduleColumns.has("last_run_time")) db.exec("ALTER TABLE backup_schedule ADD COLUMN last_run_time TEXT NOT NULL DEFAULT ''");
 if (!backupScheduleColumns.has("last_run_directory")) db.exec("ALTER TABLE backup_schedule ADD COLUMN last_run_directory TEXT NOT NULL DEFAULT ''");
 db.exec(`CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-  CREATE TABLE IF NOT EXISTS license (id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL, activated_at TEXT NOT NULL DEFAULT '');
   CREATE TABLE IF NOT EXISTS offsite_backup (
     id INTEGER PRIMARY KEY CHECK(id=1), enabled INTEGER NOT NULL DEFAULT 0,
     folder_name TEXT NOT NULL DEFAULT 'ShopDesk Backups', keep INTEGER NOT NULL DEFAULT 14,
@@ -507,26 +505,11 @@ function upgradeRestoredDatabase() {
   ensure("settings", "language", "TEXT NOT NULL DEFAULT 'en'");
   ensure("settings", "bangla_digits", "INTEGER NOT NULL DEFAULT 0");
   db.exec("CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
-  db.exec("CREATE TABLE IF NOT EXISTS license (id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL, activated_at TEXT NOT NULL DEFAULT '')");
   db.exec(`CREATE TABLE IF NOT EXISTS offsite_backup (id INTEGER PRIMARY KEY CHECK(id=1), enabled INTEGER NOT NULL DEFAULT 0,
     folder_name TEXT NOT NULL DEFAULT 'ShopDesk Backups', keep INTEGER NOT NULL DEFAULT 14, connection TEXT NOT NULL DEFAULT '',
     connected_email TEXT NOT NULL DEFAULT '', last_attempt_at TEXT NOT NULL DEFAULT '', last_success_at TEXT NOT NULL DEFAULT '',
     last_error TEXT NOT NULL DEFAULT '', last_file TEXT NOT NULL DEFAULT '');
     INSERT OR IGNORE INTO offsite_backup(id) VALUES(1);`);
-  // Keep installation identity/trial state local to this installed copy. These values
-  // must not be transferred from another shop's restored database.
-  setMetaValue("install_id", installId);
-  setMetaValue("trial_started_at", localTrialStartedAt);
-  setMetaValue("trial_days", String(localTrialDays));
-  refreshLicense();
-  const restoredPackage = currentLicense();
-  if (restoredPackage.state === "active" && restoredPackage.shopType) {
-    const restoredShopType = db.prepare("SELECT shop_type FROM settings WHERE id=1").get()?.shop_type || "general";
-    if (restoredShopType !== restoredPackage.shopType) {
-      db.prepare("UPDATE settings SET shop_type=? WHERE id=1").run(restoredPackage.shopType);
-      addProfileCategories(restoredPackage.shopType);
-    }
-  }
   // A backup from an older Shop Desk version may not contain Pharmacy tables.
   // Recreate compatible empty tables and preserve its existing product data.
   ensurePharmacyDetails();
@@ -538,57 +521,8 @@ const mime = {
   ".svg": "image/svg+xml; charset=utf-8", ".png": "image/png", ".ico": "image/x-icon", ".woff2": "font/woff2"
 };
 
-// ---- Installation identity, trial and licence state ----
 const metaValue = key => db.prepare("SELECT value FROM app_meta WHERE key=?").get(key)?.value || "";
 const setMetaValue = (key, value) => db.prepare("INSERT INTO app_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key, String(value));
-const installId = (() => {
-  let value = metaValue("install_id");
-  if (!value) { value = randomBytes(12).toString("hex"); setMetaValue("install_id", value); }
-  return value;
-})();
-if (!metaValue("trial_started_at")) {
-  const existingUsers = db.prepare("SELECT COUNT(*) AS count FROM users").get().count;
-  setMetaValue("trial_started_at", new Date().toISOString());
-  setMetaValue("trial_days", String(existingUsers > 0 ? UPGRADE_TRIAL_DAYS : TRIAL_DAYS));
-}
-const localTrialStartedAt = metaValue("trial_started_at");
-const localTrialDays = Number(metaValue("trial_days") || TRIAL_DAYS);
-const licenseRow = () => db.prepare("SELECT token, activated_at FROM license WHERE id=1").get();
-let licenseCache = { at: 0, value: null };
-function currentLicense() {
-  if (licenseCache.value && Date.now() - licenseCache.at < 5000) return licenseCache.value;
-  const row = licenseRow();
-  const status = licenseStatus({
-    license: row ? { token: row.token, activatedAt: row.activated_at } : null,
-    trialStartedAt: localTrialStartedAt,
-    trialDays: localTrialDays,
-    installId
-  });
-  status.installId = installId;
-  status.installShort = shortInstallId(installId);
-  licenseCache = { at: Date.now(), value: status };
-  return status;
-}
-const refreshLicense = () => { licenseCache = { at: 0, value: null }; return currentLicense(); };
-function licenceProblemMessage(problem) {
-  switch (problem) {
-    case "install": return "This licence was issued for a different installation. Send your Installation ID to your supplier and ask for a licence for this shop PC.";
-    case "signature": return "That licence key is not valid for Shop Desk. Check that you copied the whole key, or ask your supplier to reissue it.";
-    case "expired": return "This licence has already expired. Ask your supplier for a renewal key.";
-    case "empty": return "Paste the licence key you received.";
-    default: return "That licence key could not be read. Check that you copied all of it.";
-  }
-}
-function publicLicense(status = currentLicense()) {
-  return {
-    state: status.state, readOnly: status.readOnly, plan: status.plan, licensedTo: status.licensedTo,
-    seats: status.seats, daysLeft: status.daysLeft, warning: status.warning, warningDays: status.warningDays,
-    expiresAt: status.expiresAt, installId: status.installId, installShort: status.installShort, problem: status.problem,
-    shopType: status.shopType || null, features: Array.isArray(status.features) ? status.features : null,
-    packageLocked: Boolean(status.packageLocked),
-    trialDaysLeft: status.trial?.daysLeft ?? 0, trialEndsAt: status.trial?.endsAt || null
-  };
-}
 function connectInfo() {
   const settings = db.prepare("SELECT shop_name FROM settings WHERE id=1").get();
   const lanPort = typeof port === "number" ? port : 8765;
@@ -650,12 +584,7 @@ const addDaysToDate = (date, days) => {
 };
 
 const currentShopType = () => db.prepare("SELECT shop_type FROM settings WHERE id=1").get()?.shop_type || "general";
-function licensedFeatureEnabled(feature) {
-  const status = currentLicense();
-  // Old signed keys and trials without module claims keep their previous behavior.
-  return status.state !== "active" || !Array.isArray(status.features) || status.features.includes(feature);
-}
-const pharmacyMode = () => currentShopType() === "pharmacy" && licensedFeatureEnabled("pharmacy");
+const pharmacyMode = () => currentShopType() === "pharmacy";
 
 function ensurePharmacyBatches() {
   if (currentShopType() !== "pharmacy") return;
@@ -726,15 +655,6 @@ function ensurePharmacyDetails() {
   if (currentShopType() !== "pharmacy") return;
   db.prepare(`INSERT OR IGNORE INTO medicine_details(product_id) SELECT id FROM products`).run();
   ensurePharmacyBatches();
-}
-// A seller-signed shop package is authoritative. Repair stale profile settings after a restore.
-const startupPackage = currentLicense();
-if (startupPackage.state === "active" && startupPackage.shopType) {
-  const storedShopType = db.prepare("SELECT shop_type FROM settings WHERE id=1").get()?.shop_type || "general";
-  if (storedShopType !== startupPackage.shopType) {
-    db.prepare("UPDATE settings SET shop_type=? WHERE id=1").run(startupPackage.shopType);
-    addProfileCategories(startupPackage.shopType);
-  }
 }
 ensurePharmacyDetails();
 function recordStockMovement(product, kind, quantityChange, quantityAfter, actor, reference = "", note = "", unitCost = product.cost || 0) {
@@ -837,7 +757,7 @@ function saveBill(body, user, editId = 0) {
       if (used.get(id) > availableStock + 0.000001) throw httpError(409, `Not enough ${settings.shop_type === "pharmacy" ? "unexpired, non-quarantined " : ""}stock for "${product.name}". Available: ${availableStock} ${product.unit || "piece"}, requested on bill: ${used.get(id)}.`);
       const serials = Array.isArray(item.serials) ? item.serials.map(value => String(value || "").trim()) : [];
       const warrantyMonths = Number(item.warrantyMonths || 0);
-      const deviceTracked = settings.shop_type === "mobile" && licensedFeatureEnabled("devices") && /smartphone|feature phone|tablet|mobile phone/i.test(String(product.category || ""));
+      const deviceTracked = settings.shop_type === "mobile" && /smartphone|feature phone|tablet|mobile phone/i.test(String(product.category || ""));
       if (!Number.isInteger(warrantyMonths) || warrantyMonths < 0 || warrantyMonths > 120 ||
           (deviceTracked && (!Number.isInteger(qty) || serials.length !== qty || serials.some(value => value.length < 4 || value.length > 60))) ||
           serials.some(value => value.length > 60)) throw httpError(400, `${product.name} needs one valid IMEI/serial for each whole device sold. Warranty must be 0 to 120 months.`);
@@ -1089,8 +1009,6 @@ function stateFor(user) {
     whatsappNumber: settings?.whatsapp_number || "",
     contactAddress: settings?.contact_address || "",
     shopType: settings?.shop_type || "general",
-    shopTypeLocked: true,
-    licenseFeatures: currentLicense().features || null,
     pharmacyBatches: inventory && settings?.shop_type === "pharmacy"
       ? db.prepare(`SELECT b.*,p.name AS product_name,p.unit AS product_unit,md.generic_name,md.strength,md.dosage_form,md.manufacturer,
           MAX(0,b.quantity_remaining-b.quantity_quarantined) AS sellable_quantity
@@ -1101,7 +1019,6 @@ function stateFor(user) {
     locale: settings?.locale || "en-BD",
     language: settings ? (settings.language === "bn" ? "bn" : "en") : "bn",
     banglaDigits: settings ? Boolean(settings.bangla_digits) : true,
-    license: publicLicense(),
     taxRate: settings?.tax_rate || 0,
     taxMode: settings?.tax_mode || "none",
     requireCustomer: Boolean(settings?.require_customer),
@@ -1133,7 +1050,7 @@ function stateFor(user) {
       }) : [],
     salesReturns: salesPermission ? db.prepare("SELECT * FROM sales_returns ORDER BY id DESC LIMIT 2000").all() : [],
     onlineOrderReturns: onlineOrdersPermission ? db.prepare("SELECT * FROM sales_returns WHERE online_order_id IS NOT NULL ORDER BY id DESC LIMIT 2000").all() : [],
-    serviceJobs: salesPermission && settings?.shop_type === "mobile" && licensedFeatureEnabled("repairs") ? db.prepare("SELECT * FROM service_jobs ORDER BY id DESC LIMIT 2000").all().map(job => {
+    serviceJobs: salesPermission && settings?.shop_type === "mobile" ? db.prepare("SELECT * FROM service_jobs ORDER BY id DESC LIMIT 2000").all().map(job => {
       const payments = db.prepare("SELECT date,amount,method,received_by FROM service_job_payments WHERE job_id=? ORDER BY id").all(job.id);
       const parts = db.prepare("SELECT product_id,product_name,qty,unit,unit_cost FROM service_job_parts WHERE job_id=? ORDER BY id").all(job.id);
       const paid = payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
@@ -1145,11 +1062,11 @@ function stateFor(user) {
       ...order,
       lines: JSON.parse(order.lines || "[]")
     })) : [],
-    devices: salesPermission && settings?.shop_type === "mobile" && licensedFeatureEnabled("devices") ? db.prepare("SELECT * FROM sold_devices ORDER BY sold_date DESC,id DESC LIMIT 5000").all() : [],
+    devices: salesPermission && settings?.shop_type === "mobile" ? db.prepare("SELECT * FROM sold_devices ORDER BY sold_date DESC,id DESC LIMIT 5000").all() : [],
     expenses: expensesPermission ? db.prepare("SELECT * FROM expenses ORDER BY id DESC").all() : []
   };
 }
-const mobileServiceEnabled = () => db.prepare("SELECT shop_type FROM settings WHERE id=1").get()?.shop_type === "mobile" && licensedFeatureEnabled("repairs");
+const mobileServiceEnabled = () => db.prepare("SELECT shop_type FROM settings WHERE id=1").get()?.shop_type === "mobile";
 
 // The owner is the "jahangir" account (or, if that does not exist, the first administrator) and always has every power. Everyone else has only what is granted to them.
 const CAPS = ["inventory", "sales", "expenses", "server_load", "team", "admins", "records", "repair_records", "settings", "supplier_purchases", "backups", "online_orders", "delete_online_orders"];
@@ -1157,7 +1074,7 @@ const ownerId = () => (db.prepare("SELECT id FROM users WHERE username='jahangir
 const can = (user, permission) => permission === "repair_records"
   ? user.id === ownerId() || user.role === "admin" || Boolean(user.can_repair_records)
   : permission === "online_orders"
-  ? licensedFeatureEnabled("online_orders") && !pharmacyMode() && (user.id === ownerId() || Boolean(user.can_online_orders))
+  ? !pharmacyMode() && (user.id === ownerId() || Boolean(user.can_online_orders))
   : permission === "delete_online_orders"
   ? user.id === ownerId() || Boolean(user.can_delete_online_orders)
   : permission === "server_load"
@@ -1362,38 +1279,10 @@ async function handleApi(request, response, url) {
   if (pharmacyMode() && route.startsWith("/api/online-orders") && method !== "GET") {
     return json(response,403,{error:"Online-order stock handling is not enabled for Pharmacy yet. Use New bill so all dispensed medicines are linked to their batch and expiry date."});
   }
-  if (method !== "GET" && currentLicense().readOnly && !licenseAllowsMutation(route)) {
-    return json(response, 402, {
-      error: "The Shop Desk licence has expired. New bills and changes are paused, but your data, reports, exports and backups still work. Enter a licence key in Settings to continue.",
-      code: "license_expired",
-      license: publicLicense()
-    });
-  }
   if (["/api/profile/email-verification", "/api/profile/email-verification/confirm", "/api/recovery-code"].includes(route) && user.role !== "admin" && user.id !== ownerId()) {
     return json(response, 403, { error: "Only Jahangir and administrators can set up or change account recovery options." });
   }
   if (route === "/api/auth/me" && method === "GET") return json(response, 200, { user: publicUser(user) });
-  if (route === "/api/license" && method === "GET") return json(response, 200, publicLicense());
-  if (route === "/api/license/activate" && method === "POST") {
-    if (user.role !== "admin") return json(response, 403, { error: "Only an administrator can activate a licence." });
-    const body = await readJson(request);
-    const token = String(body.token || "").trim();
-    const verified = verifyLicense(token, { installId });
-    if (!verified.valid) return json(response, 400, { error: licenceProblemMessage(verified.problem), code: verified.problem || "invalid" });
-    if (verified.expired) return json(response, 400, { error: licenceProblemMessage("expired"), code: "expired" });
-    if (verified.payload.shopType === "pharmacy" && (!Array.isArray(verified.payload.features) || !verified.payload.features.includes("pharmacy"))) {
-      return json(response,400,{error:"This supplier key is missing its Pharmacy module entitlement. Ask the supplier to issue a corrected key."});
-    }
-    db.prepare("INSERT INTO license(id,token,activated_at) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET token=excluded.token,activated_at=excluded.activated_at").run(token, new Date().toISOString());
-    if (verified.payload.shopType) {
-      db.prepare("UPDATE settings SET shop_type=? WHERE id=1").run(verified.payload.shopType);
-      addProfileCategories(verified.payload.shopType);
-      ensurePharmacyDetails();
-    }
-    const status = refreshLicense();
-    try { db.prepare("INSERT INTO activity_log(username,action) VALUES(?,?)").run(user.username, `Activated a ${status.plan} licence for ${verified.payload.shop}`); } catch { /* logging must never block activation */ }
-    return json(response, 200, publicLicense(status));
-  }
   if (route === "/api/update-check" && method === "GET") {
     if (user.role !== "admin" && !can(user, "settings")) return json(response, 403, { error: "Shop settings access is required to check for updates." });
     const manifestUrl = String(process.env.SHOP_UPDATE_MANIFEST_URL || "").trim();
@@ -1519,10 +1408,7 @@ async function handleApi(request, response, url) {
     const whatsappNumber = String(body.whatsappNumber || "").trim();
     const contactAddress = String(body.contactAddress || "").trim();
     const taxRate = Number(body.taxRate);
-    const existingSettings = db.prepare("SELECT language,bangla_digits,shop_type FROM settings WHERE id=1").get() || {};
-    if (body.shopType !== existingSettings.shop_type) {
-      return json(response, 403, { error: "Shop type and licensed package can only be changed by the supplier with a new offline signed licence. Contact your ShopDesk supplier." });
-    }
+    const existingSettings = db.prepare("SELECT language, bangla_digits FROM settings WHERE id=1").get() || {};
     const language = body.language === undefined ? (existingSettings.language || "en") : (body.language === "bn" ? "bn" : "en");
     const banglaDigits = body.banglaDigits === undefined ? Boolean(existingSettings.bangla_digits) : Boolean(body.banglaDigits);
     if (!validText(body.shopName) || !validText(body.workspace) || !validTypes.includes(body.shopType) || !validCurrencies.includes(body.currencyCode) || !validLocales.includes(body.locale) ||
@@ -1536,11 +1422,12 @@ async function handleApi(request, response, url) {
       language=excluded.language,bangla_digits=excluded.bangla_digits`)
       .run(body.shopName.trim(), body.workspace.trim(), body.shopType, body.currencyCode, body.locale, taxRate, body.taxMode, body.requireCustomer ? 1 : 0, body.allowDiscounts ? 1 : 0, methods.join(","), contactNumber, website, email, facebookPage, whatsappNumber, contactAddress, language, banglaDigits ? 1 : 0);
     addProfileCategories(body.shopType);
+    ensurePharmacyDetails();
     return json(response, 200, stateFor(user));
   }
 
   if (route === "/api/pharmacy/expiry" && method === "GET") {
-    if (!pharmacyMode()) return json(response,403,{error:"Pharmacy inventory is not enabled for this licensed shop."});
+    if (!pharmacyMode()) return json(response,403,{error:"Pharmacy inventory is only available when the shop type is Pharmacy."});
     if (!requirePermission(user,"inventory")) return json(response,403,{error:"Inventory access is required to view medicine expiry details."});
     const cutoff = addDaysToDate(today(),90);
     const batches = db.prepare(`SELECT b.*,p.name AS product_name,p.unit AS product_unit,
@@ -1552,7 +1439,7 @@ async function handleApi(request, response, url) {
   }
   const pharmacyBatchesMatch = route.match(/^\/api\/pharmacy\/products\/(\d+)\/batches$/);
   if (pharmacyBatchesMatch && method === "GET") {
-    if (!pharmacyMode()) return json(response,403,{error:"Pharmacy inventory is not enabled for this licensed shop."});
+    if (!pharmacyMode()) return json(response,403,{error:"Pharmacy inventory is only available when the shop type is Pharmacy."});
     if (!requirePermission(user,"inventory")) return json(response,403,{error:"Inventory access is required to view medicine batches."});
     const productId = Number(pharmacyBatchesMatch[1]);
     const product = db.prepare("SELECT id,name,unit FROM products WHERE id=?").get(productId);
@@ -1562,7 +1449,7 @@ async function handleApi(request, response, url) {
     return json(response,200,{product,batches,today:today()});
   }
   if (route === "/api/pharmacy/batches" && method === "POST") {
-    if (!pharmacyMode()) return json(response,403,{error:"Pharmacy inventory is not enabled for this licensed shop."});
+    if (!pharmacyMode()) return json(response,403,{error:"Pharmacy inventory is only available when the shop type is Pharmacy."});
     if (!requirePermission(user,"inventory")) return json(response,403,{error:"Inventory access is required to receive medicine stock."});
     const body = await readJson(request), productId = Number(body.productId);
     const batchNumber = String(body.batchNumber || "").trim().slice(0,80), expiryDate = String(body.expiryDate || "").trim();
@@ -1589,7 +1476,7 @@ async function handleApi(request, response, url) {
   }
   const pharmacyBatchMatch = route.match(/^\/api\/pharmacy\/batches\/(\d+)$/);
   if (pharmacyBatchMatch && method === "PATCH") {
-    if (!pharmacyMode()) return json(response,403,{error:"Pharmacy inventory is not enabled for this licensed shop."});
+    if (!pharmacyMode()) return json(response,403,{error:"Pharmacy inventory is only available when the shop type is Pharmacy."});
     if (!requirePermission(user,"inventory") || !can(user,"records")) return json(response,403,{error:"Inventory and edit-record access are required to correct batch details."});
     const id=Number(pharmacyBatchMatch[1]), body=await readJson(request), batchNumber=String(body.batchNumber||"").trim().slice(0,80), expiryDate=String(body.expiryDate||"").trim();
     const batch=db.prepare("SELECT * FROM medicine_batches WHERE id=?").get(id);
@@ -1693,9 +1580,6 @@ async function handleApi(request, response, url) {
     }
     const clothingKeys = ["brand", "color", "size", "material"];
     const clothing = Object.fromEntries(clothingKeys.map(key => [key, String(body[key] || "").trim().slice(0, 60)]));
-    if (currentShopType() === "clothing" && !licensedFeatureEnabled("clothing") && clothingKeys.some(key => clothing[key])) {
-      return json(response,403,{error:"Clothing-specific fields are not included in this licence. Ask your supplier to add the Clothing module."});
-    }
     db.exec("BEGIN IMMEDIATE");
     try {
       const created = db.prepare("INSERT INTO products(name,sku,price,cost,qty,min,icon,unit,category,pack_name,pack_size,barcode,brand,color,size,material) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
@@ -1736,10 +1620,6 @@ async function handleApi(request, response, url) {
     const packName = typeof body.pack_name === "string" ? body.pack_name.trim().slice(0, 20) : product.pack_name;
     const clothingKeys = ["brand", "color", "size", "material"];
     const clothing = Object.fromEntries(clothingKeys.map(key => [key, typeof body[key] === "string" ? body[key].trim().slice(0, 60) : product[key]]));
-    if (currentShopType() === "clothing" && !licensedFeatureEnabled("clothing") &&
-        clothingKeys.some(key => Object.hasOwn(body,key) && String(clothing[key]||"") !== String(product[key]||""))) {
-      return json(response,403,{error:"Clothing-specific fields are not included in this licence. Ask your supplier to add the Clothing module."});
-    }
     const category = typeof body.category === "string" ? body.category.trim() : product.category;
 
     if (!name) return json(response, 400, { error: "Product name is required." });
@@ -2094,7 +1974,7 @@ async function handleApi(request, response, url) {
         db.exec("ROLLBACK");
         return json(response, 409, { error: `Not enough stock for "${product.name}". Available in stock: ${product.qty} ${product.unit || 'piece'}, Requested: ${quantity}.` });
       }
-      if (settings.shop_type === "mobile" && licensedFeatureEnabled("devices") && /smartphone|feature phone|tablet|mobile phone/i.test(String(product.category || ""))) {
+      if (settings.shop_type === "mobile" && /smartphone|feature phone|tablet|mobile phone/i.test(String(product.category || ""))) {
         db.exec("ROLLBACK");
         return json(response, 400, { error: "Use New bill for phones and tablets so their IMEI/serial and warranty are recorded." });
       }
@@ -3021,14 +2901,12 @@ async function handleApi(request, response, url) {
       for (const table of ["medicine_batch_sales", "medicine_batch_returns", "medicine_batches", "medicine_details", "service_job_parts", "service_job_payments", "service_jobs", "online_orders", "sold_devices", "bill_payments", "sales_returns", "sales", "bills", "expenses", "purchase_lines", "purchases", "supplier_payments", "stock_movements", "customers", "suppliers", "products", "categories", "activity_log"]) db.exec(`DELETE FROM ${table}`);
       db.prepare("DELETE FROM sessions WHERE user_id<>?").run(owner.id);
       db.prepare("DELETE FROM users WHERE id<>?").run(owner.id);
-      const freshShopType = currentLicense().state === "active" && currentLicense().shopType ? currentLicense().shopType : "general";
       db.prepare(`INSERT INTO settings(id,shop_name,workspace,shop_type,currency_code,locale,tax_rate,tax_mode,require_customer,allow_discounts,payment_methods,contact_number,website,email,facebook_page,whatsapp_number,contact_address)
-        VALUES(1,'Shop Desk','Set workspace',?,'BDT','en-BD',0,'none',0,1,'Cash,bKash,Nagad,Card,Due','','','','','','')
+        VALUES(1,'Shop Desk','Set workspace','general','BDT','en-BD',0,'none',0,1,'Cash,bKash,Nagad,Card,Due','','','','','','')
         ON CONFLICT(id) DO UPDATE SET shop_name=excluded.shop_name,workspace=excluded.workspace,shop_type=excluded.shop_type,
         currency_code=excluded.currency_code,locale=excluded.locale,tax_rate=excluded.tax_rate,tax_mode=excluded.tax_mode,
-        require_customer=excluded.require_customer,allow_discounts=excluded.allow_discounts,payment_methods=excluded.payment_methods,contact_number=excluded.contact_number,website=excluded.website,email=excluded.email,facebook_page=excluded.facebook_page,whatsapp_number=excluded.whatsapp_number,contact_address=excluded.contact_address`).run(freshShopType);
-      for (const name of (profileCategories[freshShopType] || profileCategories.general)) seedCategory(name);
-      ensurePharmacyDetails();
+        require_customer=excluded.require_customer,allow_discounts=excluded.allow_discounts,payment_methods=excluded.payment_methods,contact_number=excluded.contact_number,website=excluded.website,email=excluded.email,facebook_page=excluded.facebook_page,whatsapp_number=excluded.whatsapp_number,contact_address=excluded.contact_address`).run();
+      for (const name of profileCategories.general) seedCategory(name);
       db.exec("COMMIT");
       return json(response, 200, { ok: true, backup: backupName });
     } catch (error) {
@@ -3483,9 +3361,6 @@ const onListening = () => {
   console.log(`Shop Desk is running on ${typeof port === "number" ? `${host}:${port}` : "the host's application socket"}${trustProxy ? " (behind HTTPS proxy)" : ""}`);
   const info = connectInfo();
   console.log(`Phones and tablets on the shop Wi-Fi can open: ${info.primary}`);
-  const licence = currentLicense();
-  console.log(`Licence: ${licence.state}${licence.state === "trial" ? ` (${licence.daysLeft} day(s) left)` : ""}${licence.readOnly ? " - read-only mode" : ""}`);
-  console.log(`Installation ID: ${installId} (short: ${shortInstallId(installId)})`);
   console.log(`SQLite database: ${join(dataDir, "shop.sqlite3")}`);
   console.log("Press Ctrl+C to stop the server.");
 };

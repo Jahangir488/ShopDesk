@@ -92,7 +92,7 @@ Copy-Item (Join-SafePath $DataDir "shop.sqlite3-shm") $BackupDir -Force -ErrorAc
 
 # Rebuild the app folder, keeping data.
 if (Test-Path $StageDir) { Remove-Item -Recurse -Force $StageDir }
-robocopy $SourceDir $StageDir /E /XD data node_modules tools .git vendor licences private releases /XF *.sqlite3 *.sqlite3-wal *.sqlite3-shm *.pem licences.csv "3 - Build Licence Kit.bat" "4 - Issue Customer Licence.bat" /NFL /NDL /NJH /NJS /NP | Out-Null
+robocopy $SourceDir $StageDir /E /XD data node_modules tools .git vendor releases /XF *.sqlite3 *.sqlite3-wal *.sqlite3-shm *.pem /NFL /NDL /NJH /NJS /NP | Out-Null
 
 Write-Host "Swapping files…"
 Rename-Item $AppDir "app.old-$stamp"

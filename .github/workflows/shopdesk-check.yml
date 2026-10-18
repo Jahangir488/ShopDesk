@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - master
-      - feature/simplified-licensing-pharmacy
   pull_request:
     branches:
       - master

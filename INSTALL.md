@@ -5,7 +5,7 @@ Shop Desk is a small shop server: one Windows PC or Linux box on the shop Wi-Fi 
 single SQLite database, so it works without an internet connection.
 
 This guide covers Windows, Linux and Docker installs, Google Drive offsite backups,
-licence keys, HTTPS/PWA, updates and uninstall.
+HTTPS/PWA, updates and uninstall.
 
 ---
 
@@ -95,7 +95,7 @@ powershell -ExecutionPolicy Bypass -File .\install\windows\repair-shopdesk.ps1 -
 ```
 
 The repair script finds the installation on its own — from the marker file, the
-**Shop Desk** task, the licence file or a scan of `C:\ShopDesk` … `Z:\ShopDesk` — so no
+**Shop Desk** task or a scan of `C:\ShopDesk` … `Z:\ShopDesk` — so no
 parameters are needed in the usual case.
 
 ---
@@ -170,16 +170,14 @@ docker run -d --name shopdesk --restart unless-stopped \
 ## 5. First-run checklist
 
 1. Create the owner account with the one-time setup code.
-2. **Shop settings**: shop name, location, currency, region, language (বাংলা/English),
+2. **Shop settings**: shop name, location, shop type, currency, region, language (বাংলা/English),
    Bangla digits, tax mode, payment methods.
-3. **Settings → Licence & plan**: paste the licence key from your supplier. New installs
-   start a 30-day trial; existing databases also get 30 days.
-4. **Backup and restore → Offsite backup**: connect Google Drive, run **Test connection**,
+3. **Backup and restore → Offsite backup**: connect Google Drive, run **Test connection**,
    then **Back up now**.
-5. Copy **`data/offsite.key`** to a safe place. Without it, downloaded offsite backups
+4. Copy **`data/offsite.key`** to a safe place. Without it, downloaded offsite backups
    cannot be decrypted.
-6. Give the server PC a static/reserved IP in the router.
-7. Add staff accounts under **Team access**; grant only the modules they need.
+5. Give the server PC a static/reserved IP in the router.
+6. Add staff accounts under **Team access**; grant only the modules they need.
 
 ---
 
@@ -255,31 +253,7 @@ encrypted original until you have confirmed the restored database.
 
 ---
 
-## 7. Commercial licence keys and trial
-
-ShopDesk uses an **offline Ed25519-signed licence**. You, the software seller, decide the package for each customer: shop type, enabled modules, installation ID, plan name, and expiry date. The customer receives only the signed key and enters it in **Settings → Licence & plan**.
-
-- **Trial:** 30 days for every installation.
-- **Active:** signed key controls the licensed shop type and entitlements. The shop type selector is read-only for customers.
-- **Expired:** the app becomes read-only. Customers can still view their data, reports, exports, and backups.
-- **Offline:** licence checks do not require internet access. Keys bound to another installation are rejected.
-
-### Supplier setup (do this on your own PC)
-
-Keep the matching private key at `vendor/license-private-key.pem`, or point `SHOP_LICENSE_PRIVATE_KEY` to its protected location. Never commit or send this key. Keep an encrypted offline backup. Do not generate a replacement key pair if you have existing paid customers: every app release must trust the matching public key in `lib/license-public.mjs`.
-
-### Issue a customer licence
-
-1. Install ShopDesk at the customer's site. Ask the customer to copy the full **Installation ID** from **Settings → Licence & plan** and send it to you.
-2. On your supplier PC, open your restricted ShopDesk source folder and double-click **`4 - Issue Customer Licence.bat`**, or run `npm run license:supplier`.
-3. Enter the customer/shop name, shop type, full Installation ID, plan, duration, and the modules you are selling. The tool saves the signed key in `releases/licences/` and copies it to the clipboard on Windows.
-4. Send **only the signed key** to the customer. The customer pastes it into **Settings → Licence & plan → Activate**. ShopDesk applies the signed shop type and locks that profile to the licence.
-
-The supplier wizard must run on your PC because it requires the private signing key. **Do not issue keys on the customer computer, and do not send a USB/source kit containing the private key.** The detailed workflow and commercial security limitations are in [LICENSING.md](LICENSING.md).
-
-For a scripted issue, use `npm run license:issue -- --shop "Customer Name" --plan standard --days 365 --install FULL_INSTALLATION_ID --shop-type pharmacy --features pharmacy`. Use `--shop-type` and `--features` to set the package. Pharmacy licences must include the `pharmacy` feature. Before commercial release, test a fresh activation, an incorrect Installation ID, an expired key, and each sold package.
-
-## 8. HTTPS, PWA and the "Connect a phone" page
+## 7. HTTPS, PWA and the "Connect a phone" page
 
 Browsers only allow service workers and **Install app** on a secure context: HTTPS or
 `http://localhost`. A plain `http://192.168.x.x` address still works as a normal web app,
@@ -440,7 +414,6 @@ Delete `/var/lib/shopdesk` and the service user only after you have copied the d
 | `redirect_uri_mismatch` | The URI in Google Cloud Console must match the one shown in the app exactly, including scheme, port and path. |
 | Offsite reconnects every week | Publish the OAuth consent screen so refresh tokens do not expire after 7 days. |
 | Red backup banner | The last successful upload is over 48 hours old. Open **Backup and restore** and check the error; press **Back up now**. |
-| Licence expired | The app is read-only by design. Enter a key in **Settings → Licence & plan**; reports, exports and backups still work. |
 | Install app button missing | PWA installation needs HTTPS (or `localhost`). Set up a reverse proxy and `SHOP_PUBLIC_URL`. |
 | Cannot sign in after moving the PC | The browser session is tied to the address. Open the new LAN address; sign in again. |
 | Forgot owner password | Use a configured recovery code/email, or another administrator. Keep the database file and `offsite.key` backed up. |
@@ -453,5 +426,4 @@ Delete `/var/lib/shopdesk` and the service user only after you have copied the d
   internet without HTTPS and additional access controls.
 - The data folder contains the database, encryption key and backups. Restrict OS
   permissions; never email `offsite.key` with the backups.
-- The licence private key belongs only on the vendor's offline machine.
 - Backups are only useful if you test a restore. Do one restore drill before launch.

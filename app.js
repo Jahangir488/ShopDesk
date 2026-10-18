@@ -19,7 +19,6 @@ const dateKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).pad
 const dateLabel = value => new Date(`${value}T12:00:00`).toLocaleDateString(data.banglaDigits || hasBangla() ? "bn-BD" : (data.locale || "en-BD"), { day: "numeric", month: "short" });
 const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 let data = { shopName: "Shop Desk", workspace: "", contactNumber: "", website: "", email: "", facebookPage: "", whatsappNumber: "", contactAddress: "", shopType: "general", currencyCode: "BDT", locale: "en-BD", taxRate: 0, taxMode: "none", requireCustomer: false, allowDiscounts: true, paymentMethods: ["Cash", "bKash", "Nagad", "Card", "Due"], products: [], sales: [], onlineOrders: [], serviceJobs: [], devices: [], expenses: [], categories: [], permissions: {} };
-const featureEnabled = feature => !Array.isArray(data.licenseFeatures) || data.licenseFeatures.includes(feature);
 const productSellableQty = product => data.shopType === "pharmacy" ? Number(product.available_to_sell || 0) : Number(product.qty || 0);
 let signedInUser = null;
 let toastTimer;
@@ -124,30 +123,6 @@ async function loadLanguage(code) {
   document.body.classList.toggle("lang-bn", language === "bn");
   if (language === "bn") { startI18nObserver(); translateDom(document.body); }
 }
-function renderLicenseBanner() {
-  const license = data.license;
-  const main = document.querySelector(".main");
-  if (!main || !license) return;
-  const show = license.readOnly || (license.state !== "active" && license.warning) || (license.state === "active" && license.warning);
-  let banner = $("#license-banner");
-  if (!show) { banner?.remove(); return; }
-  if (!banner) {
-    banner = document.createElement("div");
-    banner.id = "license-banner";
-    banner.className = "license-banner";
-    banner.setAttribute("role", "status");
-    main.prepend(banner);
-  }
-  const days = Math.max(0, Number(license.daysLeft) || 0);
-  let message;
-  if (license.readOnly) message = `${t("Read-only mode")} — ${t("Billing is paused. Your data, reports, exports and backups are still available.")}`;
-  else if (license.state === "trial") message = `${t("Trial")} · ${t("Trial ends")}: ${days} ${t("days left")}`;
-  else message = `${t("Your licence expires soon")}: ${days} ${t("days left")}`;
-  const canActivate = signedInUser?.role === "admin";
-  banner.innerHTML = `<span class="license-banner-text">${esc(message)}</span>${canActivate
-    ? `<button type="button" class="button primary" data-open-license>${esc(t("Enter licence key"))}</button>`
-    : `<span class="license-banner-hint">${esc(t("Ask an administrator to enter a licence key."))}</span>`}`;
-}
 let backupWarningCheckedAt = 0;
 async function renderBackupWarning() {
   if (!data.permissions?.backups || !document.querySelector(".main")) return;
@@ -165,56 +140,8 @@ async function renderBackupWarning() {
   banner.setAttribute("role", "status");
   banner.innerHTML = `<span>${esc(t("Your last offsite backup is more than 48 hours old. Restore protection before the computer is lost or damaged."))}</span><button type="button" class="button secondary">${esc(t("Open backup settings"))}</button>`;
   banner.querySelector("button").onclick = () => showScreen("backup-tools", true);
-  if (!existing) {
-    const licenseBanner = $("#license-banner");
-    if (licenseBanner) licenseBanner.after(banner); else main.prepend(banner);
-  }
+  if (!existing) main.prepend(banner);
 }
-function openLicenseModal() {
-  const license = data.license || {};
-  const rows = [
-    [t("Plan"), license.plan || "—"],
-    [t("Status"), license.state === "active" ? t("Activated") : license.state === "trial" ? t("Trial") : t("Read-only mode")],
-    [t("Days left"), String(license.daysLeft ?? 0)],
-    [t("Expires"), license.expiresAt ? new Date(license.expiresAt).toLocaleDateString() : "—"],
-    [t("Licensed to"), license.licensedTo || "—"]
-  ];
-  if (license.state === "trial") rows.push([t("Trial ends"), license.trialEndsAt ? new Date(license.trialEndsAt).toLocaleDateString() : "—"]);
-  openModal(t("Licence & plan"), `<div class="license-summary">${rows.map(([label, value]) => `<div><small>${esc(label)}</small><b>${esc(value)}</b></div>`).join("")}</div>
-    <label>${esc(t("Licence key"))}<textarea name="licenseKey" rows="4" autocomplete="off" spellcheck="false" placeholder="${esc(t("Paste the licence key you received"))}"></textarea></label>
-    <p class="form-hint">${esc(t("Send this ID to your supplier when asking for a licence."))} <code id="license-install-id">${esc(license.installId || "")}</code> <button type="button" class="user-action" id="copy-install-id">${esc(t("Copy"))}</button></p>`,
-    async form => {
-      const token = String(form.get("licenseKey") || "").trim();
-      if (!token) throw new Error(t("Paste the licence key you received."));
-      await api("/api/license/activate", { method: "POST", body: JSON.stringify({ token }) });
-      // Activation can change the signed shop type and granted modules, so reload the full state.
-      data = await api("/api/state");
-      render();
-      toast(t("Activated"));
-    });
-  const submit = $("#submit-modal");
-  if (submit) submit.textContent = t("Activate");
-  const copyButton = $("#copy-install-id");
-  if (copyButton) copyButton.onclick = async () => {
-    try {
-      await navigator.clipboard.writeText(license.installId || "");
-      toast(t("Installation ID copied"));
-    } catch {
-      const field = $("#license-install-id");
-      if (field) {
-        const range = document.createRange();
-        range.selectNodeContents(field);
-        const selection = window.getSelection();
-        selection.removeAllRanges();
-        selection.addRange(range);
-      }
-      toast(t("Select the ID and copy it."));
-    }
-  };
-}
-document.addEventListener("click", event => {
-  if (event.target.closest("[data-open-license]")) { event.preventDefault(); openLicenseModal(); }
-});
 
 function refreshTopbarClock() {
   const now = new Date(), locale = data.banglaDigits || hasBangla() ? "bn-BD" : (data.locale || "en-BD");
@@ -293,7 +220,6 @@ async function api(path, options = {}) {
     throw new Error(t("Your session ended. Please sign in again."));
   }
   if (!response.ok) {
-    if (response.status === 402 && payload?.code === "license_expired") { data.license = payload.license; renderLicenseBanner(); }
     throw new Error(tt(payload?.error || "The request could not be completed."));
   }
   return payload;
@@ -785,7 +711,7 @@ const clothColors = ["Black", "White", "Navy Blue", "Maroon", "Olive Green", "Sk
 const clothMaterials = ["100% Cotton", "Linen", "Denim", "Silk", "Georgette", "Twill", "Polyester", "Rayon"];
 
 function clothingFormFields(product = {}) {
-  if (data.shopType !== "clothing" || !featureEnabled("clothing")) return "";
+  if (data.shopType !== "clothing") return "";
   return `<div class="clothing-presets">
     <div class="form-row">
       <label>Brand / Label<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="Brand or designer label"></label>
@@ -809,7 +735,7 @@ function clothingFormFields(product = {}) {
 }
 
 function pharmacyFormFields(product = {}, includeOpeningBatch = false) {
-  if (data.shopType !== "pharmacy" || !featureEnabled("pharmacy")) return "";
+  if (data.shopType !== "pharmacy") return "";
   return `<fieldset class="pharmacy-fields"><legend>Medicine details</legend>
     <div class="form-row"><label>Generic name<input name="genericName" maxlength="160" value="${esc(product.generic_name || "")}" placeholder="Active ingredient"></label><label>Strength<input name="strength" maxlength="80" value="${esc(product.strength || "")}" placeholder="e.g. 500 mg"></label></div>
     <div class="form-row"><label>Dosage form<input name="dosageForm" maxlength="80" value="${esc(product.dosage_form || "")}" placeholder="Tablet, capsule, syrup, cream"></label><label>Manufacturer<input name="manufacturer" maxlength="160" value="${esc(product.manufacturer || "")}" placeholder="Manufacturer / company"></label></div>
@@ -1571,12 +1497,11 @@ function render() {
 
   $("#inventory-nav").classList.toggle("hidden", !permissions.inventory);
   $("#sales-nav").classList.toggle("hidden", !permissions.sales);
-  $("#sale-shortcut").classList.toggle("hidden", data.shopType === "pharmacy" && featureEnabled("pharmacy"));
-  $("#pharmacy-batches-button")?.classList.toggle("hidden", !(permissions.inventory && data.shopType === "pharmacy" && featureEnabled("pharmacy")));
+  $("#pharmacy-batches-button")?.classList.toggle("hidden", !(permissions.inventory && data.shopType === "pharmacy"));
   const onlineOrdersEnabled = !!permissions.online_orders;
   $("#online-orders-nav").classList.toggle("hidden", !onlineOrdersEnabled);
-  const repairsEnabled = data.shopType === "mobile" && permissions.sales && featureEnabled("repairs");
-  const devicesEnabled = data.shopType === "mobile" && permissions.sales && featureEnabled("devices");
+  const repairsEnabled = data.shopType === "mobile" && permissions.sales;
+  const devicesEnabled = data.shopType === "mobile" && permissions.sales;
   $("#repairs-nav").classList.toggle("hidden", !repairsEnabled);
   $("#devices-nav").classList.toggle("hidden", !devicesEnabled);
   $("#expenses-nav").classList.toggle("hidden", !permissions.expenses);
@@ -1603,8 +1528,9 @@ function render() {
   if ($("#edit-workspace")) $("#edit-workspace").title = canSettings ? "Click to edit shop settings and location" : "Workspace location";
   const activeOrders = (data.onlineOrders || []).filter(o => ["Pending", "Confirmed", "Processing", "Shipped"].includes(o.order_status));
   if ($("#nav-online-orders")) $("#nav-online-orders").textContent = onlineOrdersEnabled && activeOrders.length ? activeOrders.length : "";
-  $("#new-sale").classList.toggle("hidden", !permissions.sales || data.requireCustomer || data.taxMode !== "none" || !quickPaymentChoices().length);
-  $("#sale-shortcut").classList.toggle("hidden", !permissions.sales || data.requireCustomer || data.taxMode !== "none" || !quickPaymentChoices().length);
+  const quickSaleHidden = !permissions.sales || data.shopType === "pharmacy" || data.requireCustomer || data.taxMode !== "none" || !quickPaymentChoices().length;
+  $("#new-sale").classList.toggle("hidden", quickSaleHidden);
+  $("#sale-shortcut").classList.toggle("hidden", quickSaleHidden);
   $("#low-count").textContent = permissions.inventory ? `${data.products.filter(item => item.qty <= item.min).length} low` : "—";
 
   const low = data.products.filter(item => item.qty <= item.min);
@@ -1639,12 +1565,11 @@ function render() {
   $("#expenses-table").innerHTML = data.expenses.map(item => `<tr><td>${dateLabel(item.date)}</td><td>${esc(item.category)}</td><td>${esc(item.note || "—")}</td><td><b>${money(item.amount)}</b></td>${canManageExpenseRecords ? `<td><button class="user-action" data-expense-action="edit" data-id="${item.id}">Edit</button><button class="user-action danger" data-expense-action="delete" data-id="${item.id}">Delete</button></td>` : ""}</tr>`).join("");
   $("#expenses-empty").classList.toggle("hidden", data.expenses.length > 0);
   $("#add-product").classList.toggle("hidden", !permissions.inventory);
-  $("#new-sale").classList.toggle("hidden", !permissions.sales || data.requireCustomer || data.taxMode !== "none" || !quickPaymentChoices().length);
-  $("#sale-shortcut").classList.toggle("hidden", !permissions.sales || data.requireCustomer || data.taxMode !== "none" || !quickPaymentChoices().length);
+  $("#new-sale").classList.toggle("hidden", quickSaleHidden);
+  $("#sale-shortcut").classList.toggle("hidden", quickSaleHidden);
   $("#add-expense").classList.toggle("hidden", !permissions.expenses);
   renderReport();
   localizeCurrencyLabels();
-  renderLicenseBanner();
   renderBackupWarning();
   translateDom(document.body);
   if (!repairsEnabled && location.hash === "#repairs") showScreen("dashboard", true);
@@ -1788,17 +1713,13 @@ $("#edit-workspace").onclick = () => {
     return;
   }
   const select = (name, values, current, disabled = false) => `<select name="${name}" ${disabled ? "disabled" : ""}>${values.map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join("")}</select>`;
-  openModal("Shop settings", `<label>Shop name<input name="shopName" value="${esc(data.shopName)}" required></label><label>Workspace / location<input name="workspace" value="${esc(data.workspace)}" required></label><h3>Business contact details for printed orders</h3><div class="form-row"><label>Contact number<input name="contactNumber" maxlength="60" value="${esc(data.contactNumber || "")}"></label><label>WhatsApp number<input name="whatsappNumber" maxlength="60" value="${esc(data.whatsappNumber || "")}"></label></div><div class="form-row"><label>Email address<input name="email" type="email" maxlength="254" value="${esc(data.email || "")}"></label><label>Website<input name="website" maxlength="250" value="${esc(data.website || "")}" placeholder="www.example.com"></label></div><label>Facebook page<input name="facebookPage" maxlength="250" value="${esc(data.facebookPage || "")}" placeholder="Facebook page URL"></label><label>Contact / return address<input name="contactAddress" maxlength="300" value="${esc(data.contactAddress || "")}" placeholder="Office or shop return address"></label><div class="form-row"><label>Shop type${select("shopType", [["general","General retail"],["hardware","Hardware"],["grocery","Grocery"],["clothing","Clothing"],["pharmacy","Pharmacy"],["mobile","Mobile phone sales & service"]], data.shopType, data.shopTypeLocked)}<small class="form-hint">${data.shopTypeLocked ? "Set by your supplier-issued signed licence. Contact the supplier to change your package." : "Your supplier will set the final shop type when issuing your signed licence."}</small></label><label>Currency${select("currencyCode", [["BDT","Bangladeshi taka (BDT)"],["USD","US dollar (USD)"],["EUR","Euro (EUR)"],["GBP","Pound sterling (GBP)"],["INR","Indian rupee (INR)"],["PKR","Pakistani rupee (PKR)"],["NPR","Nepalese rupee (NPR)"],["LKR","Sri Lankan rupee (LKR)"],["AUD","Australian dollar (AUD)"],["CAD","Canadian dollar (CAD)"]], data.currencyCode)}<small class="form-hint">Changing currency changes display only; it does not convert existing amounts.</small></label></div><label>Number and date region${select("locale", [["en-BD","English · Bangladesh"],["bn-BD","বাংলা · বাংলাদেশ"],["en-US","English · United States"],["en-GB","English · United Kingdom"],["en-IN","English · India"],["en-PK","English · Pakistan"],["en-NP","English · Nepal"],["en-LK","English · Sri Lanka"],["en-AU","English · Australia"],["en-CA","English · Canada"]], data.locale)}</label><label>Language<select name="language"><option value="bn" ${data.language === "bn" ? "selected" : ""}>বাংলা</option><option value="en" ${data.language !== "bn" ? "selected" : ""}>English</option></select></label><label class="setting-check"><input type="checkbox" name="banglaDigits" ${data.banglaDigits ? "checked" : ""}> Bangla digits (০১২৩)</label></div><div class="form-row"><label>Tax mode${select("taxMode", [["none","No tax"],["inclusive","Tax included in prices"],["exclusive","Add tax at checkout"]], data.taxMode)}</label><label>Tax rate (%)<input name="taxRate" type="number" min="0" max="100" step="0.01" value="${Number(data.taxRate || 0)}"></label></div><label>Payment methods <small class="form-hint">Separate options with commas. Example: Cash, Card, Mobile pay, Due.</small><input name="paymentMethods" maxlength="400" value="${esc((data.paymentMethods || []).join(", "))}" required></label><label class="setting-check"><input type="checkbox" name="requireCustomer" ${data.requireCustomer ? "checked" : ""}> Require a customer name on every bill</label><label class="setting-check"><input type="checkbox" name="allowDiscounts" ${data.allowDiscounts ? "checked" : ""}> Allow bill discounts</label>`, async form => {
+  openModal("Shop settings", `<label>Shop name<input name="shopName" value="${esc(data.shopName)}" required></label><label>Workspace / location<input name="workspace" value="${esc(data.workspace)}" required></label><h3>Business contact details for printed orders</h3><div class="form-row"><label>Contact number<input name="contactNumber" maxlength="60" value="${esc(data.contactNumber || "")}"></label><label>WhatsApp number<input name="whatsappNumber" maxlength="60" value="${esc(data.whatsappNumber || "")}"></label></div><div class="form-row"><label>Email address<input name="email" type="email" maxlength="254" value="${esc(data.email || "")}"></label><label>Website<input name="website" maxlength="250" value="${esc(data.website || "")}" placeholder="www.example.com"></label></div><label>Facebook page<input name="facebookPage" maxlength="250" value="${esc(data.facebookPage || "")}" placeholder="Facebook page URL"></label><label>Contact / return address<input name="contactAddress" maxlength="300" value="${esc(data.contactAddress || "")}" placeholder="Office or shop return address"></label><div class="form-row"><label>Shop type${select("shopType", [["general","General retail"],["hardware","Hardware"],["grocery","Grocery"],["clothing","Clothing"],["pharmacy","Pharmacy"],["mobile","Mobile phone sales & service"]], data.shopType)}<small class="form-hint">Adds starter categories for this business without changing existing products.</small></label><label>Currency${select("currencyCode", [["BDT","Bangladeshi taka (BDT)"],["USD","US dollar (USD)"],["EUR","Euro (EUR)"],["GBP","Pound sterling (GBP)"],["INR","Indian rupee (INR)"],["PKR","Pakistani rupee (PKR)"],["NPR","Nepalese rupee (NPR)"],["LKR","Sri Lankan rupee (LKR)"],["AUD","Australian dollar (AUD)"],["CAD","Canadian dollar (CAD)"]], data.currencyCode)}<small class="form-hint">Changing currency changes display only; it does not convert existing amounts.</small></label></div><label>Number and date region${select("locale", [["en-BD","English · Bangladesh"],["bn-BD","বাংলা · বাংলাদেশ"],["en-US","English · United States"],["en-GB","English · United Kingdom"],["en-IN","English · India"],["en-PK","English · Pakistan"],["en-NP","English · Nepal"],["en-LK","English · Sri Lanka"],["en-AU","English · Australia"],["en-CA","English · Canada"]], data.locale)}</label><label>Language<select name="language"><option value="bn" ${data.language === "bn" ? "selected" : ""}>বাংলা</option><option value="en" ${data.language !== "bn" ? "selected" : ""}>English</option></select></label><label class="setting-check"><input type="checkbox" name="banglaDigits" ${data.banglaDigits ? "checked" : ""}> Bangla digits (০১২৩)</label></div><div class="form-row"><label>Tax mode${select("taxMode", [["none","No tax"],["inclusive","Tax included in prices"],["exclusive","Add tax at checkout"]], data.taxMode)}</label><label>Tax rate (%)<input name="taxRate" type="number" min="0" max="100" step="0.01" value="${Number(data.taxRate || 0)}"></label></div><label>Payment methods <small class="form-hint">Separate options with commas. Example: Cash, Card, Mobile pay, Due.</small><input name="paymentMethods" maxlength="400" value="${esc((data.paymentMethods || []).join(", "))}" required></label><label class="setting-check"><input type="checkbox" name="requireCustomer" ${data.requireCustomer ? "checked" : ""}> Require a customer name on every bill</label><label class="setting-check"><input type="checkbox" name="allowDiscounts" ${data.allowDiscounts ? "checked" : ""}> Allow bill discounts</label>`, async form => {
     const previousLanguage = data.language, previousDigits = data.banglaDigits;
     data = await api("/api/settings", { method: "PUT", body: JSON.stringify({ shopName: form.get("shopName").trim(), workspace: form.get("workspace").trim(), contactNumber: form.get("contactNumber").trim(), website: form.get("website").trim(), email: form.get("email").trim(), facebookPage: form.get("facebookPage").trim(), whatsappNumber: form.get("whatsappNumber").trim(), contactAddress: form.get("contactAddress").trim(), shopType: form.get("shopType") || data.shopType, currencyCode: form.get("currencyCode"), locale: form.get("locale"), taxMode: form.get("taxMode"), taxRate: Number(form.get("taxRate")), paymentMethods: String(form.get("paymentMethods")).split(",").map(value => value.trim()).filter(Boolean), requireCustomer: form.get("requireCustomer") === "on", allowDiscounts: form.get("allowDiscounts") === "on", language: form.get("language"), banglaDigits: form.get("banglaDigits") === "on" }) });
     if (data.language !== previousLanguage || data.banglaDigits !== previousDigits) { location.reload(); return; }
     render();
     toast("Shop details saved");
   });
-  $("#open-license-settings")?.remove();
-  $("#modal-fields")?.insertAdjacentHTML("beforeend", `<p class="settings-license-row"><button type="button" class="button secondary" id="open-license-settings">Licence & plan</button> <span class="form-hint">${esc(t("Installation ID"))}: <code title="${esc(data.license?.installShort || "")}">${esc(data.license?.installId || "")}</code></span></p>`);
-  const licenseButton = $("#open-license-settings");
-  if (licenseButton) licenseButton.onclick = () => { closeModal(); openLicenseModal(); };
   $("#settings-update-row")?.remove();
   $("#modal-fields")?.insertAdjacentHTML("beforeend", `<p class="settings-update-row" id="settings-update-row"><button type="button" class="button secondary" id="check-updates">${esc(t("Check for updates"))}</button> <span class="form-hint" id="update-status" role="status"></span></p>`);
   const updateButton = $("#check-updates");
@@ -2259,8 +2180,8 @@ $("#products-table").onclick = event => {
   const pharmacy = pharmacyFormFields(product, false);
   openModal("Edit inventory item", `<label>Item name<input name="name" maxlength="200" value="${esc(product.name)}" required></label><div class="form-row"><label>SKU / item code<input name="sku" maxlength="100" value="${esc(product.sku || "")}"></label><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" value="${esc(product.barcode || "")}" placeholder="Scan or enter barcode"></label></div>${clothing}${pharmacy}<div class="form-row"><label>Unit of measure<input name="unit" maxlength="30" value="${esc(product.unit || "piece")}" required></label><label>Category<select name="category">${(data.categories || []).map(item => `<option ${item.name === oldCategory ? "selected" : ""}>${esc(item.name)}</option>`).join("")}</select></label></div><div class="form-row"><label>Selling price per unit (${esc(currencySymbol())})<input name="price" type="number" min="0" step="0.01" value="${Number(product.price)}" required></label><label>Purchase cost per unit (${esc(currencySymbol())})<input name="cost" type="number" min="0" step="0.01" value="${Number(product.cost)}" required></label></div><div class="form-row"><label>Stock quantity (${esc(product.unit || "piece")})<input name="qty" type="number" min="0" step="1" value="${Number(product.qty)}" required></label><label>Low-stock alert at<input name="min" type="number" min="0" step="1" value="${Number(product.min)}" required></label></div><p class="form-hint">Changing stock here sets the new stock total. Past sales keep their recorded cost and unit.</p>`, async form => {
     const details = Object.fromEntries(["name","sku","barcode","unit","category"].map(key => [key, (form.get(key) || "").trim()]));
-    if (data.shopType === "clothing" && featureEnabled("clothing")) for (const key of ["brand", "color", "size", "material"]) details[key] = (form.get(key) || "").trim();
-    if (data.shopType === "pharmacy" && featureEnabled("pharmacy")) Object.assign(details,{genericName:form.get("genericName")||"",strength:form.get("strength")||"",dosageForm:form.get("dosageForm")||"",manufacturer:form.get("manufacturer")||""});
+    if (data.shopType === "clothing") for (const key of ["brand", "color", "size", "material"]) details[key] = (form.get(key) || "").trim();
+    if (data.shopType === "pharmacy") Object.assign(details,{genericName:form.get("genericName")||"",strength:form.get("strength")||"",dosageForm:form.get("dosageForm")||"",manufacturer:form.get("manufacturer")||""});
     for (const key of ["price","cost","qty","min"]) details[key] = Number(form.get(key));
     details.pack_name = (form.get("pack_name") || "").trim(); details.pack_size = Number(form.get("pack_size") || 0);
     data = await api(`/api/products/${id}`, { method: "PATCH", body: JSON.stringify(details) });
@@ -2463,7 +2384,7 @@ function billHtml(bill) {
     const returnNote = returnedQty > 0 ? `<br><small style="color:#a33;font-weight:700">Returned: ${esc(fmtQty(returnedQty, line.unit || "piece"))} · ${money(returnedValue)}</small>` : "";
     return `<tr><td>${esc(line.name)}<br><small>${esc(lineDetail(line))}</small>${returnNote}${line.serials?.length ? `<br><small>IMEI/serial: ${esc(line.serials.join(", "))}${Number(line.warrantyMonths) ? ` · Warranty ${Number(line.warrantyMonths)} months` : " · No warranty"}</small>` : ""}</td><td class="r">${money(line.qty * line.price)}</td></tr>`;
   }).join("");
-  const clothingNotice = data.shopType === "clothing" && featureEnabled("clothing") ? `<p class="c" style="font-size:11px;color:#555">Exchanges accepted within 7 days with original tags and receipt.</p>` : "";
+  const clothingNotice = data.shopType === "clothing" ? `<p class="c" style="font-size:11px;color:#555">Exchanges accepted within 7 days with original tags and receipt.</p>` : "";
   return `<!doctype html><html><head><meta charset="utf-8"><title>${billNo(bill.id)}</title><style>
 @page{margin:6mm}body{font:13px/1.35 system-ui,"Segoe UI",sans-serif;color:#000;width:76mm;margin:0 auto}
 h1{font-size:18px;margin:0;text-align:center}.c{text-align:center}small{color:#333}table{width:100%;border-collapse:collapse}td{padding:4px 0;vertical-align:top}.r{text-align:right;white-space:nowrap}
@@ -3291,7 +3212,7 @@ async function openSupplierHub() {
     const canEdit = canEditSupplierHistory();
     const canRecord = !!data.permissions?.inventory;
     const supplierRows = suppliers.length ? suppliers.map(s => `<tr><td><b>${esc(s.name)}</b>${s.phone ? `<br><small>${esc(s.phone)}</small>` : ""}</td><td>${supplierMoney(s.opening_balance)}</td><td>${supplierMoney(s.total_bought)}</td><td>${supplierMoney(s.total_paid)}</td><td><b>${supplierMoney(s.balance)}</b></td><td>${canRecord && Number(s.balance) > 0 ? `<button type="button" class="user-action" data-supplier-pay="${s.id}" data-supplier-name="${esc(s.name)}" data-balance="${s.balance}">Pay supplier</button>` : "—"}${canEdit ? `<button type="button" class="user-action" data-edit-supplier="${s.id}">Edit</button>` : ""}</td></tr>`).join("") : '<tr><td colspan="6" class="empty">Add a supplier to start recording purchases.</td></tr>';
-    const purchaseRows = purchases.length ? purchases.map(p => `<tr data-history-supplier="${p.supplier_id}"><td><input type="checkbox" aria-label="Select purchase P-${String(p.id).padStart(8, "0")}" data-select-purchase="${p.id}"></td><td>P-${String(p.id).padStart(8, "0")}</td><td>${esc(p.date)}</td><td>${esc(p.supplier_name)}</td><td>${p.line_count} items <button type="button" class="user-action" aria-expanded="false" data-toggle-purchase="${p.id}">View products</button></td><td><b>${supplierMoney(p.total)}</b></td><td>${esc(p.reference || "—")}</td><td>${esc(p.created_by || "")}</td><td><button type="button" class="user-action" data-print-purchase="${p.id}">Print list</button>${canEdit ? `<button type="button" class="user-action" data-edit-purchase="${p.id}">Edit</button>` : ""}</td></tr><tr class="purchase-detail-row hidden" data-history-supplier="${p.supplier_id}" data-purchase-detail="${p.id}"><td colspan="9"><div class="purchase-detail"><b>Products bought from ${esc(p.supplier_name)}</b>${p.items?.length ? `<div class="table-scroll"><table><thead><tr><th>Product</th><th>Quantity</th><th>Unit cost</th><th>Line total</th>${data.shopType === "pharmacy" && featureEnabled("pharmacy") ? "<th>Batch / lot</th><th>Expiry</th>" : ""}</tr></thead><tbody>${p.items.map(item => `<tr><td>${esc(item.productName)}</td><td>${Number(item.qty)} ${esc(item.unit || "piece")}</td><td>${supplierMoney(item.cost)}</td><td>${supplierMoney(Number(item.qty) * Number(item.cost))}</td>${data.shopType === "pharmacy" && featureEnabled("pharmacy") ? `<td>${esc(item.batchNumber || "Not recorded")}</td><td>${esc(item.expiryDate || "Not recorded")}</td>` : ""}</tr>`).join("")}</tbody></table></div>` : `<p class="form-hint">Product details are unavailable for this older purchase.</p>`}</div></td></tr>`).join("") : '<tr><td colspan="9" class="empty">No purchases recorded yet.</td></tr>';
+    const purchaseRows = purchases.length ? purchases.map(p => `<tr data-history-supplier="${p.supplier_id}"><td><input type="checkbox" aria-label="Select purchase P-${String(p.id).padStart(8, "0")}" data-select-purchase="${p.id}"></td><td>P-${String(p.id).padStart(8, "0")}</td><td>${esc(p.date)}</td><td>${esc(p.supplier_name)}</td><td>${p.line_count} items <button type="button" class="user-action" aria-expanded="false" data-toggle-purchase="${p.id}">View products</button></td><td><b>${supplierMoney(p.total)}</b></td><td>${esc(p.reference || "—")}</td><td>${esc(p.created_by || "")}</td><td><button type="button" class="user-action" data-print-purchase="${p.id}">Print list</button>${canEdit ? `<button type="button" class="user-action" data-edit-purchase="${p.id}">Edit</button>` : ""}</td></tr><tr class="purchase-detail-row hidden" data-history-supplier="${p.supplier_id}" data-purchase-detail="${p.id}"><td colspan="9"><div class="purchase-detail"><b>Products bought from ${esc(p.supplier_name)}</b>${p.items?.length ? `<div class="table-scroll"><table><thead><tr><th>Product</th><th>Quantity</th><th>Unit cost</th><th>Line total</th>${data.shopType === "pharmacy" ? "<th>Batch / lot</th><th>Expiry</th>" : ""}</tr></thead><tbody>${p.items.map(item => `<tr><td>${esc(item.productName)}</td><td>${Number(item.qty)} ${esc(item.unit || "piece")}</td><td>${supplierMoney(item.cost)}</td><td>${supplierMoney(Number(item.qty) * Number(item.cost))}</td>${data.shopType === "pharmacy" ? `<td>${esc(item.batchNumber || "Not recorded")}</td><td>${esc(item.expiryDate || "Not recorded")}</td>` : ""}</tr>`).join("")}</tbody></table></div>` : `<p class="form-hint">Product details are unavailable for this older purchase.</p>`}</div></td></tr>`).join("") : '<tr><td colspan="9" class="empty">No purchases recorded yet.</td></tr>';
     const movementRows = movements.length ? movements.map(m => `<tr><td>${esc(m.at)}</td><td>${esc(m.product_name)}</td><td>${esc(m.kind)}</td><td>${Number(m.quantity_change) > 0 ? "+" : ""}${Number(m.quantity_change)} ${esc(m.unit)}</td><td>${Number(m.quantity_after)} ${esc(m.unit)}</td><td>${esc(m.reference || "—")}</td><td>${esc(m.actor || "")}</td></tr>`).join("") : '<tr><td colspan="7" class="empty">New stock movements will appear here.</td></tr>';
     const paymentRows = payments.length ? payments.map(p => `<tr data-history-supplier="${p.supplier_id}"><td><input type="checkbox" aria-label="Select supplier payment ${p.id}" data-select-payment="${p.id}"></td><td>${esc(p.date)}</td><td>${esc(p.supplier_name)}</td><td>${esc(p.method)}</td><td><b>${supplierMoney(p.amount)}</b></td><td>${esc(p.note || "—")}</td><td>${esc(p.received_by || "")}</td><td><button type="button" class="user-action" data-print-payment="${p.id}">Print</button>${canEdit ? `<button type="button" class="user-action" data-edit-payment="${p.id}">Edit</button>` : ""}</td></tr>`).join("") : '<tr><td colspan="8" class="empty">No supplier payments recorded yet.</td></tr>';
     supplierModal("Suppliers & purchases", `<div class="supplier-actions">${canRecord ? `<button type="button" class="button secondary" id="supplier-add">＋ Add supplier</button><button type="button" class="button primary" id="purchase-add" ${suppliers.length ? "" : "disabled"}>＋ Record purchase</button>` : ""}</div>
@@ -3352,8 +3273,8 @@ async function openSupplierHub() {
     dialog.querySelectorAll("[data-print-payment]").forEach(button => button.onclick = () => printRecord("payment", payments.filter(p => p.id === Number(button.dataset.printPayment))));
     dialog.querySelectorAll("[data-edit-purchase]").forEach(button => button.onclick = () => {
       const purchase = purchases.find(p => p.id === Number(button.dataset.editPurchase));
-      if (!(data.shopType === "pharmacy" && featureEnabled("pharmacy")) && purchase.items?.length && purchase.items.every(item => item.productId && data.products.some(product => product.id === item.productId))) return openPurchaseEntry(suppliers, purchase);
-      supplierModal(`Edit purchase P-${String(purchase.id).padStart(8, "0")}`, `<label>Purchase date<input name="date" type="date" value="${esc(purchase.date)}" required></label><label>Invoice / reference<input name="reference" maxlength="100" value="${esc(purchase.reference || "")}"></label><label>Note<input name="note" maxlength="500" value="${esc(purchase.note || "")}"></label><p class="form-hint">${data.shopType === "pharmacy" && featureEnabled("pharmacy") ? "The Pharmacy receipt and its batch/expiry history are preserved. Only date, reference, and note can be corrected here." : "The original item was removed or cannot be matched, so only purchase details can be edited."}</p>`, async form => {
+      if (data.shopType !== "pharmacy" && purchase.items?.length && purchase.items.every(item => item.productId && data.products.some(product => product.id === item.productId))) return openPurchaseEntry(suppliers, purchase);
+      supplierModal(`Edit purchase P-${String(purchase.id).padStart(8, "0")}`, `<label>Purchase date<input name="date" type="date" value="${esc(purchase.date)}" required></label><label>Invoice / reference<input name="reference" maxlength="100" value="${esc(purchase.reference || "")}"></label><label>Note<input name="note" maxlength="500" value="${esc(purchase.note || "")}"></label><p class="form-hint">${data.shopType === "pharmacy" ? "The Pharmacy receipt and its batch/expiry history are preserved. Only date, reference, and note can be corrected here." : "The original item was removed or cannot be matched, so only purchase details can be edited."}</p>`, async form => {
         await api(`/api/purchases/${purchase.id}`, { method: "PATCH", body: JSON.stringify({ date: form.get("date"), reference: form.get("reference"), note: form.get("note") }) });
         toast("Purchase details updated"); await openSupplierHub(); return false;
       });
@@ -3372,7 +3293,7 @@ async function openSupplierHub() {
 function openPurchaseEntry(suppliers, editing = null) {
   const supplierOptions = suppliers.map(s => `<option value="${s.id}">${esc(s.name)} · due ${supplierMoney(s.balance)}</option>`).join("");
   const productOptions = (selectedId = 0) => data.products.map(p => `<option value="${p.id}" data-cost="${Number(p.cost)}" ${p.id === Number(selectedId) ? "selected" : ""}>${esc(productLabel(p))} · ${esc(p.unit || "piece")} · stock ${Number(p.qty)}</option>`).join("");
-  const row = (item = {}) => `<tr><td><select class="purchase-product" required><option value="">Select product</option>${productOptions(item.productId)}</select>${data.shopType === "pharmacy" && featureEnabled("pharmacy") ? `<div class="pharmacy-purchase-batch"><label>Batch / lot<input class="purchase-batch" maxlength="80" value="${esc(item.batchNumber || "")}" required></label><label>Expiry<input class="purchase-expiry" type="date" value="${esc(item.expiryDate || "")}" required></label></div>` : ""}</td><td><input class="purchase-qty" type="number" min="0.001" step="any" value="${Number(item.qty ?? 1)}" required></td><td><input class="purchase-cost" type="number" min="0" step="0.01" value="${Number(item.cost ?? 0)}" required></td><td class="purchase-line-total">৳0.00</td><td><button type="button" class="user-action danger purchase-remove">Remove</button></td></tr>`;
+  const row = (item = {}) => `<tr><td><select class="purchase-product" required><option value="">Select product</option>${productOptions(item.productId)}</select>${data.shopType === "pharmacy" ? `<div class="pharmacy-purchase-batch"><label>Batch / lot<input class="purchase-batch" maxlength="80" value="${esc(item.batchNumber || "")}" required></label><label>Expiry<input class="purchase-expiry" type="date" value="${esc(item.expiryDate || "")}" required></label></div>` : ""}</td><td><input class="purchase-qty" type="number" min="0.001" step="any" value="${Number(item.qty ?? 1)}" required></td><td><input class="purchase-cost" type="number" min="0" step="0.01" value="${Number(item.cost ?? 0)}" required></td><td class="purchase-line-total">৳0.00</td><td><button type="button" class="user-action danger purchase-remove">Remove</button></td></tr>`;
   const lines = editing?.items?.length ? editing.items : [{}];
   const supplierField = editing
     ? `<label>Supplier<input value="${esc(editing.supplier_name)}" disabled></label>`
@@ -3380,10 +3301,10 @@ function openPurchaseEntry(suppliers, editing = null) {
   const paymentFields = editing
     ? `<p class="form-hint">Existing payments are kept in payment history. Stock is adjusted for item changes, and the item's current average cost is recalculated where enough stock remains.</p>`
     : `<div class="form-row supplier-purchase-payment"><label>Paid now (৳)<input name="paid" type="number" min="0" step="0.01" value="0" required></label><label>Payment method<select name="method"><option>Cash</option><option>bKash</option><option>Nagad</option><option>Bank</option><option>Other</option></select></label></div>`;
-  supplierModal(editing ? `Edit purchase P-${String(editing.id).padStart(8, "0")}` : "Record supplier purchase", `${supplierField}<div class="form-row"><label>Purchase date<input name="date" type="date" value="${esc(editing?.date || supplierDate())}" required></label><label>Invoice / reference<input name="reference" maxlength="100" value="${esc(editing?.reference || "")}"></label></div><div class="table-scroll purchase-lines"><table><thead><tr><th>Product ${data.shopType === "pharmacy" && featureEnabled("pharmacy") ? "· Batch / expiry" : ""}</th><th>Quantity</th><th>Cost per unit (৳)</th><th>Line total</th><th></th></tr></thead><tbody id="purchase-lines">${lines.map(row).join("")}</tbody></table></div><button type="button" class="button secondary" id="purchase-line-add">＋ Add item</button>${paymentFields}<label>Note<input name="note" maxlength="500" value="${esc(editing?.note || "")}"></label><div class="bill-total"><span>Purchase total <b id="purchase-total">৳0.00</b></span>${editing ? "" : `<span>Due added <b id="purchase-due">৳0.00</b></span>`}</div>`, async form => {
+  supplierModal(editing ? `Edit purchase P-${String(editing.id).padStart(8, "0")}` : "Record supplier purchase", `${supplierField}<div class="form-row"><label>Purchase date<input name="date" type="date" value="${esc(editing?.date || supplierDate())}" required></label><label>Invoice / reference<input name="reference" maxlength="100" value="${esc(editing?.reference || "")}"></label></div><div class="table-scroll purchase-lines"><table><thead><tr><th>Product ${data.shopType === "pharmacy" ? "· Batch / expiry" : ""}</th><th>Quantity</th><th>Cost per unit (৳)</th><th>Line total</th><th></th></tr></thead><tbody id="purchase-lines">${lines.map(row).join("")}</tbody></table></div><button type="button" class="button secondary" id="purchase-line-add">＋ Add item</button>${paymentFields}<label>Note<input name="note" maxlength="500" value="${esc(editing?.note || "")}"></label><div class="bill-total"><span>Purchase total <b id="purchase-total">৳0.00</b></span>${editing ? "" : `<span>Due added <b id="purchase-due">৳0.00</b></span>`}</div>`, async form => {
     const items = [...document.querySelectorAll("#purchase-lines tr")].map(tr => ({ productId: Number(tr.querySelector(".purchase-product").value), qty: Number(tr.querySelector(".purchase-qty").value), cost: Number(tr.querySelector(".purchase-cost").value), batchNumber: tr.querySelector(".purchase-batch")?.value.trim() || "", expiryDate: tr.querySelector(".purchase-expiry")?.value || "" }));
     if (items.some(i => !i.productId || !(i.qty > 0) || !(i.cost >= 0))) throw new Error("Choose each product and enter a valid quantity and cost.");
-    if (data.shopType === "pharmacy" && featureEnabled("pharmacy") && items.some(i => !i.batchNumber || !i.expiryDate)) throw new Error("Every Pharmacy purchase needs a batch number and expiry date.");
+    if (data.shopType === "pharmacy" && items.some(i => !i.batchNumber || !i.expiryDate)) throw new Error("Every Pharmacy purchase needs a batch number and expiry date.");
     const payload = { date: form.get("date"), reference: form.get("reference"), note: form.get("note"), items };
     const result = await api(editing ? `/api/purchases/${editing.id}` : "/api/purchases", { method: editing ? "PATCH" : "POST", body: JSON.stringify(editing ? payload : { ...payload, supplierId: Number(form.get("supplierId")), paid: Number(form.get("paid")), method: form.get("method") }) });
     data = await api("/api/state"); render(); toast(editing ? "Purchase and stock updated" : `Purchase P-${String(result.id).padStart(8, "0")} saved; stock updated`); await openSupplierHub(); return false;
@@ -3410,7 +3331,7 @@ function openPurchaseEntry(suppliers, editing = null) {
   updateTotals();
 }
 async function openPharmacyBatchManager() {
-  if (data.shopType !== "pharmacy" || !featureEnabled("pharmacy")) return toast("Pharmacy batches require a Pharmacy licence.");
+  if (data.shopType !== "pharmacy") return toast("Pharmacy batches are only available when the shop type is Pharmacy.");
   if (!data.permissions?.inventory) return toast("Inventory access is required to manage medicine batches.");
   try {
     data = await api("/api/state");
