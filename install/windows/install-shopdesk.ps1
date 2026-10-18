@@ -71,6 +71,12 @@ function Test-Folder($folder) {
   $win = [System.IO.Path]::GetFullPath($env:WINDIR).TrimEnd('\')
   if ($folder -eq $win -or $folder.StartsWith($win + '\')) { return "Do not install inside the Windows folder." }
   if ($folder -match '["<>|?*]') { return "The folder name contains a character Windows does not allow." }
+  if ($folder -match '^[A-Za-z]:\\') {
+    try {
+      $drive = [System.IO.DriveInfo]::new([System.IO.Path]::GetPathRoot($folder))
+      if (-not $drive.IsReady) { return "The $($drive.Name.TrimEnd([char]92)) drive is not ready. Connect or unlock it, or choose a ready drive such as C:\ShopDesk." }
+    } catch { return "Could not access the selected drive. Connect or unlock it, or choose a ready drive such as C:\ShopDesk." }
+  }
   return ""
 }
 function Find-ExistingInstall() {
@@ -226,7 +232,7 @@ try {
   Fail "Could not create $AppDir or $DataDir. Check that the drive letter exists and the folder is writable. ($($_.Exception.Message))"
 }
 $robocopy = Start-Process -FilePath "robocopy.exe" -ArgumentList @(
-  "`"$SourceDir`"", "`"$AppDir`"", "/E",
+  "`"$SourceDir`"", "`"$AppDir`"", "/E", "/R:2", "/W:2",
   "/XD", "data", "vendor", "node_modules", ".git", "backups", "releases", "licences", "private", "ShopDesk-Licence-Kit",
   "/XF", "*.sqlite3", "*.sqlite3-shm", "*.sqlite3-wal", "server.log", "licences.csv", "*.pem", '"3 - Build Licence Kit.bat"',
   "/NFL", "/NDL", "/NJH", "/NJS", "/NP"
