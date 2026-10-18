@@ -1056,13 +1056,13 @@ function stateFor(user) {
     paymentMethods: String(settings?.payment_methods || "Cash,bKash,Nagad,Card,Due").split(",").map(value => value.trim()).filter(Boolean),
     permissions: publicUser(user).permissions,
     categories: db.prepare("SELECT id,name FROM categories ORDER BY CASE WHEN name='Other' THEN 1 ELSE 0 END, name COLLATE NOCASE").all(),
-    products: inventory || supplierEditPermission
+    products: (inventory || supplierEditPermission
       ? db.prepare(`SELECT p.*,md.generic_name,md.strength,md.dosage_form,md.manufacturer FROM products p LEFT JOIN medicine_details md ON md.product_id=p.id ORDER BY p.name`).all()
       : (salesPermission || onlineOrdersPermission)
         ? db.prepare(`SELECT p.id,p.name,p.sku,p.barcode,p.price,p.cost,p.qty,p.min,p.icon,p.unit,p.pack_name,p.pack_size,p.category,p.brand,p.color,p.size,p.material,
             md.generic_name,md.strength,md.dosage_form,md.manufacturer
           FROM products p LEFT JOIN medicine_details md ON md.product_id=p.id ORDER BY p.name`).all()
-        : [],
+        : []).map(product => settings?.shop_type === "pharmacy" ? { ...product, available_to_sell: pharmacyAvailableQty(product.id) } : product),
     dues: salesPermission ? duesSummary() : null,
     sales: salesPermission ? db.prepare(`SELECT s.*,
       COALESCE(r.qty,0) AS returned_qty,
@@ -1104,7 +1104,7 @@ const ownerId = () => (db.prepare("SELECT id FROM users WHERE username='jahangir
 const can = (user, permission) => permission === "repair_records"
   ? user.id === ownerId() || user.role === "admin" || Boolean(user.can_repair_records)
   : permission === "online_orders"
-  ? licensedFeatureEnabled("online_orders") && (user.id === ownerId() || Boolean(user.can_online_orders))
+  ? licensedFeatureEnabled("online_orders") && !pharmacyMode() && (user.id === ownerId() || Boolean(user.can_online_orders))
   : permission === "delete_online_orders"
   ? user.id === ownerId() || Boolean(user.can_delete_online_orders)
   : permission === "server_load"
@@ -1306,6 +1306,9 @@ async function handleApi(request, response, url) {
   const user = currentUser(request);
   response.on("finish", () => { if (user && method !== "GET" && response.statusCode < 400) logActivity(user, method, route); });
   if (!user) return json(response, 401, { error: "Please sign in." });
+  if (pharmacyMode() && route.startsWith("/api/online-orders") && method !== "GET") {
+    return json(response,403,{error:"Online-order stock handling is not enabled for Pharmacy yet. Use New bill so all dispensed medicines are linked to their batch and expiry date."});
+  }
   if (method !== "GET" && currentLicense().readOnly && !licenseAllowsMutation(route)) {
     return json(response, 402, {
       error: "The Shop Desk licence has expired. New bills and changes are paused, but your data, reports, exports and backups still work. Enter a licence key in Settings to continue.",
@@ -2599,6 +2602,7 @@ async function handleApi(request, response, url) {
       const order = db.prepare("SELECT * FROM online_orders WHERE id=?").get(id);
       if (!order) throw httpError(404, "Online order not found.");
       const recordingLegacyReturnedOrder = order.order_status === "Returned" && !order.stock_deducted;
+      if (pharmacyMode()) throw httpError(403, "Online-order returns are unavailable for Pharmacy until batch-aware returns are supported. Process pharmacy returns through the Sales history workflow.");
       if (order.order_status !== "Delivered" && !recordingLegacyReturnedOrder) throw httpError(409, "Only delivered orders can be returned.");
       if (!order.stock_deducted && !recordingLegacyReturnedOrder) throw httpError(409, "This order has no deducted inventory to return. Confirm and deliver it before recording a return.");
       const lines = JSON.parse(order.lines || "[]"), seen = new Set(), selected = [];
@@ -2959,7 +2963,7 @@ async function handleApi(request, response, url) {
     catch (error) { return json(response, 500, { error: "A safety backup could not be created, so no data was cleared: " + error.message }); }
     db.exec("BEGIN IMMEDIATE");
     try {
-      for (const table of ["service_job_parts", "service_job_payments", "service_jobs", "online_orders", "sold_devices", "bill_payments", "sales_returns", "sales", "bills", "expenses", "purchase_lines", "purchases", "supplier_payments", "stock_movements", "customers", "suppliers", "products", "categories", "activity_log"]) db.exec(`DELETE FROM ${table}`);
+      for (const table of ["medicine_batch_sales", "medicine_batch_returns", "medicine_batches", "medicine_details", "service_job_parts", "service_job_payments", "service_jobs", "online_orders", "sold_devices", "bill_payments", "sales_returns", "sales", "bills", "expenses", "purchase_lines", "purchases", "supplier_payments", "stock_movements", "customers", "suppliers", "products", "categories", "activity_log"]) db.exec(`DELETE FROM ${table}`);
       db.prepare("DELETE FROM sessions WHERE user_id<>?").run(owner.id);
       db.prepare("DELETE FROM users WHERE id<>?").run(owner.id);
       db.prepare(`INSERT INTO settings(id,shop_name,workspace,shop_type,currency_code,locale,tax_rate,tax_mode,require_customer,allow_discounts,payment_methods,contact_number,website,email,facebook_page,whatsapp_number,contact_address)
