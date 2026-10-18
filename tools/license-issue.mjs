@@ -4,8 +4,9 @@
 //   node tools/license-issue.mjs --shop "Karim Store" --days 30 --install 1a2b3c4d...
 //   node tools/license-issue.mjs --shop "X" --days 365 --out license.txt
 // Options: --plan <name> --seats <n> --install <install-id> --expires <YYYY-MM-DD>
+// Package options: --shop-type general|hardware|grocery|clothing|pharmacy|mobile --features online_orders,pharmacy,clothing,repairs,devices
 import { writeFileSync } from "node:fs";
-import { signLicense, loadPrivateKey } from "../lib/license.mjs";
+import { signLicense, loadPrivateKey, LICENSE_SHOP_TYPES, LICENSE_FEATURES } from "../lib/license.mjs";
 
 const args = process.argv.slice(2);
 const value = flag => {
@@ -17,7 +18,27 @@ const shop = value("--shop");
 const plan = value("--plan") || "standard";
 const seats = Number(value("--seats") || 0);
 const install = value("--install") || "";
+const shopType = value("--shop-type") || "";
+const defaultFeatures = shopType === "pharmacy" ? ["pharmacy"] : shopType === "clothing" ? ["clothing"] : shopType === "mobile" ? ["repairs", "devices"] : [];
+const rawFeatures = value("--features");
+const features = rawFeatures === undefined ? defaultFeatures : rawFeatures.split(",").map(feature => feature.trim()).filter(Boolean);
 const days = Number(value("--days") || 365);
+if (shopType && !LICENSE_SHOP_TYPES.includes(shopType)) {
+  console.error(`--shop-type must be one of: ${LICENSE_SHOP_TYPES.join(", ")}.`);
+  process.exit(1);
+}
+if (shopType && !install) {
+  console.error("--install is required when issuing a shop-specific package. Ask the customer to copy the Installation ID shown in ShopDesk.");
+  process.exit(1);
+}
+if (features.some(feature => !LICENSE_FEATURES.includes(feature)) || new Set(features).size !== features.length) {
+  console.error(`--features may contain unique values from: ${LICENSE_FEATURES.join(", ")}.`);
+  process.exit(1);
+}
+if (shopType === "pharmacy" && !features.includes("pharmacy")) {
+  console.error("A Pharmacy package must include the pharmacy feature.");
+  process.exit(1);
+}
 const expiresFlag = value("--expires");
 
 if (!shop || shop.trim().length < 2) {
@@ -44,6 +65,10 @@ const payload = {
   expires: expires.toISOString()
 };
 if (install) payload.install = install;
+if (shopType) {
+  payload.shopType = shopType;
+  payload.features = features;
+}
 
 const token = signLicense(payload, loadPrivateKey());
 const out = value("--out");
@@ -53,4 +78,4 @@ if (out) {
 } else {
   console.log(token);
 }
-console.error(`\nShop: ${payload.shop}\nPlan: ${payload.plan}\nExpires: ${payload.expires.slice(0, 10)}${install ? `\nInstall: ${install}` : ""}`);
+console.error(`\nShop: ${payload.shop}\nPlan: ${payload.plan}\nExpires: ${payload.expires.slice(0, 10)}${shopType ? `\nShop type: ${shopType}\nModules: ${features.join(", ") || "core"}` : ""}${install ? `\nInstall: ${install}` : ""}`);
