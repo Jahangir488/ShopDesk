@@ -33,10 +33,12 @@ works without internet.
 
 ## 2. Build the kit once, on your own PC
 
-Double-click **`3 - Build Licence Kit.bat`** in the Shop Desk folder. Or from a terminal:
+Double-click **`3 - Build Licence Kit.bat`** in the Shop Desk source folder on your supplier PC. If no signing key exists yet, the one-click file asks you to confirm that you are on the supplier PC and have issued no paid keys, creates the key pair, and opens the public-key file. Send only `lib/license-public.mjs` to Shop Desk support and wait for the matching app update before building or issuing keys. Never send `vendor/license-private-key.pem`.
+
+After the matching public-key app update is installed at the shop, double-click **`3 - Build Licence Kit.bat`** again. It builds `releases/ShopDesk-Licence-Kit`. Or from a terminal:
 
 ```bash
-npm run license:keygen     # only the first time ever
+npm run license:keygen     # only the first time, on the supplier PC
 npm run licence:kit        # creates releases/ShopDesk-Licence-Kit
 ```
 
