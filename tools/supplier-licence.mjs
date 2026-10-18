@@ -33,8 +33,9 @@ try {
   const typeChoice = Number(await ask("Choose shop type number"));
   const shopType = LICENSE_SHOP_TYPES[typeChoice - 1];
   if (!shopType) throw new Error("Choose a valid shop type number.");
-  const install = await ask("Customer Installation ID (copy from ShopDesk → Settings → Licence & plan)");
-  if (install.replace(/[^a-z0-9]/gi, "").length < 12) throw new Error("The full customer Installation ID is required so this key is locked to the intended installation.");
+  const install = await ask("Customer full Installation ID (copy from ShopDesk → Settings → Licence & plan)");
+  const normalizedInstall = install.replace(/[^a-z0-9]/gi, "");
+  if (!/^[a-f0-9]{24}$/i.test(normalizedInstall)) throw new Error("Paste the full 24-character Installation ID, not the short display ID, so this key is locked to the intended installation.");
   const plan = await ask("Plan name", "standard");
   const rawDays = await ask("Licence duration in days", "365");
   const days = Number(rawDays);
@@ -47,8 +48,14 @@ try {
     ...(shopType === "clothing" ? ["clothing"] : []),
     ...(shopType === "mobile" ? ["repairs", "devices"] : [])
   ]);
+  const availableFeatures = LICENSE_FEATURES.filter(feature =>
+    feature === "online_orders" ? shopType !== "pharmacy" :
+    feature === "pharmacy" ? shopType === "pharmacy" :
+    feature === "clothing" ? shopType === "clothing" :
+    ["repairs", "devices"].includes(feature) ? shopType === "mobile" : false
+  );
   const features = [];
-  for (const feature of LICENSE_FEATURES) {
+  for (const feature of availableFeatures) {
     const baseline = defaults.has(feature);
     if (await yesNo(`Enable module: ${feature}`, baseline)) features.push(feature);
   }
@@ -63,7 +70,7 @@ try {
   const outDir = join(root, "releases", "licences");
   mkdirSync(outDir, { recursive: true });
   const safeName = shop.normalize("NFKD").replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-|-$/g, "").slice(0,40) || "shop";
-  const output = join(outDir, `ShopDesk-${safeName}-${issued.toISOString().slice(0,10)}.txt`);
+  const output = join(outDir, `ShopDesk-${safeName}-${issued.toISOString().slice(0,10)}-${payload.id.slice(-8)}.txt`);
   writeFileSync(output, `${token}\n`, { flag: "wx" });
   let copied = false;
   if (process.platform === "win32") {
