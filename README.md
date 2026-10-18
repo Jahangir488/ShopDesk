@@ -23,17 +23,15 @@ on every screen when the last success is more than 48 hours old.
 **Test connection** verifies the Google session without uploading anything.
 Read [INSTALL.md §6](INSTALL.md#6-google-drive-offsite-backups) to create the OAuth client.
 
-## Licence and trial
+## Commercial licence and trial
 
-New installations start with a **30-day trial** (existing databases also get 30 days).
-During the last 7 days a banner reminds you to activate. After expiry the API switches to read-only:
-new bills and other changes are blocked, while viewing data, reports, exports, local
-backups and offsite backups keep working. Enter the Ed25519-signed key in
-**Settings → Licence & plan**. The installation ID shown there must match the key.
-Vendor key generation and issuing are documented in [INSTALL.md §7](INSTALL.md#7-licence-keys-and-trial).
-A portable **USB licence kit** (`npm run licence:kit` → `releases/ShopDesk-Licence-Kit`) lets you
-make a key at the shop PC and unplug without leaving the private key behind — build it with
-**`3 - Build Licence Kit.bat`** and read [LICENSING.md](LICENSING.md).
+ShopDesk uses offline Ed25519-signed keys so **you, the seller, control each customer's package**. A key can assign the customer name, shop type (general, hardware, grocery, clothing, pharmacy, or mobile), enabled modules, Installation ID, and expiry date. Shop type is locked in customer settings; customers need a new supplier-issued key to change it.
+
+For each sale, get the customer's Installation ID from **Settings → Licence & plan**. On your supplier PC, double-click **`4 - Issue Customer Licence.bat`** or run `npm run license:supplier`, select the customer package and duration, then send **only the signed key**. The customer pastes it into **Settings → Licence & plan → Activate**. Never distribute `vendor/license-private-key.pem` or run the supplier wizard on a customer PC. Read [LICENSING.md](LICENSING.md) before issuing paid keys.
+
+The Pharmacy package tracks medicine batches, expiry dates, eligible stock, earliest-expiry-first allocation, supplier receipts, alerts for expired/near-expiry stock, and quarantines customer returns. Existing product quantities are preserved during Pharmacy conversion; old quantities start with unknown expiry and must be verified before sale.
+
+**Commercial note:** offline signatures avoid an activation server, but they cannot remotely revoke keys and cannot fully prevent a determined user from modifying local application code. This repository is public today, so consider restricting production source/builds for commercial distribution. Read the limitations and private-key handling guidance in [LICENSING.md](LICENSING.md).
 
 ## Bangla interface and receipts
 
