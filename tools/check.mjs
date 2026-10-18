@@ -79,6 +79,21 @@ try {
     shopType: "not-a-shop-type", features: ["pharmacy"]
   }, privateKey);
   if (verifyLicense(invalidPackageToken, { installId, publicKey }).valid) fail("unknown shop type must be rejected");
+  const missingFeaturesToken = signLicense({
+    id: "missing-features", shop: "Check Shop", plan: "pro", issued: new Date(), expires, install: installId,
+    shopType: "general"
+  }, privateKey);
+  if (verifyLicense(missingFeaturesToken, { installId, publicKey }).valid) fail("new package keys must include an explicit feature list");
+  const featuresOnlyToken = signLicense({
+    id: "features-only", shop: "Check Shop", plan: "pro", issued: new Date(), expires, install: installId,
+    features: ["online_orders"]
+  }, privateKey);
+  if (verifyLicense(featuresOnlyToken, { installId, publicKey }).valid) fail("module entitlements without a shop type must be rejected");
+  const incompatibleFeatureToken = signLicense({
+    id: "incompatible-features", shop: "Check Shop", plan: "pro", issued: new Date(), expires, install: installId,
+    shopType: "general", features: ["pharmacy"]
+  }, privateKey);
+  if (verifyLicense(incompatibleFeatureToken, { installId, publicKey }).valid) fail("a Pharmacy module must not be assigned to a non-Pharmacy shop");
   const shortToken = signLicense({ id: "short", shop: "Check Shop", plan: "pro", issued: new Date(), expires, install: "da7b-5514-7a78" }, privateKey);
   if (!verifyLicense(shortToken, { installId, publicKey }).valid) fail("short installation ID rejected");
   const status = licenseStatus({ license: { token }, trialStartedAt: new Date(), installId, publicKey });
@@ -96,7 +111,7 @@ try {
   const changed = Buffer.from(JSON.stringify(payload)).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
   const tampered = verifyLicense([prefix, changed, signature].join("."), { installId, publicKey });
   if (tampered.valid) fail("tampered licence accepted");
-  ok("Ed25519 sign/verify, signed shop packages, 30-day trial, install IDs and tamper detection");
+  ok("Ed25519 sign/verify, strict package entitlements, 30-day trial, install IDs and tamper detection");
 } catch (error) { fail("licensing: " + error.message); }
 
 console.log("Release manifest");
@@ -116,6 +131,27 @@ try {
   if (compareVersions("12.0.10", "12.0.9") <= 0 || compareVersions("12.0.0", "12.0.1") >= 0) fail("version comparison");
   ok("Ed25519 release manifest, tamper detection and versions");
 } catch (error) { fail("release manifest: " + error.message); }
+
+console.log("Commercial seller licensing and Pharmacy workflow");
+try {
+  const licenser = readFileSync(join(root, "tools", "supplier-licence.mjs"), "utf8");
+  const oldKit = readFileSync(join(root, "tools", "make-licence-kit.mjs"), "utf8");
+  const oldIssuer = readFileSync(join(root, "tools", "licence-kit.mjs"), "utf8");
+  const server = readFileSync(join(root, "server.mjs"), "utf8");
+  const app = readFileSync(join(root, "app.js"), "utf8");
+  for (const token of ["shopType", "features", "install: normalizedInstall", "signLicense"]) {
+    if (!licenser.includes(token)) fail(`supplier issuer is missing ${token}`);
+  }
+  if (!oldKit.includes("has been retired") || !oldIssuer.includes("disabled")) fail("legacy USB licence kit must be disabled");
+  if (oldKit.includes("privateKeyFile") || oldKit.includes("private/license-private-key.pem")) fail("legacy kit builder must not copy a private key");
+  for (const token of ["medicine_batches", "medicine_batch_sales", "pharmacyAvailableQty", "allocatePharmacyBatchStock", "quarantinePharmacyReturn", "shop_type=?"]) {
+    if (!server.includes(token)) fail(`server is missing Pharmacy/package safeguard: ${token}`);
+  }
+  for (const token of ["openPharmacyBatchManager", "purchase-batch", "genericName", "expiryDate", "productSellableQty"]) {
+    if (!app.includes(token)) fail(`Pharmacy interface is missing ${token}`);
+  }
+  ok("supplier-only key issuing, customer key isolation, package enforcement and Pharmacy batch flows");
+} catch (error) { fail("commercial licensing / Pharmacy workflow: " + error.message); }
 
 console.log("Install files");
 try {
