@@ -1067,9 +1067,9 @@ function stateFor(user) {
     shopTypeLocked: true,
     licenseFeatures: currentLicense().features || null,
     pharmacyBatches: inventory && settings?.shop_type === "pharmacy"
-      ? db.prepare(`SELECT b.*,p.name AS product_name,p.unit AS product_unit,
+      ? db.prepare(`SELECT b.*,p.name AS product_name,p.unit AS product_unit,md.generic_name,md.strength,md.dosage_form,md.manufacturer,
           MAX(0,b.quantity_remaining-b.quantity_quarantined) AS sellable_quantity
-        FROM medicine_batches b JOIN products p ON p.id=b.product_id
+        FROM medicine_batches b JOIN products p ON p.id=b.product_id LEFT JOIN medicine_details md ON md.product_id=p.id
         ORDER BY CASE WHEN b.expiry_date='' THEN 0 ELSE 1 END,b.expiry_date,p.name COLLATE NOCASE,b.id`).all()
       : [],
     currencyCode: settings?.currency_code || "BDT",
