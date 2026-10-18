@@ -186,8 +186,9 @@ function openLicenseModal() {
     async form => {
       const token = String(form.get("licenseKey") || "").trim();
       if (!token) throw new Error(t("Paste the licence key you received."));
-      data.license = await api("/api/license/activate", { method: "POST", body: JSON.stringify({ token }) });
-      renderLicenseBanner();
+      await api("/api/license/activate", { method: "POST", body: JSON.stringify({ token }) });
+      // Activation can change the signed shop type and granted modules, so reload the full state.
+      data = await api("/api/state");
       render();
       toast(t("Activated"));
     });
