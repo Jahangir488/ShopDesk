@@ -598,7 +598,8 @@ function renderInventoryProducts() {
   const products = data.products.filter(item => [item.name, item.sku, item.barcode, item.unit, item.category, item.brand, item.color, item.size, item.material, item.generic_name, item.strength, item.dosage_form, item.manufacturer].some(value => String(value || "").toLocaleLowerCase().includes(query)));
   const canEditItems = signedInUser?.permissions?.records && data.permissions?.inventory;
   const canDeleteItems = canEditItems;
-  $("#products-table").innerHTML = products.map(item => { const details = (data.shopType === "pharmacy" ? [["Generic",item.generic_name],["Strength",item.strength],["Form",item.dosage_form],["Maker",item.manufacturer]] : [["Brand", item.brand], ["Color", item.color], ["Size", item.size], ["Material", item.material]]).filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`).join(" · "); const medexAction = data.shopType === "pharmacy" ? `<button class="user-action" type="button" data-action="medex-product" data-id="${item.id}" data-name="${esc(item.name)}">MedEx info</button>` : ""; return `<tr><td class="product-cell">${esc(item.icon || "📦")} &nbsp;${esc(item.name)}${details ? `<small class="form-hint">${esc(details)}</small>` : ""}</td><td>${esc(item.category || "Other")}</td><td class="sku">${esc(item.sku)}</td><td class="sku">${esc(item.barcode || "—")}</td><td>${esc(item.unit || "piece")}</td><td>${money(item.price)}</td><td class="qty">${data.shopType === "pharmacy" ? `${productSellableQty(item)} sellable / ${Number(item.qty||0)} total` : `${item.qty} ${esc(item.unit || "piece")}`}</td><td class="stock-value" title="${item.qty} × ${money(item.price)} per unit"><b>${money(Number(item.qty) * Number(item.price))}</b></td><td><span class="status ${productSellableQty(item) === 0 ? "out" : productSellableQty(item) <= item.min ? "low" : ""}">${productSellableQty(item) === 0 ? (data.shopType === "pharmacy" && Number(item.qty)>0 ? "No safe-to-sell stock" : "Out of stock") : productSellableQty(item) <= item.min ? "Low stock" : "In stock"}</span></td><td>${medexAction}${canEditItems ? `<button class="user-action" data-action="rename-product" data-id="${item.id}" data-name="${esc(item.name)}" data-unit="${esc(item.unit || "piece")}" data-category="${esc(item.category || "Other")}">Edit item</button>` : ""}${canDeleteItems ? `<button class="user-action danger" data-action="delete-product" data-id="${item.id}" data-name="${esc(productLabel(item))}" data-qty="${item.qty}" data-unit="${esc(item.unit || "piece")}">Delete</button>` : ""}</td></tr>`; }).join("");
+  const sizeFieldLabel = data.shopType === "mobile" ? "Storage" : data.shopType === "hardware" ? "Spec" : data.shopType === "grocery" ? "Pack" : "Size";
+  $("#products-table").innerHTML = products.map(item => { const details = (data.shopType === "pharmacy" ? [["Generic",item.generic_name],["Strength",item.strength],["Form",item.dosage_form],["Maker",item.manufacturer]] : [["Brand", item.brand], ["Color", item.color], [sizeFieldLabel, item.size], ["Material", item.material]]).filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`).join(" · "); const medexAction = data.shopType === "pharmacy" ? `<button class="user-action" type="button" data-action="medex-product" data-id="${item.id}" data-name="${esc(item.name)}">MedEx info</button>` : ""; return `<tr><td class="product-cell">${esc(item.icon || "📦")} &nbsp;${esc(item.name)}${details ? `<small class="form-hint">${esc(details)}</small>` : ""}</td><td>${esc(item.category || "Other")}</td><td class="sku">${esc(item.sku)}</td><td class="sku">${esc(item.barcode || "—")}</td><td>${esc(item.unit || "piece")}</td><td>${money(item.price)}</td><td class="qty">${data.shopType === "pharmacy" ? `${productSellableQty(item)} sellable / ${Number(item.qty||0)} total` : `${item.qty} ${esc(item.unit || "piece")}`}</td><td class="stock-value" title="${item.qty} × ${money(item.price)} per unit"><b>${money(Number(item.qty) * Number(item.price))}</b></td><td><span class="status ${productSellableQty(item) === 0 ? "out" : productSellableQty(item) <= item.min ? "low" : ""}">${productSellableQty(item) === 0 ? (data.shopType === "pharmacy" && Number(item.qty)>0 ? "No safe-to-sell stock" : "Out of stock") : productSellableQty(item) <= item.min ? "Low stock" : "In stock"}</span></td><td>${medexAction}${canEditItems ? `<button class="user-action" data-action="rename-product" data-id="${item.id}" data-name="${esc(item.name)}" data-unit="${esc(item.unit || "piece")}" data-category="${esc(item.category || "Other")}">Edit item</button>` : ""}${canDeleteItems ? `<button class="user-action danger" data-action="delete-product" data-id="${item.id}" data-name="${esc(productLabel(item))}" data-qty="${item.qty}" data-unit="${esc(item.unit || "piece")}">Delete</button>` : ""}</td></tr>`; }).join("");
   $("#products-empty").textContent = data.products.length ? "No inventory items match your search." : "No products yet. Add your first item to get started.";
   $("#products-empty").classList.toggle("hidden", products.length > 0);
   const cost = products.reduce((sum, item) => sum + Number(item.cost || 0) * Number(item.qty || 0), 0);
@@ -711,7 +712,29 @@ const clothColors = ["Black", "White", "Navy Blue", "Maroon", "Olive Green", "Sk
 const clothMaterials = ["100% Cotton", "Linen", "Denim", "Silk", "Georgette", "Twill", "Polyester", "Rayon"];
 
 function clothingFormFields(product = {}) {
-  if (data.shopType !== "clothing") return "";
+  if (data.shopType === "pharmacy") return "";
+  if (data.shopType === "mobile") {
+    return `<div class="form-row">
+      <label>Brand<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="e.g. Samsung, Apple, Xiaomi"></label>
+      <label>Color<input name="color" maxlength="60" value="${esc(product.color || "")}" placeholder="e.g. Black, Titanium Gray"></label>
+      <label>Storage / Variant<input name="size" maxlength="60" value="${esc(product.size || "")}" placeholder="e.g. 8GB/128GB, 256GB"></label>
+    </div>`;
+  }
+  if (data.shopType === "hardware") {
+    return `<div class="form-row">
+      <label>Brand / Maker<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="e.g. BSRM, RFL, Berger"></label>
+      <label>Size / Specification<input name="size" maxlength="60" value="${esc(product.size || "")}" placeholder="e.g. 10mm, 1 inch, 2.5 sq mm"></label>
+    </div>`;
+  }
+  if (data.shopType === "grocery") {
+    return `<div class="form-row">
+      <label>Brand<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="e.g. PRAN, Teer, Radhuni"></label>
+      <label>Pack / Weight<input name="size" maxlength="60" value="${esc(product.size || "")}" placeholder="e.g. 500g, 1L, 5kg"></label>
+    </div>`;
+  }
+  if (data.shopType !== "clothing") {
+    return `<label>Brand (optional)<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="Brand or manufacturer"></label>`;
+  }
   return `<div class="clothing-presets">
     <div class="form-row">
       <label>Brand / Label<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="Brand or designer label"></label>
@@ -1515,7 +1538,10 @@ function render() {
   $("#inventory").classList.toggle("hidden", !permissions.inventory);
   const canBulkInventory = signedInUser?.role === "admin" && signedInUser?.permissions?.records && permissions.inventory;
   $("#bulk-inventory-tools").classList.toggle("hidden", !canBulkInventory);
-  $("#bulk-inventory-help").classList.toggle("hidden", !canBulkInventory);
+  if ($("#bulk-inventory-help")) {
+    $("#bulk-inventory-help").textContent = bulkInventoryTemplateConfig(data.shopType).help;
+    $("#bulk-inventory-help").classList.toggle("hidden", !canBulkInventory);
+  }
   $("#manage-categories").classList.toggle("hidden", !(signedInUser?.permissions?.records && permissions.inventory));
   $("#sales").classList.toggle("hidden", !permissions.sales);
   $("#online-orders")?.classList.toggle("hidden", !onlineOrdersEnabled);
@@ -1584,7 +1610,76 @@ function render() {
 }
 
 const dialog = $("#modal");
-const bulkInventoryHeaders = ["Product ID", "Product Name", "SKU", "Selling Price", "Cost", "Quantity", "Low Stock Alert", "Unit", "Category", "Barcode", "Brand", "Color", "Size", "Material"];
+const bulkInventoryCoreHeaders = ["Product ID", "Product Name", "SKU", "Selling Price", "Cost", "Quantity", "Low Stock Alert", "Unit", "Category", "Barcode"];
+function bulkInventoryTemplateConfig(shopType = data.shopType) {
+  const baseRow = item => [
+    item.id,
+    item.name,
+    item.sku || "",
+    item.price,
+    item.cost,
+    item.qty,
+    item.min,
+    item.unit || "piece",
+    item.category || "Other",
+    item.barcode || ""
+  ];
+  if (shopType === "pharmacy") {
+    const batchesByProduct = new Map();
+    for (const batch of data.pharmacyBatches || []) {
+      if (Number(batch.quantity_remaining) > 0 && !batchesByProduct.has(batch.product_id)) {
+        batchesByProduct.set(batch.product_id, batch);
+      }
+    }
+    return {
+      filename: "pharmacy-inventory-template.csv",
+      headers: [...bulkInventoryCoreHeaders, "Generic Name", "Strength", "Dosage Form", "Manufacturer", "Batch Number", "Expiry Date"],
+      help: "Pharmacy Excel template: includes Generic Name, Strength, Dosage Form, Manufacturer, Batch Number, and Expiry Date (YYYY-MM-DD). Keep Product ID unchanged to update medicine details/prices; leave Product ID blank (with Batch Number & Expiry Date) to add new medicines.",
+      toRow: item => {
+        const batch = batchesByProduct.get(item.id);
+        return [...baseRow(item), item.generic_name || "", item.strength || "", item.dosage_form || "", item.manufacturer || "", batch?.batch_number || "", batch?.expiry_date || ""];
+      }
+    };
+  }
+  if (shopType === "clothing") {
+    return {
+      filename: "clothing-inventory-template.csv",
+      headers: [...bulkInventoryCoreHeaders, "Brand", "Color", "Size", "Material"],
+      help: "Clothing Excel template: includes Brand, Color, Size, and Material for apparel variants. Keep Product ID unchanged for existing items; leave it blank to add a new item.",
+      toRow: item => [...baseRow(item), item.brand || "", item.color || "", item.size || "", item.material || ""]
+    };
+  }
+  if (shopType === "mobile") {
+    return {
+      filename: "mobile-inventory-template.csv",
+      headers: [...bulkInventoryCoreHeaders, "Brand", "Color", "Storage / Variant"],
+      help: "Mobile shop Excel template: includes Brand, Color, and Storage / Variant (e.g. 8GB/128GB) for phones and accessories. Keep Product ID unchanged for existing items; leave it blank to add a new item.",
+      toRow: item => [...baseRow(item), item.brand || "", item.color || "", item.size || ""]
+    };
+  }
+  if (shopType === "hardware") {
+    return {
+      filename: "hardware-inventory-template.csv",
+      headers: [...bulkInventoryCoreHeaders, "Brand", "Size / Spec", "Smaller Unit", "Units per Pack"],
+      help: "Hardware Excel template: includes Brand, Size / Spec (e.g. 10mm, 1 inch), and optional Smaller Unit / Units per Pack (e.g. unit = coil, smaller unit = meter, 305 per coil).",
+      toRow: item => [...baseRow(item), item.brand || "", item.size || "", item.pack_name || "", item.pack_size ? item.pack_size : ""]
+    };
+  }
+  if (shopType === "grocery") {
+    return {
+      filename: "grocery-inventory-template.csv",
+      headers: [...bulkInventoryCoreHeaders, "Brand", "Pack / Weight", "Smaller Unit", "Units per Pack"],
+      help: "Grocery Excel template: includes Brand, Pack / Weight (e.g. 500g, 1L), and optional Smaller Unit / Units per Pack (e.g. unit = sack, smaller unit = kg, 50 per sack).",
+      toRow: item => [...baseRow(item), item.brand || "", item.size || "", item.pack_name || "", item.pack_size ? item.pack_size : ""]
+    };
+  }
+  return {
+    filename: "general-inventory-template.csv",
+    headers: [...bulkInventoryCoreHeaders, "Brand", "Smaller Unit", "Units per Pack"],
+    help: "General retail Excel template: includes Product ID, Name, SKU, Prices, Quantity, Unit, Category, Barcode, Brand, and optional Smaller Unit / Units per Pack.",
+    toRow: item => [...baseRow(item), item.brand || "", item.pack_name || "", item.pack_size ? item.pack_size : ""]
+  };
+}
 function csvCell(value) {
   let text = String(value ?? "");
   if (typeof value === "string" && /^[=+@\- \t\r]/.test(text)) text = "'" + text;
@@ -2191,7 +2286,7 @@ $("#products-table").onclick = event => {
   const pharmacy = pharmacyFormFields(product, false);
   openModal("Edit inventory item", `<label>Item name<input name="name" maxlength="200" value="${esc(product.name)}" required></label><div class="form-row"><label>SKU / item code<input name="sku" maxlength="100" value="${esc(product.sku || "")}"></label><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" value="${esc(product.barcode || "")}" placeholder="Scan or enter barcode"></label></div>${clothing}${pharmacy}<div class="form-row"><label>Unit of measure<input name="unit" maxlength="30" value="${esc(product.unit || "piece")}" required></label><label>Category<select name="category">${(data.categories || []).map(item => `<option ${item.name === oldCategory ? "selected" : ""}>${esc(item.name)}</option>`).join("")}</select></label></div><div class="form-row"><label>Selling price per unit (${esc(currencySymbol())})<input name="price" type="number" min="0" step="0.01" value="${Number(product.price)}" required></label><label>Purchase cost per unit (${esc(currencySymbol())})<input name="cost" type="number" min="0" step="0.01" value="${Number(product.cost)}" required></label></div><div class="form-row"><label>Stock quantity (${esc(product.unit || "piece")})<input name="qty" type="number" min="0" step="1" value="${Number(product.qty)}" required></label><label>Low-stock alert at<input name="min" type="number" min="0" step="1" value="${Number(product.min)}" required></label></div><p class="form-hint">Changing stock here sets the new stock total. Past sales keep their recorded cost and unit.</p>`, async form => {
     const details = Object.fromEntries(["name","sku","barcode","unit","category"].map(key => [key, (form.get(key) || "").trim()]));
-    if (data.shopType === "clothing") for (const key of ["brand", "color", "size", "material"]) details[key] = (form.get(key) || "").trim();
+    if (data.shopType !== "pharmacy") for (const key of ["brand", "color", "size", "material"]) if (form.get(key) !== null) details[key] = (form.get(key) || "").trim();
     if (data.shopType === "pharmacy") Object.assign(details,{genericName:form.get("genericName")||"",strength:form.get("strength")||"",dosageForm:form.get("dosageForm")||"",manufacturer:form.get("manufacturer")||""});
     for (const key of ["price","cost","qty","min"]) details[key] = Number(form.get(key));
     details.pack_name = (form.get("pack_name") || "").trim(); details.pack_size = Number(form.get("pack_size") || 0);
@@ -2278,12 +2373,11 @@ $("#sales-table").onclick = async event => {
   });
 };
 $("#download-inventory-template").onclick = () => {
-  const rows = [bulkInventoryHeaders, ...data.products.map(item => [
-    item.id, item.name, item.sku, item.price, item.cost, item.qty, item.min, item.unit || "piece", item.category || "Other", item.barcode || "", item.brand || "", item.color || "", item.size || "", item.material || ""
-  ])];
+  const config = bulkInventoryTemplateConfig(data.shopType);
+  const rows = [config.headers, ...data.products.map(item => config.toRow(item))];
   const csv = "\uFEFF" + rows.map(row => row.map(csvCell).join(",")).join("\r\n");
-  downloadFile("shop-inventory-template.csv", csv);
-  toast("Excel-compatible inventory template downloaded");
+  downloadFile(config.filename, csv);
+  toast(`Excel template downloaded (${config.filename})`);
 };
 $("#bulk-inventory-file").onchange = async event => {
   const file = event.target.files?.[0];
@@ -2291,29 +2385,60 @@ $("#bulk-inventory-file").onchange = async event => {
   try {
     if (file.size > 400000) throw new Error("Please keep the CSV file under 400 KB.");
     const csvRows = parseCsv((await file.text()).replace(/^\uFEFF/, ""));
-    const headers = csvRows.shift()?.map(value => value.trim().toLowerCase());
-    const expected = bulkInventoryHeaders.map(value => value.toLowerCase());
-    const barcodeHeaders = expected.slice(0, 10), categoryHeaders = expected.slice(0, 9);
-    const unitHeaders = expected.slice(0, 8), legacyHeaders = expected.slice(0, 7);
-    const matches = template => headers?.length === template.length && template.every((header, index) => headers[index] === header);
-    const hasClothing = matches(expected);
-    const hasBarcode = hasClothing || matches(barcodeHeaders);
-    const hasCategory = hasBarcode || matches(categoryHeaders);
-    const hasUnit = matches(unitHeaders);
-    const isLegacyTemplate = matches(legacyHeaders);
-    if (!hasCategory && !hasUnit && !isLegacyTemplate) {
-      throw new Error(`Use the downloaded template without changing its columns: ${bulkInventoryHeaders.join(", ")}.`);
+    const rawHeaders = csvRows.shift();
+    if (!rawHeaders || !rawHeaders.length) throw new Error("The CSV file is empty.");
+    const headers = rawHeaders.map(value => value.trim().toLowerCase());
+    const config = bulkInventoryTemplateConfig(data.shopType);
+    const requiredCore = ["product id", "product name", "sku", "selling price", "cost", "quantity", "low stock alert"];
+    const hasRequiredPrefix = requiredCore.every((col, idx) => headers[idx] === col);
+    if (!hasRequiredPrefix) {
+      throw new Error(`Use the downloaded ${data.shopType || "shop"} template with columns: ${config.headers.join(", ")}.`);
     }
+    const colIndex = new Map(headers.map((name, idx) => [name, idx]));
+    const getCol = (values, ...names) => {
+      for (const name of names) {
+        if (colIndex.has(name)) return (values[colIndex.get(name)] ?? "").trim();
+      }
+      return null;
+    };
     const rows = csvRows.map((values, index) => {
       if (values.length !== headers.length) throw new Error(`CSV row ${index + 2} has ${values.length} columns; expected ${headers.length}.`);
-    const [id, name, sku, price, cost, qty, min, unit, category, barcode, brand, color, size, material] = values.map(value => value.trim());
-      return { id, name, sku, price, cost, qty, min, unit: hasUnit || hasCategory ? unit : "", category: hasCategory ? category : "", barcode: hasBarcode ? barcode : null, brand: hasClothing ? brand : null, color: hasClothing ? color : null, size: hasClothing ? size : null, material: hasClothing ? material : null };
+      const id = getCol(values, "product id") ?? "";
+      const name = getCol(values, "product name") ?? "";
+      const sku = getCol(values, "sku") ?? "";
+      const price = getCol(values, "selling price") ?? "";
+      const cost = getCol(values, "cost") ?? "";
+      const qty = getCol(values, "quantity") ?? "";
+      const min = getCol(values, "low stock alert") ?? "";
+      const unit = getCol(values, "unit") ?? "";
+      const category = getCol(values, "category") ?? "";
+      const barcode = getCol(values, "barcode");
+      const brand = getCol(values, "brand");
+      const color = getCol(values, "color");
+      const size = getCol(values, "size", "storage / variant", "size / spec", "pack / weight");
+      const material = getCol(values, "material");
+      const pack_name = getCol(values, "smaller unit", "pack name");
+      const packSizeRaw = getCol(values, "units per pack", "pack size");
+      const pack_size = packSizeRaw === null ? null : packSizeRaw === "" ? 0 : Number(packSizeRaw);
+      const genericName = getCol(values, "generic name");
+      const strength = getCol(values, "strength");
+      const dosageForm = getCol(values, "dosage form");
+      const manufacturer = getCol(values, "manufacturer");
+      const batchNumber = getCol(values, "batch number");
+      const expiryDate = getCol(values, "expiry date");
+      return {
+        id, name, sku, price, cost, qty, min, unit, category, barcode,
+        brand, color, size, material, pack_name, pack_size,
+        genericName, strength, dosageForm, manufacturer, batchNumber, expiryDate
+      };
     });
     if (!rows.length) throw new Error("The template has no inventory rows to upload.");
     if (rows.length > 500) throw new Error("Upload no more than 500 rows at a time.");
     const updates = rows.filter(row => row.id).length;
     const additions = rows.length - updates;
-    const summary = `${updates} existing item(s) will be updated and ${additions} new item(s) added. Quantity replaces the current stock count. Any new categories in the file will be created automatically. Continue?`;
+    const summary = data.shopType === "pharmacy"
+      ? `${updates} existing medicine(s) will be updated and ${additions} new medicine(s) added. New stock requires a Batch Number and Expiry Date. Missing categories will be created automatically. Continue?`
+      : `${updates} existing item(s) will be updated and ${additions} new item(s) added. Quantity replaces the current stock count. Any new categories in the file will be created automatically. Continue?`;
     if (!confirm(summary)) return;
     data = await api("/api/inventory/bulk", { method: "POST", body: JSON.stringify({ rows }) });
     render();

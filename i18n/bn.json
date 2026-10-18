@@ -846,7 +846,18 @@
     "Same generic in shop": "দোকানে একই জেনেরিক",
     "Search medicine brand or generic name (e.g. Napa, Sergel 20, Paracetamol)...": "ঔষধের ব্র্যান্ড বা জেনেরিক নাম লিখুন (যেমন Napa, Sergel 20, Paracetamol)...",
     "Check medicine details, generic name, strength, dosage form, manufacturer, unit price, indications, and shop stock or same-generic alternatives.": "ঔষধের বিস্তারিত, জেনেরিক নাম, মাত্রা, ফর্ম, প্রস্তুতকারক, ইউনিট মূল্য, নির্দেশনা এবং দোকানের স্টক বা একই জেনেরিকের বিকল্প দেখুন।",
-    "Need medicine details? Search MedEx.com.bd to check or auto-fill generic name, strength, dosage form, and company.": "ঔষধের তথ্য প্রয়োজন? জেনেরিক নাম, মাত্রা, ফর্ম ও কোম্পানি দেখতে বা স্বয়ংক্রিয়ভাবে বসাতে MedEx.com.bd সার্চ করুন।"
+    "Need medicine details? Search MedEx.com.bd to check or auto-fill generic name, strength, dosage form, and company.": "ঔষধের তথ্য প্রয়োজন? জেনেরিক নাম, মাত্রা, ফর্ম ও কোম্পানি দেখতে বা স্বয়ংক্রিয়ভাবে বসাতে MedEx.com.bd সার্চ করুন।",
+    "Storage / Variant": "স্টোরেজ / ভ্যারিয়েন্ট",
+    "Brand / Maker": "ব্র্যান্ড / প্রস্তুতকারক",
+    "Size / Specification": "সাইজ / স্পেসিফিকেশন",
+    "Pack / Weight": "প্যাক / ওজন",
+    "Brand (optional)": "ব্র্যান্ড (ঐচ্ছিক)",
+    "Pharmacy Excel template: includes Generic Name, Strength, Dosage Form, Manufacturer, Batch Number, and Expiry Date (YYYY-MM-DD). Keep Product ID unchanged to update medicine details/prices; leave Product ID blank (with Batch Number & Expiry Date) to add new medicines.": "ফার্মেসি Excel টেমপ্লেট: জেনেরিক নাম, মাত্রা, ফর্ম, প্রস্তুতকারক, ব্যাচ নম্বর ও মেয়াদোত্তীর্ণের তারিখ (YYYY-MM-DD) অন্তর্ভুক্ত। পুরোনো ঔষধের তথ্য/দাম হালনাগাদ করতে Product ID অপরিবর্তিত রাখুন; নতুন ঔষধ যোগ করতে Product ID খালি রাখুন (ব্যাচ নম্বর ও মেয়াদসহ)।",
+    "Clothing Excel template: includes Brand, Color, Size, and Material for apparel variants. Keep Product ID unchanged for existing items; leave it blank to add a new item.": "পোশাকের Excel টেমপ্লেট: ব্র্যান্ড, রঙ, সাইজ ও উপাদান অন্তর্ভুক্ত। পুরোনো পণ্যের Product ID অপরিবর্তিত রাখুন; নতুন পণ্য যোগ করতে খালি রাখুন।",
+    "Mobile shop Excel template: includes Brand, Color, and Storage / Variant (e.g. 8GB/128GB) for phones and accessories. Keep Product ID unchanged for existing items; leave it blank to add a new item.": "মোবাইল শপ Excel টেমপ্লেট: ব্র্যান্ড, রঙ ও স্টোরেজ/ভ্যারিয়েন্ট (যেমন 8GB/128GB) অন্তর্ভুক্ত। পুরোনো পণ্যের Product ID অপরিবর্তিত রাখুন; নতুন পণ্য যোগ করতে খালি রাখুন।",
+    "Hardware Excel template: includes Brand, Size / Spec (e.g. 10mm, 1 inch), and optional Smaller Unit / Units per Pack (e.g. unit = coil, smaller unit = meter, 305 per coil).": "হার্ডওয়্যার Excel টেমপ্লেট: ব্র্যান্ড, সাইজ/স্পেসিফিকেশন (যেমন 10mm, 1 inch) এবং ঐচ্ছিক ছোট একক / প্রতি প্যাকে পরিমাণ অন্তর্ভুক্ত।",
+    "Grocery Excel template: includes Brand, Pack / Weight (e.g. 500g, 1L), and optional Smaller Unit / Units per Pack (e.g. unit = sack, smaller unit = kg, 50 per sack).": "মুদি দোকানের Excel টেমপ্লেট: ব্র্যান্ড, প্যাক/ওজন (যেমন 500g, 1L) এবং ঐচ্ছিক ছোট একক / প্রতি প্যাকে পরিমাণ অন্তর্ভুক্ত।",
+    "General retail Excel template: includes Product ID, Name, SKU, Prices, Quantity, Unit, Category, Barcode, Brand, and optional Smaller Unit / Units per Pack.": "সাধারণ দোকানের Excel টেমপ্লেট: Product ID, নাম, SKU, দাম, পরিমাণ, একক, ক্যাটাগরি, বারকোড, ব্র্যান্ড এবং ঐচ্ছিক ছোট একক / প্রতি প্যাকে পরিমাণ অন্তর্ভুক্ত।"
   },
   "patterns": [
     {

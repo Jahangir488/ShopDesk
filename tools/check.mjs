@@ -85,7 +85,7 @@ try {
   for (const token of ["medicine_batches", "medicine_batch_sales", "pharmacyAvailableQty", "allocatePharmacyBatchStock", "quarantinePharmacyReturn", "/api/pharmacy/medex"]) {
     if (!server.includes(token)) fail(`server is missing Pharmacy safeguard: ${token}`);
   }
-  for (const token of ["openPharmacyBatchManager", "openPharmacyMedicineLookup", "mountMedexLookupBox", "purchase-batch", "genericName", "expiryDate", "productSellableQty"]) {
+  for (const token of ["openPharmacyBatchManager", "openPharmacyMedicineLookup", "mountMedexLookupBox", "bulkInventoryTemplateConfig", "pharmacy-inventory-template.csv", "purchase-batch", "genericName", "expiryDate", "productSellableQty"]) {
     if (!app.includes(token)) fail(`Pharmacy interface is missing ${token}`);
   }
   if (buildMedexSearchUrl("Napa 500") !== "https://medex.com.bd/search?search=Napa+500") fail("MedEx search URL builder failed");

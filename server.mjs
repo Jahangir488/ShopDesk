@@ -1679,7 +1679,6 @@ async function handleApi(request, response, url) {
     return json(response, 200, stateFor(user));
   }
   if (route === "/api/inventory/bulk" && method === "POST") {
-    if (pharmacyMode()) return json(response,409,{error:"Bulk stock replacement is disabled for Pharmacy because it cannot preserve batch and expiry traceability. Receive batches through Batches & expiry or Record supplier purchase."});
     if (user.role !== "admin" || !can(user, "records") || !requirePermission(user, "inventory")) {
       return json(response, 403, { error: "Administrator, edit-record, and inventory access are required for bulk inventory upload." });
     }
@@ -1687,6 +1686,7 @@ async function handleApi(request, response, url) {
     if (!Array.isArray(body.rows) || body.rows.length < 1 || body.rows.length > 500) {
       return json(response, 400, { error: "Upload between 1 and 500 inventory rows." });
     }
+    const isPharmacy = pharmacyMode();
     const seenIds = new Set();
     const rows = body.rows.map((item, index) => {
       if (!item || typeof item !== "object") {
@@ -1699,21 +1699,40 @@ async function handleApi(request, response, url) {
       const unit = typeof item.unit === "string" && item.unit.trim() ? item.unit.trim() : null;
       const category = typeof item.category === "string" && item.category.trim() ? item.category.trim().replace(/\s+/g, " ") : "Other";
       const apparel = Object.fromEntries(["brand", "color", "size", "material"].map(key => [key, item[key] === null || item[key] === undefined ? null : String(item[key]).trim()]));
+      const packName = item.pack_name === null || item.pack_name === undefined ? null : String(item.pack_name).trim();
+      const packSize = item.pack_size === null || item.pack_size === undefined || item.pack_size === "" ? null : Number(item.pack_size);
+      const genericName = item.genericName === null || item.genericName === undefined ? null : String(item.genericName).trim();
+      const strength = item.strength === null || item.strength === undefined ? null : String(item.strength).trim();
+      const dosageForm = item.dosageForm === null || item.dosageForm === undefined ? null : String(item.dosageForm).trim();
+      const manufacturer = item.manufacturer === null || item.manufacturer === undefined ? null : String(item.manufacturer).trim();
+      const batchNumber = item.batchNumber === null || item.batchNumber === undefined ? "" : String(item.batchNumber).trim();
+      const expiryDate = item.expiryDate === null || item.expiryDate === undefined ? "" : String(item.expiryDate).trim();
       const price = Number(item.price);
       const cost = Number(item.cost);
       const qty = Number(item.qty);
       const min = Number(item.min);
+      const hasPack = (packSize || 0) > 0;
       if (item.price === "" || item.price === null || item.cost === "" || item.cost === null ||
           item.qty === "" || item.qty === null || item.min === "" || item.min === null ||
           (id !== null && (!Number.isInteger(id) || id < 1 || seenIds.has(id))) ||
           !name || name.length > 200 || sku.length > 100 || (barcode !== null && barcode.length > 120) || (unit !== null && unit.length > 30) || category.length > 80 ||
           !Number.isFinite(price) || price < 0 || !Number.isFinite(cost) || cost < 0 ||
           Object.values(apparel).some(value => value !== null && value.length > 60) ||
-          !validQty(qty, typeof unit === "string" ? unit : "") || !validQty(min, typeof unit === "string" ? unit : "")) {
+          (packName !== null && packName.length > 20) ||
+          (packSize !== null && (!Number.isFinite(packSize) || packSize < 0 || packSize > 1000000)) ||
+          (genericName !== null && genericName.length > 160) ||
+          (strength !== null && strength.length > 80) ||
+          (dosageForm !== null && dosageForm.length > 80) ||
+          (manufacturer !== null && manufacturer.length > 160) ||
+          batchNumber.length > 80 ||
+          !validQty(qty, typeof unit === "string" ? unit : "", 0, hasPack) || !validQty(min, typeof unit === "string" ? unit : "", 0, hasPack)) {
         throw new Error(`Row ${index + 2} has invalid data. Check the name, SKU, prices, quantity, and low-stock alert.`);
       }
+      if (isPharmacy && id === null && qty > 0 && (!validText(batchNumber) || !validDate(expiryDate))) {
+        throw new Error(`Row ${index + 2} (${name}): new Pharmacy medicines with opening stock require a Batch Number and Expiry Date (YYYY-MM-DD).`);
+      }
       if (id !== null) seenIds.add(id);
-      return { id, name, sku, barcode, price, cost, qty, min, unit, category, ...apparel };
+      return { id, name, sku, barcode, price, cost, qty, min, unit, category, ...apparel, packName, packSize, genericName, strength, dosageForm, manufacturer, batchNumber, expiryDate, rowNumber: index + 2 };
     });
     const incomingBarcodes = new Set();
     for (const item of rows) if (item.barcode) {
@@ -1728,16 +1747,52 @@ async function handleApi(request, response, url) {
       for (const category of new Set(rows.map(item => item.category))) seedCategory(category);
       for (const item of rows) {
         if (item.id === null) {
-          const created = db.prepare("INSERT INTO products(name,sku,price,cost,qty,min,icon,unit,category,barcode,brand,color,size,material) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-            .run(item.name, item.sku, item.price, item.cost, item.qty, item.min, "📦", item.unit || "piece", item.category, item.barcode || "", item.brand || "", item.color || "", item.size || "", item.material || "");
-          if (item.qty > 0) recordStockMovement({ id: Number(created.lastInsertRowid), name: item.name, unit: item.unit || "piece", cost: item.cost }, "opening stock", item.qty, item.qty, user.username, "Bulk inventory upload");
+          const created = db.prepare("INSERT INTO products(name,sku,price,cost,qty,min,icon,unit,category,barcode,brand,color,size,material,pack_name,pack_size) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+            .run(item.name, item.sku, item.price, item.cost, item.qty, item.min, "📦", item.unit || "piece", item.category, item.barcode || "", item.brand || "", item.color || "", item.size || "", item.material || "", item.packName || "", item.packSize || 0);
+          const productId = Number(created.lastInsertRowid);
+          if (isPharmacy || item.genericName !== null || item.strength !== null || item.dosageForm !== null || item.manufacturer !== null) {
+            db.prepare("INSERT INTO medicine_details(product_id,generic_name,strength,dosage_form,manufacturer) VALUES(?,?,?,?,?) ON CONFLICT(product_id) DO UPDATE SET generic_name=excluded.generic_name,strength=excluded.strength,dosage_form=excluded.dosage_form,manufacturer=excluded.manufacturer")
+              .run(productId, item.genericName || "", item.strength || "", item.dosageForm || "", item.manufacturer || "");
+          }
+          if (isPharmacy && item.qty > 0) {
+            db.prepare(`INSERT INTO medicine_batches(product_id,batch_number,expiry_date,quantity_received,quantity_remaining,quantity_quarantined,unit_cost,received_date,created_by)
+              VALUES(?,?,?,?,?,0,?,?,?)`).run(productId, item.batchNumber, item.expiryDate, item.qty, item.qty, item.cost, today(), user.username);
+            recordStockMovement({ id: productId, name: item.name, unit: item.unit || "piece", cost: item.cost }, "opening stock", item.qty, item.qty, user.username, "Bulk inventory upload", `Batch ${item.batchNumber}; expires ${item.expiryDate}.`);
+          } else if (item.qty > 0) {
+            recordStockMovement({ id: productId, name: item.name, unit: item.unit || "piece", cost: item.cost }, "opening stock", item.qty, item.qty, user.username, "Bulk inventory upload");
+          }
         } else {
           const before = db.prepare("SELECT id,name,qty,unit,cost FROM products WHERE id=?").get(item.id);
           if (!before) throw new Error(`Row for Product ID ${item.id} refers to an item that no longer exists. No changes were saved.`);
-          const result = db.prepare("UPDATE products SET name=?,sku=?,price=?,cost=?,qty=?,min=?,unit=COALESCE(?,unit),category=?,barcode=COALESCE(?,barcode),brand=COALESCE(?,brand),color=COALESCE(?,color),size=COALESCE(?,size),material=COALESCE(?,material) WHERE id=?")
-            .run(item.name, item.sku, item.price, item.cost, item.qty, item.min, item.unit, item.category, item.barcode, item.brand, item.color, item.size, item.material, item.id);
+          const qtyDelta = Number((item.qty - before.qty).toFixed(6));
+          if (isPharmacy && Math.abs(qtyDelta) > 1e-6) {
+            if (qtyDelta < 0 || !validText(item.batchNumber) || !validDate(item.expiryDate)) {
+              throw new Error(`Row ${item.rowNumber} (${item.name}): to add stock for an existing Pharmacy medicine via CSV, include a valid Batch Number and Expiry Date (YYYY-MM-DD). To reduce or adjust existing batches, use Batches & expiry.`);
+            }
+          }
+          const result = db.prepare("UPDATE products SET name=?,sku=?,price=?,cost=?,qty=?,min=?,unit=COALESCE(?,unit),category=?,barcode=COALESCE(?,barcode),brand=COALESCE(?,brand),color=COALESCE(?,color),size=COALESCE(?,size),material=COALESCE(?,material),pack_name=COALESCE(?,pack_name),pack_size=COALESCE(?,pack_size) WHERE id=?")
+            .run(item.name, item.sku, item.price, item.cost, item.qty, item.min, item.unit, item.category, item.barcode, item.brand, item.color, item.size, item.material, item.packName, item.packSize, item.id);
           if (!result.changes) throw new Error(`Row for Product ID ${item.id} refers to an item that no longer exists. No changes were saved.`);
-          if (Math.abs(item.qty - before.qty) > 1e-6) recordStockMovement({ ...before, name: item.name, unit: item.unit || before.unit, cost: item.cost }, "manual adjustment", item.qty - before.qty, item.qty, user.username, "Bulk inventory upload", "Quantity set from CSV upload.");
+          if (isPharmacy || item.genericName !== null || item.strength !== null || item.dosageForm !== null || item.manufacturer !== null) {
+            const existingMed = db.prepare("SELECT generic_name,strength,dosage_form,manufacturer FROM medicine_details WHERE product_id=?").get(item.id);
+            db.prepare("INSERT INTO medicine_details(product_id,generic_name,strength,dosage_form,manufacturer) VALUES(?,?,?,?,?) ON CONFLICT(product_id) DO UPDATE SET generic_name=excluded.generic_name,strength=excluded.strength,dosage_form=excluded.dosage_form,manufacturer=excluded.manufacturer")
+              .run(item.id, item.genericName ?? existingMed?.generic_name ?? "", item.strength ?? existingMed?.strength ?? "", item.dosageForm ?? existingMed?.dosage_form ?? "", item.manufacturer ?? existingMed?.manufacturer ?? "");
+          }
+          if (isPharmacy && qtyDelta > 1e-6) {
+            const existingBatch = db.prepare("SELECT id,expiry_date FROM medicine_batches WHERE product_id=? AND batch_number=? COLLATE NOCASE").get(item.id, item.batchNumber);
+            if (existingBatch && existingBatch.expiry_date !== item.expiryDate) {
+              throw new Error(`Row ${item.rowNumber} (${item.name}): batch ${item.batchNumber} already exists with a different expiry date (${existingBatch.expiry_date}).`);
+            }
+            if (existingBatch) {
+              db.prepare("UPDATE medicine_batches SET quantity_received=quantity_received+?,quantity_remaining=quantity_remaining+?,unit_cost=? WHERE id=?").run(qtyDelta, qtyDelta, item.cost, existingBatch.id);
+            } else {
+              db.prepare(`INSERT INTO medicine_batches(product_id,batch_number,expiry_date,quantity_received,quantity_remaining,quantity_quarantined,unit_cost,received_date,created_by)
+                VALUES(?,?,?,?,?,0,?,?,?)`).run(item.id, item.batchNumber, item.expiryDate, qtyDelta, qtyDelta, item.cost, today(), user.username);
+            }
+            recordStockMovement({ ...before, name: item.name, unit: item.unit || before.unit, cost: item.cost }, "pharmacy batch receipt", qtyDelta, item.qty, user.username, item.batchNumber, `Bulk CSV upload · Batch ${item.batchNumber}; expires ${item.expiryDate}.`, item.cost);
+          } else if (Math.abs(qtyDelta) > 1e-6) {
+            recordStockMovement({ ...before, name: item.name, unit: item.unit || before.unit, cost: item.cost }, "manual adjustment", qtyDelta, item.qty, user.username, "Bulk inventory upload", "Quantity set from CSV upload.");
+          }
         }
       }
       db.exec("COMMIT");
