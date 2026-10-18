@@ -2996,12 +2996,14 @@ async function handleApi(request, response, url) {
       for (const table of ["medicine_batch_sales", "medicine_batch_returns", "medicine_batches", "medicine_details", "service_job_parts", "service_job_payments", "service_jobs", "online_orders", "sold_devices", "bill_payments", "sales_returns", "sales", "bills", "expenses", "purchase_lines", "purchases", "supplier_payments", "stock_movements", "customers", "suppliers", "products", "categories", "activity_log"]) db.exec(`DELETE FROM ${table}`);
       db.prepare("DELETE FROM sessions WHERE user_id<>?").run(owner.id);
       db.prepare("DELETE FROM users WHERE id<>?").run(owner.id);
+      const freshShopType = currentLicense().state === "active" && currentLicense().shopType ? currentLicense().shopType : "general";
       db.prepare(`INSERT INTO settings(id,shop_name,workspace,shop_type,currency_code,locale,tax_rate,tax_mode,require_customer,allow_discounts,payment_methods,contact_number,website,email,facebook_page,whatsapp_number,contact_address)
-        VALUES(1,'Shop Desk','Set workspace','general','BDT','en-BD',0,'none',0,1,'Cash,bKash,Nagad,Card,Due','','','','','','')
+        VALUES(1,'Shop Desk','Set workspace',?,'BDT','en-BD',0,'none',0,1,'Cash,bKash,Nagad,Card,Due','','','','','','')
         ON CONFLICT(id) DO UPDATE SET shop_name=excluded.shop_name,workspace=excluded.workspace,shop_type=excluded.shop_type,
         currency_code=excluded.currency_code,locale=excluded.locale,tax_rate=excluded.tax_rate,tax_mode=excluded.tax_mode,
-        require_customer=excluded.require_customer,allow_discounts=excluded.allow_discounts,payment_methods=excluded.payment_methods,contact_number=excluded.contact_number,website=excluded.website,email=excluded.email,facebook_page=excluded.facebook_page,whatsapp_number=excluded.whatsapp_number,contact_address=excluded.contact_address`).run();
-      for (const name of profileCategories.general) seedCategory(name);
+        require_customer=excluded.require_customer,allow_discounts=excluded.allow_discounts,payment_methods=excluded.payment_methods,contact_number=excluded.contact_number,website=excluded.website,email=excluded.email,facebook_page=excluded.facebook_page,whatsapp_number=excluded.whatsapp_number,contact_address=excluded.contact_address`).run(freshShopType);
+      for (const name of (profileCategories[freshShopType] || profileCategories.general)) seedCategory(name);
+      ensurePharmacyDetails();
       db.exec("COMMIT");
       return json(response, 200, { ok: true, backup: backupName });
     } catch (error) {
