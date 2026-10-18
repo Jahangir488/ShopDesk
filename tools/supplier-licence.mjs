@@ -64,7 +64,7 @@ try {
   const payload = {
     id: `lic-${issued.toISOString().slice(0,10)}-${randomUUID().slice(0,8)}`,
     shop, plan, seats: 0, issued: issued.toISOString(), expires: expires.toISOString(),
-    install, shopType, features
+    install: normalizedInstall, shopType, features
   };
   const token = signLicense(payload, loadPrivateKey());
   const outDir = join(root, "releases", "licences");
