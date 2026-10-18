@@ -1,243 +1,79 @@
-# Licence keys — the USB kit
+# ShopDesk Commercial Licensing
 
-Shop Desk is sold as a yearly plan. Every installation starts with a **30-day trial**,
-and a **licence key** unlocks it for 365 days. This page explains how to make those keys
-on a shop PC with the portable **licence kit** on a USB stick — and how to keep the
-private signing key away from customers.
+ShopDesk uses an **offline, digitally signed licence key**. You sell the software and decide the shop type, enabled modules, installation, and expiry date for each customer. Customers only receive the signed key; they must never receive your private signing key or your supplier source folder.
 
-Bengali instructions: [নিচে দেখুন](#বাংলা).
+## How a customer licence works
 
----
+A new installation starts with the existing 30-day trial. A supplier-issued key contains the customer/shop name, licence plan, expiry date, installation ID, shop type, and selected feature entitlements. ShopDesk verifies the Ed25519 signature locally, so day-to-day use does not require internet access.
 
-## 1. How the licence works
+The supplier-signed package is authoritative:
+- Customers can manage their normal shop operations and staff accounts.
+- Shop type is read-only in Shop settings.
+- A package change requires you to issue a new signed licence for that installation.
+- Pharmacy batch and expiry controls are available only to a Pharmacy package.
+- Existing keys without shop-type/module fields remain verifiable for backwards compatibility.
 
-| State | What the shop sees |
-| --- | --- |
-| **Trial** | 30 days from the first start. Everything works. A banner appears in the last 7 days. |
-| **Active** | The key is valid: plan name, shop name and days left in **Shop settings → Licence & plan**. |
-| **Expiring** | Last 7 days before expiry: yellow banner with the date, on every screen. |
-| **Expired / read-only** | New bills and edits are blocked (HTTP 402). Viewing, reports, exports, local backups and Google Drive backups keep working. Enter a new key to unlock. |
+## One-time supplier setup
 
-A key can be:
+Perform all licence issuing on **your own supplier PC**.
 
-- **Locked** (default) — works only on the PC whose **Installation ID** was used when it
-  was made. The Installation ID is shown in **Shop settings → Licence & plan** and can be
-  copied with the **Copy** button. The short form (`abcd-1234-5678`) is enough.
-- **Not locked** (`--no-lock`) — works on any PC. Use it only when you cannot reach the
-  shop PC, for example by sending the key on WhatsApp.
+1. Keep your matching private key at `vendor/license-private-key.pem` (or use the `SHOP_LICENSE_PRIVATE_KEY` environment variable). The key is git-ignored and must never be committed, uploaded to a customer computer, included in a release, or sent to anyone.
+2. Keep an encrypted offline backup of the private key. **Do not generate a replacement key pair if you have already sold licences.** Every app build must trust the corresponding public key in `lib/license-public.mjs`; replacing that public key can invalidate issued customer keys.
+3. Install Node.js 22.13 or newer on the supplier PC and keep the supplier source tree restricted to you.
 
-Keys are **Ed25519-signed** and checked offline. Nothing is sent to a server, so the shop
-works without internet.
+If the private key is missing, stop and check your existing key backup and the public key shipped by the installed ShopDesk version before issuing any licences. Do not create a new key pair just to make the wizard start.
 
----
+## Issue a new customer's licence
 
-## 2. Build the kit once, on your own PC
+### 1. Get the customer's Installation ID
 
-Double-click **`3 - Build Licence Kit.bat`** in the Shop Desk source folder on your supplier PC. If no signing key exists yet, the one-click file asks you to confirm that you are on the supplier PC and have issued no paid keys, creates the key pair, and opens the public-key file. Send only `lib/license-public.mjs` to Shop Desk support and wait for the matching app update before building or issuing keys. Never send `vendor/license-private-key.pem`.
+Install ShopDesk at the customer's shop, open **Settings → Licence & plan**, and copy the full **Installation ID**. Ask the customer to send you that ID and the exact shop/company name for the licence.
 
-After the matching public-key app update is installed at the shop, double-click **`3 - Build Licence Kit.bat`** again. It builds `releases/ShopDesk-Licence-Kit`. Or from a terminal:
+### 2. Run the supplier wizard on your PC
+
+From your own ShopDesk source folder, double-click **`4 - Issue Customer Licence.bat`**, or run:
 
 ```bash
-npm run license:keygen     # only the first time, on the supplier PC
-npm run licence:kit        # creates releases/ShopDesk-Licence-Kit
+npm run license:supplier
 ```
 
-`npm run licence:kit` copies the parts a shop PC needs into
-`releases/ShopDesk-Licence-Kit`:
+The wizard asks you for:
+- Customer/shop name.
+- Licensed shop type: general, hardware, grocery, clothing, pharmacy, or mobile.
+- Customer's full Installation ID.
+- Plan name and licence duration.
+- Optional modules to include, such as online orders, Pharmacy, Clothing, Repairs, and Devices.
 
-```
-ShopDesk-Licence-Kit\
-  Make Licence Key.bat        <- double-click this at the shop
-  Make License Key.bat        <- same, US spelling
-  Licence Kit Check.bat       <- confirms the kit matches the installed app
-  licence-kit.mjs
-  lib\license.mjs
-  lib\license-public.mjs
-  private\license-private-key.pem   <- SECRET, never leave this behind
-  licences\                   <- receipts are written here
-  README.txt
-```
+It writes a `.txt` key into `releases/licences/` and copies the key to the supplier PC's clipboard on Windows. The key is signed using your private key and bound to that customer's Installation ID.
 
-Copy that **whole folder** to an encrypted USB stick (BitLocker To Go on Windows).
-You can also build it straight onto the stick:
+### 3. Send only the signed key
 
-```bash
-npm run licence:kit -- --usb E:\
-```
+Send the one-line key to the customer. Do **not** send `vendor/license-private-key.pem`, the source folder, or a supplier USB kit containing private-key material.
 
-The builder refuses to run if `vendor/license-private-key.pem` is missing, or if the
-private key does not match `lib/license-public.mjs` — keys made with a mismatched key
-would be rejected by every installation.
+The customer opens **Settings → Licence & plan**, pastes the key, and presses **Activate**. The app applies the shop type from the signed key and locks the shop-type selector. If the key is bound to a different Installation ID, ask the customer to copy the correct ID; do not remove installation binding simply to bypass a mismatch.
 
-> If you create a **new** key pair, every Shop Desk installed earlier will reject the new
-> keys. Only do it when starting a fresh deployment, and rebuild the installer too.
+### Renew or change a package
 
----
+Run the same wizard on your supplier PC and issue a new key for the same Installation ID. Select the new duration, shop type, and modules. The customer activates the replacement key inside ShopDesk. A key cannot be revoked instantly while the customer remains offline; set a suitable expiry date and retain your own issuance records.
 
-## 3. At the shop (the usual way)
+## Pharmacy package
 
-1. Plug the USB stick into the shop PC.
-2. Open `X:\ShopDesk-Licence-Kit` and double-click **`Make Licence Key.bat`**.
-3. Answer the prompts:
+A Pharmacy licence must include the **Pharmacy** feature. The Pharmacy workflow tracks batch/lot numbers, expiry dates, received quantities, sellable quantities, supplier purchases, earliest-expiry-first sales allocations, expiry alerts (including the next 90 days), and batch-linked sale records. Expired, unknown-expiry, and customer-returned/quarantined medicine is not eligible for sale. Customer returns are quarantined rather than automatically put back into sellable stock.
 
-   ```
-   Shop name: Karim Hardware
-   Days [365]:        <- press Enter
-   Lock this key to THIS PC only? (Y/n) [Y]:   <- press Enter
-   ```
+When an existing database is first switched to Pharmacy, ShopDesk preserves the old product quantities as `LEGACY-` batches with unknown expiry. Verify each medicine's actual batch and expiry from the package before correcting those entries; the software deliberately does not guess an expiry date.
 
-   The tool finds Shop Desk automatically, reads the **Installation ID** from its
-   database, signs the key, saves a receipt in `licences\`, appends a row to
-   `licences.csv`, copies the key to the clipboard and opens Shop Desk in the browser.
-4. In Shop Desk go to **Shop settings → Licence & plan**, paste with **Ctrl+V** and press
-   **Activate**. The screen shows **Activated** with the expiry date.
-5. Close the app window, then **unplug the USB stick**.
+Pharmacy bills keep their batch audit trail: saved bills cannot be edited or deleted directly. Use a return and create a corrected bill instead. Online-order stock handling and the old quick-sale route are blocked for Pharmacy until they can use the same batch-aware workflow.
 
-Nothing is installed on the shop PC. The only trace is the licence row inside the shop's
-own database — the private key never leaves the stick.
+## What offline signing protects—and what it does not
 
-### If Shop Desk is not found
+The private signing key prevents customers from creating valid licence tokens merely by editing the key text. Keep that private key secret. Because activation is offline, the seller cannot remotely revoke a key before its expiry date.
 
-The kit looks at `%ProgramData%\ShopDesk\install.json` (written by the installer), then
-the `SHOP_INSTALL_DIR` variable, then `C:\ShopDesk` … `Z:\ShopDesk`. If the shop folder
-has a different name, pass it:
+**Commercial distribution caution:** an offline signature is not complete copy-protection against somebody who can modify the application itself. The ShopDesk repository is currently public, and the local server code is inspectable; a technically capable user could modify local licence checks. For commercial sales, keep unreleased source and signing material private, distribute only the intended customer build, and consider a private repository/build pipeline. If you need remote revocation or stronger enforcement, that requires an online entitlement service, which is a different design from the offline-only approach chosen here.
 
-```bat
-Make Licence Key.bat --install "E:\ShopDesk"
-```
+## Key safety checklist
 
-### Check the kit before you travel
-
-```bat
-Licence Kit Check.bat
-```
-
-It verifies the private key, the public key inside the kit and the Shop Desk installed on
-that PC. A `MISMATCH` line means the kit and the installed app come from different
-versions — rebuild the kit from the same folder that built the installer.
-
----
-
-## 4. Renewal
-
-Seven days before expiry a banner appears on every screen. At the shop:
-
-1. Run **`Make Licence Key.bat`** again with the same shop name.
-2. Paste the new key into **Licence & plan** and press **Activate**. It replaces the old
-   key; the new expiry date appears immediately.
-
-If you want the renewal to end on a fixed date (for example, every January), use:
-
-```bat
-Make Licence Key.bat --expires 2027-01-31
-```
-
-`licences.csv` lists every key you have made: date, shop, plan, days, expiry, the
-installation it is locked to, and the receipt file. Open it in Excel to see who expires
-next month.
-
----
-
-## 5. Remote keys (no USB visit)
-
-```bat
-Make Licence Key.bat --no-lock
-```
-
-or answer **n** to the lock question. The key works on any PC, so you can send it to the
-shop. The trade-off: if the shop copies their `data` folder to another PC, that copy is
-also licensed. Use locked keys whenever you can visit.
-
----
-
-## 6. Safety rules
-
-- The kit contains your **private signing key**: anyone who copies it can make unlimited
-  licence keys. Keep the stick with you or locked away, and keep a second, offline backup.
-- **Never** put the kit inside a Shop Desk folder, a release zip or a Git repository.
-  The tool refuses to run when it finds itself inside an installation folder.
-- Never email or WhatsApp the folder. Send only the `SD1.…` key text.
-- The Windows and Linux installers skip `vendor\`, `private\`, `licences\`, `*.pem` and
-  `licences.csv`, so a build folder can be installed without copying the secret.
-- If the stick is lost: stop using that key pair. Run `npm run license:keygen` on your PC,
-  rebuild the installer and the kit, and reissue keys — old keys will no longer validate.
-
----
-
-## 7. Commands
-
-```bat
-Make Licence Key.bat                         ask for the shop name, 365 days, locked
-Make Licence Key.bat --no-lock               key that works on any PC
-Make Licence Key.bat --days 365              length in days (default 365)
-Make Licence Key.bat --expires 2027-01-31    renew to a fixed date
-Make Licence Key.bat --install-id 1234-abcd-5678
-Make Licence Key.bat --install "E:\ShopDesk" find the shop folder by hand
-Make Licence Key.bat --list                  show every key issued from this kit
-Make Licence Key.bat --check                 check the kit and the installed app
-Make Licence Key.bat --shop "X" --yes        no prompts (scripts)
-```
-
-Exit codes: `0` success, `1` missing input or key file, `2` wrong kit for this PC
-(kit inside the installation, different public key, private key does not match).
-
----
-
-## বাংলা
-
-### লাইসেন্স কী কীভাবে কাজ করে
-
-- নতুন ইনস্টলে **৩০ দিনের ট্রায়াল**। শেষ ৭ দিনে সতর্কবার্তা দেখায়।
-- মেয়াদ শেষে অ্যাপ **রিড-অনলি**: নতুন বিল বা পরিবর্তন বন্ধ, কিন্তু দেখা, রিপোর্ট, এক্সপোর্ট
-  ও ব্যাকআপ চলতে থাকে। নতুন কী দিলেই আবার চালু।
-- কী **Ed25519** দিয়ে সাইন করা, ইন্টারনেট ছাড়াই যাচাই হয়।
-- **লক করা কী** (ডিফল্ট) শুধু ওই পিসিতে চলে, Installation ID মিললে। **আনলকড** কী যেকোনো
-  পিসিতে চলে — দোকানে যেতে না পারলে ব্যবহার করুন।
-
-### ইউএসবি কিট বানানো (নিজের পিসিতে, একবার)
-
-```bash
-npm run license:keygen     # জীবনে একবারই
-npm run licence:kit        # releases\ShopDesk-Licence-Kit তৈরি হয়
-```
-
-পুরো ফোল্ডারটি একটি **এনক্রিপ্ট করা ইউএসবি**-তে কপি করুন, বা সরাসরি:
-
-```bash
-npm run licence:kit -- --usb E:\
-```
-
-### দোকানে কী করতে হবে
-
-১. ইউএসবি লাগান।
-২. `ShopDesk-Licence-Kit` খুলে **`Make Licence Key.bat`** ডাবল-ক্লিক করুন।
-৩. দোকানের নাম লিখুন → Enter (৩৬৫ দিন) → Lock প্রশ্নে Enter (Y)।
-৪. কী নিজেই কপি হবে এবং Shop Desk ব্রাউজারে খুলবে।
-৫. **Shop settings → Licence & plan**-এ Ctrl+V দিয়ে পেস্ট করে **Activate** চাপুন।
-৬. অ্যাপে **Activated** দেখলে ইউএসবি খুলে ফেলুন। দোকানের পিসিতে কিছু রাখবেন না।
-
-### নবায়ন
-
-মেয়াদ শেষের ৭ দিন আগে ব্যানার দেখাবে। দোকানে গিয়ে একইভাবে নতুন কী বানিয়ে পেস্ট করুন —
-পুরোনো কী স্বয়ংক্রিয়ভাবে বদলে যাবে। নির্দিষ্ট তারিখে শেষ করতে চাইলে:
-`Make Licence Key.bat --expires 2027-01-31`
-
-### নিরাপত্তা
-
-- কিটে আপনার **প্রাইভেট কী** আছে। এটি হাতে পেলে যে কেউ যত খুশি লাইসেন্স বানাতে পারবে।
-  ইউএসবি সবসময় নিজের কাছে রাখুন, একটি ব্যাকআপ রাখুন।
-- কিট **কখনো** Shop Desk ফোল্ডার, রিলিজ জিপ বা গিটে রাখবেন না। টুল নিজেই এটি আটকে দেয়।
-- শুধু `SD1.…` কী-টেক্সট পাঠান, পুরো ফোল্ডার নয়।
-- ইউএসবি হারালে `npm run license:keygen` দিয়ে নতুন কী-পেয়ার বানিয়ে ইনস্টলার ও কিট
-  আবার বানান, তারপর সব দোকানে নতুন কী দিন।
-
-### সমস্যা হলে
-
-| যা দেখছেন | সমাধান |
-| --- | --- |
-| `Shop Desk was not found` | `Make Licence Key.bat --install "E:\ShopDesk"` |
-| `No Installation ID found` | আগে একবার Shop Desk চালু করুন, তারপর আবার চেষ্টা করুন |
-| `MISMATCH` / `different public key` | ইনস্টলার ও কিট একই ফোল্ডার থেকে বানিয়ে আবার চেষ্টা করুন |
-| `private key does not match` | `private\license-private-key.pem` ভুল বা পুরোনো — সঠিক কী দিন |
-| `inside the Shop Desk installation folder` | কিট ইউএসবি-তে সরান, দোকানের ফোল্ডারে রাখবেন না |
-| কী পেস্ট করার পর `different installation` | কী অন্য পিসির জন্য — Installation ID মিলিয়ে নতুন কী বানান |
+- [ ] Private key stays only on your supplier PC and in an encrypted offline backup.
+- [ ] Every paid licence is created by you, with the exact customer ID and package.
+- [ ] Only the signed key is sent to a customer.
+- [ ] New builds continue to trust the same public key unless you deliberately plan a key migration.
+- [ ] Test a new key, a wrong-installation key, an expired key, and each customer package before commercial release.
