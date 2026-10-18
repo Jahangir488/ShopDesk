@@ -829,8 +829,24 @@
     "Quantity": "পরিমাণ",
     "Edit the downloaded CSV in Excel and save it as CSV UTF-8. Keep Product ID unchanged for existing items; leave it blank to add a new item. Include unit, category, optional barcode, and clothing brand/color/size/material. Missing categories are created automatically during upload.": "ডাউনলোড করা CSV ফাইলটি Excel-এ সম্পাদনা করে CSV UTF-8 হিসেবে সংরক্ষণ করুন। পুরোনো আইটেমের Product ID অপরিবর্তিত রাখুন; নতুন আইটেম যোগ করতে এটি খালি রাখুন। একক, ক্যাটাগরি, ঐচ্ছিক বারকোড এবং পোশাকের ব্র্যান্ড/রঙ/সাইজ/উপাদান অন্তর্ভুক্ত করুন। অনুপস্থিত ক্যাটাগরি আপলোডের সময় স্বয়ংক্রিয়ভাবে তৈরি হবে।",
     "Copy": "কপি",
-    "Installation ID copied": "ইনস্টলেশন আইডি কপি হয়েছে",
-    "Select the ID and copy it.": "আইডিটি নির্বাচন করে কপি করুন।"
+    "Medicine info (MedEx)": "ঔষধের তথ্য (MedEx)",
+    "Medicine info · MedEx lookup": "ঔষধের তথ্য · MedEx সার্চ",
+    "MedEx info": "MedEx তথ্য",
+    "Check MedEx.com.bd": "MedEx.com.bd দেখুন",
+    "Search medicine info": "ঔষধের তথ্য খুঁজুন",
+    "Open medex.com.bd/search ↗": "medex.com.bd/search খুলুন ↗",
+    "Open on MedEx ↗": "MedEx-এ খুলুন ↗",
+    "Open MedEx ↗": "MedEx খুলুন ↗",
+    "Check on MedEx": "MedEx-এ দেখুন",
+    "Check medicine info & price": "ঔষধের বিস্তারিত ও দাম দেখুন",
+    "Fill product fields": "ফর্মে তথ্য বসান",
+    "Use these details in product form": "এই তথ্য ফর্মে ব্যবহার করুন",
+    "View full page on MedEx.com.bd ↗": "MedEx.com.bd-এ সম্পূর্ণ পাতা দেখুন ↗",
+    "＋ Add to bill": "＋ বিলে যোগ করুন",
+    "Same generic in shop": "দোকানে একই জেনেরিক",
+    "Search medicine brand or generic name (e.g. Napa, Sergel 20, Paracetamol)...": "ঔষধের ব্র্যান্ড বা জেনেরিক নাম লিখুন (যেমন Napa, Sergel 20, Paracetamol)...",
+    "Check medicine details, generic name, strength, dosage form, manufacturer, unit price, indications, and shop stock or same-generic alternatives.": "ঔষধের বিস্তারিত, জেনেরিক নাম, মাত্রা, ফর্ম, প্রস্তুতকারক, ইউনিট মূল্য, নির্দেশনা এবং দোকানের স্টক বা একই জেনেরিকের বিকল্প দেখুন।",
+    "Need medicine details? Search MedEx.com.bd to check or auto-fill generic name, strength, dosage form, and company.": "ঔষধের তথ্য প্রয়োজন? জেনেরিক নাম, মাত্রা, ফর্ম ও কোম্পানি দেখতে বা স্বয়ংক্রিয়ভাবে বসাতে MedEx.com.bd সার্চ করুন।"
   },
   "patterns": [
     {

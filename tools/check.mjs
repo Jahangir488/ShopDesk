@@ -7,6 +7,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { encodeQr, qrSvg } from "../lib/qr.mjs";
+import { buildMedexSearchUrl, getMedexCatalogStats, normalizeMedexUrl, parseMedexDetailsHtml, parseMedexSearchHtml, searchLocalMedexCatalog } from "../lib/medex.mjs";
 import { decryptBuffer, encryptBuffer } from "../lib/offsite.mjs";
 import { compareVersions, parseManifest, signManifest, verifyManifest } from "../lib/release.mjs";
 
@@ -81,13 +82,31 @@ try {
   for (const forbidden of ["/api/license", "licenseStatus", "verifyLicense", "signLicense", "licensedFeatureEnabled", "shopTypeLocked"]) {
     if (server.includes(forbidden) || app.includes(forbidden)) fail(`licensing token still present: ${forbidden}`);
   }
-  for (const token of ["medicine_batches", "medicine_batch_sales", "pharmacyAvailableQty", "allocatePharmacyBatchStock", "quarantinePharmacyReturn"]) {
+  for (const token of ["medicine_batches", "medicine_batch_sales", "pharmacyAvailableQty", "allocatePharmacyBatchStock", "quarantinePharmacyReturn", "/api/pharmacy/medex"]) {
     if (!server.includes(token)) fail(`server is missing Pharmacy safeguard: ${token}`);
   }
-  for (const token of ["openPharmacyBatchManager", "purchase-batch", "genericName", "expiryDate", "productSellableQty"]) {
+  for (const token of ["openPharmacyBatchManager", "openPharmacyMedicineLookup", "mountMedexLookupBox", "purchase-batch", "genericName", "expiryDate", "productSellableQty"]) {
     if (!app.includes(token)) fail(`Pharmacy interface is missing ${token}`);
   }
-  ok("licensing removed, shop types unlocked and Pharmacy batch flows intact");
+  if (buildMedexSearchUrl("Napa 500") !== "https://medex.com.bd/search?search=Napa+500") fail("MedEx search URL builder failed");
+  if (normalizeMedexUrl("https://evil.example.com/brands/1") !== "") fail("MedEx URL validation accepted non-MedEx host");
+  const sampleSearch = parseMedexSearchHtml(`<a href="https://medex.com.bd/brands/1019/napa-500-mg-tablet" class="hoverable-block"><div class="col-xs-12 data-row-top">Napa <span class="inline-dosage-form">Tablet</span></div><div class="col-xs-12 data-row-strength"><span class="grey-ligten">500 mg</span></div><div class="col-xs-12">Paracetamol</div><div class="col-xs-12 data-row-company">Beximco Pharmaceuticals Ltd.</div></a>`);
+  if (sampleSearch.length !== 1 || sampleSearch[0].name !== "Napa" || sampleSearch[0].dosageForm !== "Tablet" || sampleSearch[0].strength !== "500 mg" || sampleSearch[0].genericName !== "Paracetamol") {
+    fail("MedEx search HTML parser failed");
+  }
+  const sampleDetails = parseMedexDetailsHtml(`<h1>Napa <small class="h1-subtitle">Tablet</small></h1><div title="Generic Name">Paracetamol</div><div title="Strength">500 mg</div><div title="Manufactured by">Beximco Pharmaceuticals Ltd.</div><div class="package-container">Unit Price: ৳ 1.20</div><h3 class="ac-header">Indications</h3><div class="ac-body">Fever and mild to moderate pain.</div>`, "https://medex.com.bd/brands/1019/napa-500-mg-tablet");
+  if (!sampleDetails || sampleDetails.unitPrice !== 1.2 || sampleDetails.sections.length !== 1 || sampleDetails.sections[0].title !== "Indications") {
+    fail("MedEx details HTML parser failed");
+  }
+  const catalogStats = getMedexCatalogStats();
+  if (catalogStats.totalMedicines < 19000 || catalogStats.totalMonographs < 100) {
+    fail(`bundled MedEx catalog incomplete: ${JSON.stringify(catalogStats)}`);
+  }
+  const napaResults = searchLocalMedexCatalog("Napa");
+  if (!napaResults.some(item => item.name === "Napa" && item.genericName === "Paracetamol")) {
+    fail("bundled MedEx catalog search for Napa failed");
+  }
+  ok(`licensing removed, shop types unlocked, Pharmacy batch flows and MedEx catalog (${catalogStats.totalMedicines} medicines) intact`);
 } catch (error) { fail("Pharmacy workflow: " + error.message); }
 
 console.log("Install files");

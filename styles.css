@@ -683,4 +683,22 @@ body.lang-bn th::first-letter,body.lang-bn .nav-caption::first-letter,body.lang-
 .pharmacy-purchase-batch{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;min-width:250px}
 .pharmacy-purchase-batch label{font-size:11px;color:var(--muted)}
 .pharmacy-purchase-batch input{width:100%;min-width:0;padding:6px;font-size:12px}
-@media(max-width:700px){.pharmacy-batch-toolbar{display:grid}.pharmacy-expiry-summary{grid-template-columns:1fr}.pharmacy-purchase-batch{grid-template-columns:1fr}}
+.medex-search-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 10px}
+.medex-search-bar input[type=search],.medex-search-bar input[type=text]{flex:1 1 240px;min-height:42px;margin:0;padding:8px 12px;border:1px solid #cfd5da;border-radius:8px;font:inherit}
+.medex-search-bar .button{white-space:nowrap;text-decoration:none}
+.medex-section{margin-top:14px;border:1px solid var(--line);border-radius:10px;padding:12px;background:#fbfcfc}
+.medex-section h3{margin:0 0 8px;font-size:15px;color:var(--ink);display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.medex-list{display:grid;gap:8px;max-height:320px;overflow-y:auto;padding-right:2px}
+.medex-card{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:#fff;display:grid;gap:6px}
+.medex-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap}
+.medex-card-title{font-weight:700;color:var(--ink);font-size:15px}
+.medex-badge{display:inline-block;padding:2px 7px;border-radius:999px;background:#eef3f2;color:#17433d;font-size:11px;font-weight:700;margin-left:6px}
+.medex-meta{color:var(--muted);font-size:13px;line-height:1.4}
+.medex-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:2px}
+.medex-actions .user-action{text-decoration:none;margin:0}
+.medex-details-box{margin-top:8px;padding:10px 12px;border-left:3px solid var(--accent,#56d378);background:#f6f9f8;border-radius:6px;display:grid;gap:8px;font-size:13px;line-height:1.5}
+.medex-details-section strong{display:block;color:#17433d;font-size:12px;text-transform:uppercase;letter-spacing:.03em;margin-bottom:2px}
+.medex-details-section p{margin:0;white-space:pre-line;color:var(--ink)}
+.medex-inline-drawer{margin:10px 0 12px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#f8fafb}
+.bill-search-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px}
+@media(max-width:700px){.pharmacy-batch-toolbar{display:grid}.pharmacy-expiry-summary{grid-template-columns:1fr}.pharmacy-purchase-batch{grid-template-columns:1fr}.medex-search-bar .button{flex:1 1 auto;justify-content:center;text-align:center}}

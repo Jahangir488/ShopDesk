@@ -7,6 +7,7 @@ import { createHash, randomBytes, randomInt, scryptSync, timingSafeEqual } from 
 import { connect as tlsConnect } from "node:tls";
 import { cpus as systemCpus, freemem, networkInterfaces, totalmem } from "node:os";
 import { DEFAULT_FOLDER_NAME, DEFAULT_KEEP, GoogleDriveBackup, decryptSecret, encryptSecret, loadBackupKeyMaterial, prepareOffsitePayload } from "./lib/offsite.mjs";
+import { buildMedexSearchUrl, fetchMedexDetails, fetchMedexSearch, normalizeMedexUrl } from "./lib/medex.mjs";
 import { qrSvg } from "./lib/qr.mjs";
 import { compareVersions, parseManifest } from "./lib/release.mjs";
 
@@ -1424,6 +1425,29 @@ async function handleApi(request, response, url) {
     addProfileCategories(body.shopType);
     ensurePharmacyDetails();
     return json(response, 200, stateFor(user));
+  }
+
+  if (route === "/api/pharmacy/medex" && method === "GET") {
+    if (!pharmacyMode()) return json(response, 403, { error: "Medicine info lookup is only available when the shop type is Pharmacy." });
+    if (!requirePermission(user, "sales") && !requirePermission(user, "inventory")) {
+      return json(response, 403, { error: "Sales or inventory access is required to check medicine information." });
+    }
+    const query = String(url.searchParams.get("q") || "").trim().slice(0, 120);
+    if (!query) return json(response, 200, { ok: true, query: "", searchUrl: buildMedexSearchUrl(""), results: [], message: "" });
+    const customDbPath = process.env.SHOP_MEDEX_DB || join(dataDir, "medex.db");
+    const payload = await fetchMedexSearch(query, { customDbPath });
+    return json(response, 200, { ...payload, query });
+  }
+  if (route === "/api/pharmacy/medex/details" && method === "GET") {
+    if (!pharmacyMode()) return json(response, 403, { error: "Medicine info lookup is only available when the shop type is Pharmacy." });
+    if (!requirePermission(user, "sales") && !requirePermission(user, "inventory")) {
+      return json(response, 403, { error: "Sales or inventory access is required to check medicine information." });
+    }
+    const targetUrl = normalizeMedexUrl(url.searchParams.get("url") || "");
+    if (!targetUrl) return json(response, 400, { error: "Enter a valid MedEx medicine URL." });
+    const customDbPath = process.env.SHOP_MEDEX_DB || join(dataDir, "medex.db");
+    const payload = await fetchMedexDetails(targetUrl, { customDbPath });
+    return json(response, 200, payload);
   }
 
   if (route === "/api/pharmacy/expiry" && method === "GET") {

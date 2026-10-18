@@ -598,7 +598,7 @@ function renderInventoryProducts() {
   const products = data.products.filter(item => [item.name, item.sku, item.barcode, item.unit, item.category, item.brand, item.color, item.size, item.material, item.generic_name, item.strength, item.dosage_form, item.manufacturer].some(value => String(value || "").toLocaleLowerCase().includes(query)));
   const canEditItems = signedInUser?.permissions?.records && data.permissions?.inventory;
   const canDeleteItems = canEditItems;
-  $("#products-table").innerHTML = products.map(item => { const details = (data.shopType === "pharmacy" ? [["Generic",item.generic_name],["Strength",item.strength],["Form",item.dosage_form],["Maker",item.manufacturer]] : [["Brand", item.brand], ["Color", item.color], ["Size", item.size], ["Material", item.material]]).filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`).join(" · "); return `<tr><td class="product-cell">${esc(item.icon || "📦")} &nbsp;${esc(item.name)}${details ? `<small class="form-hint">${esc(details)}</small>` : ""}</td><td>${esc(item.category || "Other")}</td><td class="sku">${esc(item.sku)}</td><td class="sku">${esc(item.barcode || "—")}</td><td>${esc(item.unit || "piece")}</td><td>${money(item.price)}</td><td class="qty">${data.shopType === "pharmacy" ? `${productSellableQty(item)} sellable / ${Number(item.qty||0)} total` : `${item.qty} ${esc(item.unit || "piece")}`}</td><td class="stock-value" title="${item.qty} × ${money(item.price)} per unit"><b>${money(Number(item.qty) * Number(item.price))}</b></td><td><span class="status ${productSellableQty(item) === 0 ? "out" : productSellableQty(item) <= item.min ? "low" : ""}">${productSellableQty(item) === 0 ? (data.shopType === "pharmacy" && Number(item.qty)>0 ? "No safe-to-sell stock" : "Out of stock") : productSellableQty(item) <= item.min ? "Low stock" : "In stock"}</span></td><td>${canEditItems ? `<button class="user-action" data-action="rename-product" data-id="${item.id}" data-name="${esc(item.name)}" data-unit="${esc(item.unit || "piece")}" data-category="${esc(item.category || "Other")}">Edit item</button>` : ""}${canDeleteItems ? `<button class="user-action danger" data-action="delete-product" data-id="${item.id}" data-name="${esc(productLabel(item))}" data-qty="${item.qty}" data-unit="${esc(item.unit || "piece")}">Delete</button>` : ""}</td></tr>`; }).join("");
+  $("#products-table").innerHTML = products.map(item => { const details = (data.shopType === "pharmacy" ? [["Generic",item.generic_name],["Strength",item.strength],["Form",item.dosage_form],["Maker",item.manufacturer]] : [["Brand", item.brand], ["Color", item.color], ["Size", item.size], ["Material", item.material]]).filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`).join(" · "); const medexAction = data.shopType === "pharmacy" ? `<button class="user-action" type="button" data-action="medex-product" data-id="${item.id}" data-name="${esc(item.name)}">MedEx info</button>` : ""; return `<tr><td class="product-cell">${esc(item.icon || "📦")} &nbsp;${esc(item.name)}${details ? `<small class="form-hint">${esc(details)}</small>` : ""}</td><td>${esc(item.category || "Other")}</td><td class="sku">${esc(item.sku)}</td><td class="sku">${esc(item.barcode || "—")}</td><td>${esc(item.unit || "piece")}</td><td>${money(item.price)}</td><td class="qty">${data.shopType === "pharmacy" ? `${productSellableQty(item)} sellable / ${Number(item.qty||0)} total` : `${item.qty} ${esc(item.unit || "piece")}`}</td><td class="stock-value" title="${item.qty} × ${money(item.price)} per unit"><b>${money(Number(item.qty) * Number(item.price))}</b></td><td><span class="status ${productSellableQty(item) === 0 ? "out" : productSellableQty(item) <= item.min ? "low" : ""}">${productSellableQty(item) === 0 ? (data.shopType === "pharmacy" && Number(item.qty)>0 ? "No safe-to-sell stock" : "Out of stock") : productSellableQty(item) <= item.min ? "Low stock" : "In stock"}</span></td><td>${medexAction}${canEditItems ? `<button class="user-action" data-action="rename-product" data-id="${item.id}" data-name="${esc(item.name)}" data-unit="${esc(item.unit || "piece")}" data-category="${esc(item.category || "Other")}">Edit item</button>` : ""}${canDeleteItems ? `<button class="user-action danger" data-action="delete-product" data-id="${item.id}" data-name="${esc(productLabel(item))}" data-qty="${item.qty}" data-unit="${esc(item.unit || "piece")}">Delete</button>` : ""}</td></tr>`; }).join("");
   $("#products-empty").textContent = data.products.length ? "No inventory items match your search." : "No products yet. Add your first item to get started.";
   $("#products-empty").classList.toggle("hidden", products.length > 0);
   const cost = products.reduce((sum, item) => sum + Number(item.cost || 0) * Number(item.qty || 0), 0);
@@ -737,6 +737,8 @@ function clothingFormFields(product = {}) {
 function pharmacyFormFields(product = {}, includeOpeningBatch = false) {
   if (data.shopType !== "pharmacy") return "";
   return `<fieldset class="pharmacy-fields"><legend>Medicine details</legend>
+    <div class="bill-search-head"><small class="form-hint">Need medicine details? Search MedEx.com.bd to check or auto-fill generic name, strength, dosage form, and company.</small><button type="button" class="button secondary" id="form-medex-toggle">Check MedEx.com.bd</button></div>
+    <div id="form-medex-drawer" class="medex-inline-drawer hidden"></div>
     <div class="form-row"><label>Generic name<input name="genericName" maxlength="160" value="${esc(product.generic_name || "")}" placeholder="Active ingredient"></label><label>Strength<input name="strength" maxlength="80" value="${esc(product.strength || "")}" placeholder="e.g. 500 mg"></label></div>
     <div class="form-row"><label>Dosage form<input name="dosageForm" maxlength="80" value="${esc(product.dosage_form || "")}" placeholder="Tablet, capsule, syrup, cream"></label><label>Manufacturer<input name="manufacturer" maxlength="160" value="${esc(product.manufacturer || "")}" placeholder="Manufacturer / company"></label></div>
     ${includeOpeningBatch ? `<div class="pharmacy-batch-opening"><h4>Opening stock batch</h4><div class="form-row"><label>Batch number<input name="batchNumber" maxlength="80" placeholder="Printed batch / lot number"></label><label>Expiry date<input name="expiryDate" type="date"></label></div><small class="form-hint">Required when opening stock quantity is greater than zero. Unknown-expiry stock cannot be dispensed.</small></div>` : ""}
@@ -1497,6 +1499,10 @@ function render() {
 
   $("#inventory-nav").classList.toggle("hidden", !permissions.inventory);
   $("#sales-nav").classList.toggle("hidden", !permissions.sales);
+  const pharmacyMedexEnabled = data.shopType === "pharmacy" && Boolean(permissions.sales || permissions.inventory);
+  $("#pharmacy-medex-button")?.classList.toggle("hidden", !pharmacyMedexEnabled);
+  $("#pharmacy-medex-inventory-button")?.classList.toggle("hidden", !(permissions.inventory && data.shopType === "pharmacy"));
+  $("#pharmacy-medex-sales-button")?.classList.toggle("hidden", !(permissions.sales && data.shopType === "pharmacy"));
   $("#pharmacy-batches-button")?.classList.toggle("hidden", !(permissions.inventory && data.shopType === "pharmacy"));
   const onlineOrdersEnabled = !!permissions.online_orders;
   $("#online-orders-nav").classList.toggle("hidden", !onlineOrdersEnabled);
@@ -1871,6 +1877,7 @@ $("#add-product").onclick = () => {
     toast("Product added");
   });
   attachClothingChipEvents();
+  attachPharmacyFormMedexEvents();
   $("#modal-fields [name=unit]").oninput = event => {
     document.querySelectorAll("#modal-fields .unit-label").forEach(label => label.textContent = event.target.value.trim() || "unit");
   };
@@ -2160,6 +2167,10 @@ $("#products-table").onclick = event => {
   const button = event.target.closest("button[data-action]");
   if (!button) return;
   const id = button.dataset.id;
+  if (button.dataset.action === "medex-product") {
+    openPharmacyMedicineLookup(button.dataset.name || "");
+    return;
+  }
   if (button.dataset.action === "delete-product") {
     if (!signedInUser?.permissions?.records || !data.permissions?.inventory) return;
     const { name, qty, unit } = button.dataset;
@@ -2189,6 +2200,7 @@ $("#products-table").onclick = event => {
     toast("Inventory item updated");
   });
   attachClothingChipEvents();
+  attachPharmacyFormMedexEvents();
 };
 $("#sales-table").onclick = async event => {
   const button = event.target.closest("[data-sale-action]");
@@ -2409,7 +2421,7 @@ function openBillEditor(editing) {
   const stocked = data.products.filter(item => productSellableQty(item) > 0 || extra[item.id]);
   if (!stocked.length) return toast("No products in stock.");
   let cart = (editing?.lines || []).map(l => { const p = data.products.find(x => x.id === pid(l)); return p && { id: p.id, name: productLabel(p), category: l.category || p.category || "", unit: p.unit || "piece", packSize: p.pack_size || 0, packName: p.pack_name, price: l.price, cost: p.cost, qty: l.qty, max: +(p.qty + l.qty).toFixed(6), serials: l.serials || [], warrantyMonths: Number(l.warrantyMonths || 0) }; }).filter(Boolean);
-  openModal(editing ? `Edit ${billNo(editing.id)}` : "New bill", `<div class="item-search"><label for="bill-search">Add item <span class="form-hint">Type part of a name, SKU, or barcode. Pick from the list or press Enter to add.</span></label><div class="item-search-wrap"><input id="bill-search" type="search" autocomplete="off" placeholder="Item name, SKU, or barcode"><button type="button" class="item-search-toggle" id="bill-search-toggle" aria-label="Show all in-stock items" title="Show all in-stock items">▾</button><div class="item-search-results hidden" id="bill-search-results" role="listbox" aria-label="Matching in-stock items"></div></div></div>
+  openModal(editing ? `Edit ${billNo(editing.id)}` : "New bill", `<div class="item-search"><div class="bill-search-head"><label for="bill-search">Add item <span class="form-hint">Type part of a name, SKU, or barcode. Pick from the list or press Enter to add.</span></label>${data.shopType === "pharmacy" ? `<button type="button" class="button secondary" id="bill-medex-toggle">Medicine info (MedEx)</button>` : ""}</div><div class="item-search-wrap"><input id="bill-search" type="search" autocomplete="off" placeholder="Item name, SKU, or barcode"><button type="button" class="item-search-toggle" id="bill-search-toggle" aria-label="Show all in-stock items" title="Show all in-stock items">▾</button><div class="item-search-results hidden" id="bill-search-results" role="listbox" aria-label="Matching in-stock items"></div></div></div>${data.shopType === "pharmacy" ? `<div id="bill-medex-drawer" class="medex-inline-drawer hidden"></div>` : ""}
 <div class="table-scroll bill-cart"><table><thead><tr><th>Item</th><th>Price / unit</th><th>Qty</th><th>Amount</th><th class="${data.shopType === "mobile" ? "" : "hidden"}">IMEI / serial &amp; warranty</th><th></th></tr></thead><tbody id="bill-lines"></tbody></table><div class="empty" id="bill-empty">No items yet. Search above to add the first one.</div></div>
 <div class="form-row"><label>Customer name${data.requireCustomer ? "" : " (optional)"}<input name="customer" maxlength="80" value="${esc(editing?.customer || "")}" ${data.requireCustomer && !editing ? "required" : ""}></label><label>Phone (optional)<input name="phone" maxlength="30" inputmode="tel" value="${esc(editing?.phone || "")}"></label></div>
 <div class="form-row"><label class="${editing ? "hidden" : ""}">Payment method<select name="payment">${paymentOptions(editing?.payment || "Cash")}</select></label>${data.allowDiscounts ? `<label>Discount (৳)<input id="bill-discount" name="discount" type="number" min="0" step="any" value="${editing ? editing.discount : 0}"></label>` : ""}</div>
@@ -2564,6 +2576,30 @@ ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive f
     }
   }
   draw();
+  if ($("#bill-medex-toggle") && $("#bill-medex-drawer")) {
+    let billMedexMounted = null;
+    $("#bill-medex-toggle").onclick = () => {
+      const drawer = $("#bill-medex-drawer");
+      const opening = drawer.classList.contains("hidden");
+      drawer.classList.toggle("hidden", !opening);
+      if (opening) {
+        const currentBillQuery = ($("#bill-search")?.value || "").trim();
+        if (!billMedexMounted) {
+          billMedexMounted = mountMedexLookupBox(drawer, {
+            initialQuery: currentBillQuery,
+            onAddToBill: item => {
+              addProduct(item);
+              toast(`${productLabel(item)} added to bill.`);
+            }
+          });
+        } else if (currentBillQuery) {
+          billMedexMounted.setQueryAndSearch(currentBillQuery);
+        } else {
+          billMedexMounted.focusInput();
+        }
+      }
+    };
+  }
   $("#bill-search").focus();
 }
 $("#new-bill").onclick = () => openBillEditor();
@@ -3382,6 +3418,327 @@ function openPharmacyEditBatch(batch) {
   });
 }
 
+function medexSearchUrl(query = "") {
+  const q = String(query || "").trim();
+  return q ? `https://medex.com.bd/search?search=${encodeURIComponent(q)}` : "https://medex.com.bd/search";
+}
+
+function mountMedexLookupBox(container, { initialQuery = "", onAddToBill = null, onFillProductForm = null } = {}) {
+  if (!container) return null;
+  container.innerHTML = `<div class="medex-lookup-root">
+    <div class="medex-search-bar">
+      <input type="search" class="medex-query-input" autocomplete="off" placeholder="Search medicine brand or generic name (e.g. Napa, Sergel 20, Paracetamol)..." value="${esc(initialQuery)}">
+      <button type="button" class="button primary medex-search-btn">Search medicine info</button>
+      <a class="button secondary medex-external-btn" href="${esc(medexSearchUrl(initialQuery))}" target="_blank" rel="noopener noreferrer">Open medex.com.bd/search ↗</a>
+    </div>
+    <p class="form-hint">Check medicine details, generic name, strength, dosage form, manufacturer, unit price, indications, and shop stock or same-generic alternatives.</p>
+    <div class="medex-local-section medex-section"></div>
+    <div class="medex-remote-section medex-section"></div>
+  </div>`;
+  translateDom(container);
+
+  const input = container.querySelector(".medex-query-input");
+  const searchBtn = container.querySelector(".medex-search-btn");
+  const externalBtn = container.querySelector(".medex-external-btn");
+  const localSection = container.querySelector(".medex-local-section");
+  const remoteSection = container.querySelector(".medex-remote-section");
+  let lastRemoteResults = [];
+  let extraGenerics = [];
+
+  const updateExternalHref = () => {
+    if (externalBtn) externalBtn.href = medexSearchUrl(input?.value || "");
+  };
+
+  const renderShopCard = (item, isAlternative = false) => {
+    const sellable = productSellableQty(item);
+    const totalQty = Number(item.qty || 0);
+    const statusClass = sellable === 0 ? "out" : sellable <= Number(item.min || 0) ? "low" : "";
+    const statusText = sellable === 0 ? (totalQty > 0 ? "No safe-to-sell stock" : "Out of stock") : sellable <= Number(item.min || 0) ? "Low stock" : "In stock";
+    const meta = [
+      item.generic_name ? `Generic: ${item.generic_name}` : "",
+      item.strength ? `Strength: ${item.strength}` : "",
+      item.dosage_form ? `Form: ${item.dosage_form}` : "",
+      item.manufacturer ? `Maker: ${item.manufacturer}` : ""
+    ].filter(Boolean).join(" · ");
+    return `<div class="medex-card">
+      <div class="medex-card-head">
+        <div>
+          <span class="medex-card-title">${esc(item.name)}</span>
+          ${item.dosage_form ? `<span class="medex-badge">${esc(item.dosage_form)}</span>` : ""}
+          ${isAlternative ? `<span class="medex-badge">Same generic in shop</span>` : ""}
+          ${meta ? `<div class="medex-meta">${esc(meta)}</div>` : ""}
+        </div>
+        <div>
+          <b>${money(item.price)}</b> / ${esc(item.unit || "piece")} · <span class="status ${statusClass}">${esc(statusText)} (${sellable} sellable)</span>
+        </div>
+      </div>
+      <div class="medex-actions">
+        <button type="button" class="user-action" data-medex-check-brand="${esc(item.name)}">Check on MedEx</button>
+        ${item.generic_name ? `<button type="button" class="user-action" data-medex-check-generic="${esc(item.generic_name)}">Same generic (${esc(item.generic_name)})</button>` : ""}
+        ${onAddToBill && sellable > 0 ? `<button type="button" class="user-action" data-medex-add-bill="${item.id}">＋ Add to bill</button>` : ""}
+        <a class="user-action" href="${esc(medexSearchUrl(item.name))}" target="_blank" rel="noopener noreferrer">Open MedEx ↗</a>
+      </div>
+    </div>`;
+  };
+
+  const renderLocal = () => {
+    const rawQuery = (input?.value || "").trim();
+    const q = rawQuery.toLocaleLowerCase();
+    const allProducts = data.products || [];
+    const directMatches = q
+      ? allProducts.filter(item => [item.name, item.generic_name, item.strength, item.dosage_form, item.manufacturer, item.sku, item.barcode].some(v => String(v || "").toLocaleLowerCase().includes(q)))
+      : allProducts.slice(0, 8);
+
+    const directIds = new Set(directMatches.map(item => item.id));
+    const matchedGenerics = new Set([
+      ...directMatches.map(item => String(item.generic_name || "").trim().toLocaleLowerCase()).filter(Boolean),
+      ...extraGenerics.map(g => String(g || "").trim().toLocaleLowerCase()).filter(Boolean)
+    ]);
+
+    const genericAlternatives = matchedGenerics.size
+      ? allProducts.filter(item => !directIds.has(item.id) && matchedGenerics.has(String(item.generic_name || "").trim().toLocaleLowerCase()))
+      : [];
+
+    const combined = [
+      ...directMatches.map(item => renderShopCard(item, false)),
+      ...genericAlternatives.map(item => renderShopCard(item, true))
+    ];
+
+    localSection.innerHTML = `<h3><span>In your pharmacy stock${q ? ` (${directMatches.length} match${directMatches.length === 1 ? "" : "es"}${genericAlternatives.length ? ` + ${genericAlternatives.length} same-generic alternative${genericAlternatives.length === 1 ? "" : "s"}` : ""})` : ""}</span><small class="form-hint">${allProducts.length} total medicines in inventory</small></h3>
+      ${combined.length ? `<div class="medex-list">${combined.join("")}</div>` : `<div class="empty">No matching medicine found in your shop inventory${q ? ` for “${esc(rawQuery)}”` : ""}. Check the MedEx directory below.</div>`}`;
+    translateDom(localSection);
+  };
+
+  const renderRemotePlaceholder = () => {
+    const q = (input?.value || "").trim();
+    remoteSection.innerHTML = `<h3><span>MedEx Bangladesh directory (medex.com.bd/search)</span></h3>
+      <div class="empty">Type a medicine brand or generic name above and click <b>Search medicine info</b>, or <a href="${esc(medexSearchUrl(q))}" target="_blank" rel="noopener noreferrer"><b>open medex.com.bd/search in a new tab ↗</b></a>.</div>`;
+    translateDom(remoteSection);
+  };
+
+  const runSearch = async customQuery => {
+    if (typeof customQuery === "string" && input) input.value = customQuery;
+    updateExternalHref();
+    const q = (input?.value || "").trim();
+    extraGenerics = [];
+    renderLocal();
+    if (!q) {
+      renderRemotePlaceholder();
+      return;
+    }
+    remoteSection.innerHTML = `<h3><span>MedEx Bangladesh directory (medex.com.bd/search)</span></h3><div class="empty">Searching MedEx for “${esc(q)}”…</div>`;
+    try {
+      const result = await api(`/api/pharmacy/medex?q=${encodeURIComponent(q)}`);
+      lastRemoteResults = result.results || [];
+      extraGenerics = lastRemoteResults.map(item => item.genericName).filter(Boolean);
+      renderLocal();
+      if (!lastRemoteResults.length) {
+        remoteSection.innerHTML = `<h3><span>MedEx Bangladesh directory (medex.com.bd/search)</span><a class="user-action" href="${esc(result.searchUrl || medexSearchUrl(q))}" target="_blank" rel="noopener noreferrer">Open on medex.com.bd ↗</a></h3>
+          <div class="medex-card">
+            <div class="medex-meta">${esc(result.message || `Click below to view “${q}” directly on MedEx.com.bd.`)}</div>
+            <div class="medex-actions">
+              <a class="button primary" href="${esc(result.searchUrl || medexSearchUrl(q))}" target="_blank" rel="noopener noreferrer">Search “${esc(q)}” on medex.com.bd/search ↗</a>
+            </div>
+          </div>`;
+        translateDom(remoteSection);
+        return;
+      }
+      const cards = lastRemoteResults.map((item, idx) => {
+        const meta = [
+          item.genericName ? `Generic: ${item.genericName}` : "",
+          item.strength ? `Strength: ${item.strength}` : "",
+          item.manufacturer ? `Company: ${item.manufacturer}` : "",
+          item.priceText ? item.priceText : ""
+        ].filter(Boolean).join(" · ");
+        return `<div class="medex-card">
+          <div class="medex-card-head">
+            <div>
+              <span class="medex-card-title">${esc(item.name)}</span>
+              ${item.dosageForm ? `<span class="medex-badge">${esc(item.dosageForm)}</span>` : ""}
+              ${item.strength ? `<span class="medex-badge">${esc(item.strength)}</span>` : ""}
+              ${meta ? `<div class="medex-meta">${esc(meta)}</div>` : ""}
+            </div>
+          </div>
+          <div class="medex-actions">
+            <button type="button" class="user-action" data-medex-detail-idx="${idx}">Check medicine info &amp; price</button>
+            ${item.genericName ? `<button type="button" class="user-action" data-medex-check-generic="${esc(item.genericName)}">Find generic in shop (${esc(item.genericName)})</button>` : ""}
+            ${onFillProductForm ? `<button type="button" class="user-action" data-medex-fill-idx="${idx}">Fill product fields</button>` : ""}
+            <a class="user-action" href="${esc(item.url || medexSearchUrl(item.name))}" target="_blank" rel="noopener noreferrer">Open on MedEx ↗</a>
+          </div>
+          <div class="medex-details-box hidden" data-medex-detail-box="${idx}"></div>
+        </div>`;
+      }).join("");
+      remoteSection.innerHTML = `<h3><span>MedEx Bangladesh results (${lastRemoteResults.length})</span><a class="user-action" href="${esc(result.searchUrl || medexSearchUrl(q))}" target="_blank" rel="noopener noreferrer">View all on medex.com.bd/search ↗</a></h3>
+        <div class="medex-list">${cards}</div>`;
+      translateDom(remoteSection);
+    } catch (error) {
+      remoteSection.innerHTML = `<h3><span>MedEx Bangladesh directory (medex.com.bd/search)</span></h3>
+        <div class="medex-card">
+          <div class="medex-meta">${esc(error.message || "Could not load MedEx results from the server.")}</div>
+          <div class="medex-actions">
+            <a class="button primary" href="${esc(medexSearchUrl(q))}" target="_blank" rel="noopener noreferrer">Open “${esc(q)}” on medex.com.bd/search ↗</a>
+          </div>
+        </div>`;
+    }
+  };
+
+  let searchDebounce = null;
+  input?.addEventListener("input", () => {
+    updateExternalHref();
+    renderLocal();
+    clearTimeout(searchDebounce);
+    const val = (input?.value || "").trim();
+    if (val.length >= 2) {
+      searchDebounce = setTimeout(() => runSearch(), 180);
+    } else if (!val) {
+      extraGenerics = [];
+      renderLocal();
+      renderRemotePlaceholder();
+    }
+  });
+  input?.addEventListener("keydown", event => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      runSearch();
+    }
+  });
+  searchBtn?.addEventListener("click", () => runSearch());
+
+  container.addEventListener("click", async event => {
+    const brandBtn = event.target.closest("[data-medex-check-brand]");
+    if (brandBtn) {
+      runSearch(brandBtn.dataset.medexCheckBrand || "");
+      return;
+    }
+    const genericBtn = event.target.closest("[data-medex-check-generic]");
+    if (genericBtn) {
+      runSearch(genericBtn.dataset.medexCheckGeneric || "");
+      return;
+    }
+    const addBillBtn = event.target.closest("[data-medex-add-bill]");
+    if (addBillBtn && onAddToBill) {
+      const product = (data.products || []).find(p => Number(p.id) === Number(addBillBtn.dataset.medexAddBill));
+      if (product) onAddToBill(product);
+      return;
+    }
+    const fillBtn = event.target.closest("[data-medex-fill-idx]");
+    if (fillBtn && onFillProductForm) {
+      const item = lastRemoteResults[Number(fillBtn.dataset.medexFillIdx)];
+      if (item) onFillProductForm(item);
+      return;
+    }
+    const detailBtn = event.target.closest("[data-medex-detail-idx]");
+    if (detailBtn) {
+      const idx = Number(detailBtn.dataset.medexDetailIdx);
+      const item = lastRemoteResults[idx];
+      const box = container.querySelector(`[data-medex-detail-box="${idx}"]`);
+      if (!item || !box) return;
+      if (!box.classList.contains("hidden") && box.dataset.loaded === "1") {
+        box.classList.add("hidden");
+        return;
+      }
+      box.classList.remove("hidden");
+      box.innerHTML = `<span>Loading medicine info from MedEx…</span>`;
+      try {
+        const res = await api(`/api/pharmacy/medex/details?url=${encodeURIComponent(item.url)}`);
+        const d = res.details;
+        if (!res.ok || !d) {
+          box.innerHTML = `<div class="medex-meta">${esc(res.message || "Detailed view could not be loaded inside Shop Desk.")}</div>
+            <div class="medex-actions"><a class="user-action" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Open medicine page on MedEx.com.bd ↗</a></div>`;
+          return;
+        }
+        if (d.genericName && !item.genericName) item.genericName = d.genericName;
+        if (d.strength && !item.strength) item.strength = d.strength;
+        if (d.dosageForm && !item.dosageForm) item.dosageForm = d.dosageForm;
+        if (d.manufacturer && !item.manufacturer) item.manufacturer = d.manufacturer;
+        if (d.unitPrice != null && item.unitPrice == null) item.unitPrice = d.unitPrice;
+        box.dataset.loaded = "1";
+        const summaryLines = [
+          d.genericName ? `<b>Generic:</b> ${esc(d.genericName)}` : "",
+          d.strength ? `<b>Strength:</b> ${esc(d.strength)}` : "",
+          d.dosageForm ? `<b>Form:</b> ${esc(d.dosageForm)}` : "",
+          d.manufacturer ? `<b>Manufacturer:</b> ${esc(d.manufacturer)}` : "",
+          d.pricing ? `<b>Price / Pack:</b> ${esc(d.pricing)}` : ""
+        ].filter(Boolean).join(" · ");
+        const sectionHtml = (d.sections || []).map(sec => `<div class="medex-details-section"><strong>${esc(sec.title)}</strong><p>${esc(sec.content)}</p></div>`).join("");
+        box.innerHTML = `${summaryLines ? `<div>${summaryLines}</div>` : ""}
+          ${sectionHtml || `<div class="medex-meta">Open the MedEx page below to view the complete monograph.</div>`}
+          <div class="medex-actions">
+            ${onFillProductForm ? `<button type="button" class="user-action" data-medex-fill-idx="${idx}">Use these details in product form</button>` : ""}
+            <a class="user-action" href="${esc(d.url || item.url)}" target="_blank" rel="noopener noreferrer">View full page on MedEx.com.bd ↗</a>
+          </div>`;
+      } catch (error) {
+        box.innerHTML = `<div class="medex-meta">${esc(error.message)}</div><div class="medex-actions"><a class="user-action" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Open on MedEx.com.bd ↗</a></div>`;
+      }
+    }
+  });
+
+  renderLocal();
+  if (initialQuery.trim()) runSearch(initialQuery.trim());
+  else renderRemotePlaceholder();
+
+  return {
+    setQueryAndSearch: q => runSearch(q),
+    focusInput: () => input?.focus()
+  };
+}
+
+function attachPharmacyFormMedexEvents() {
+  const toggleBtn = $("#form-medex-toggle");
+  const drawer = $("#form-medex-drawer");
+  if (!toggleBtn || !drawer) return;
+  let helper = null;
+  toggleBtn.onclick = () => {
+    const opening = drawer.classList.contains("hidden");
+    drawer.classList.toggle("hidden", !opening);
+    if (!opening) return;
+    const nameInput = $("#modal-fields [name=name]");
+    const currentName = (nameInput?.value || "").trim();
+    if (!helper) {
+      helper = mountMedexLookupBox(drawer, {
+        initialQuery: currentName,
+        onFillProductForm: item => {
+          const setField = (fieldName, value) => {
+            const el = $(`#modal-fields [name=${fieldName}]`);
+            if (el && value) {
+              el.value = value;
+              el.dispatchEvent(new Event("input", { bubbles: true }));
+            }
+          };
+          setField("name", item.name);
+          setField("genericName", item.genericName);
+          setField("strength", item.strength);
+          setField("dosageForm", item.dosageForm);
+          setField("manufacturer", item.manufacturer);
+          if (item.unitPrice != null && Number.isFinite(Number(item.unitPrice))) {
+            setField("price", String(item.unitPrice));
+          }
+          toast("Medicine details filled from MedEx.");
+        }
+      });
+    } else if (currentName) {
+      helper.setQueryAndSearch(currentName);
+    } else {
+      helper.focusInput();
+    }
+  };
+}
+
+function openPharmacyMedicineLookup(initialQuery = "") {
+  if (data.shopType !== "pharmacy") return toast("Medicine info lookup is only available when the shop type is Pharmacy.");
+  openModal("Medicine info · MedEx lookup", `<div id="pharmacy-medex-modal-root"></div>`, async () => false);
+  dialog.classList.add("wide");
+  $("#submit-modal").classList.add("hidden");
+  dialog.addEventListener("close", () => {
+    dialog.classList.remove("wide");
+    $("#submit-modal").classList.remove("hidden");
+  }, { once: true });
+  const root = $("#pharmacy-medex-modal-root");
+  const mounted = mountMedexLookupBox(root, { initialQuery: String(initialQuery || "").trim() });
+  setTimeout(() => mounted?.focusInput(), 40);
+}
+
 const renderBeforeSupplierTools = render;
 render = function () {
   renderBeforeSupplierTools();
@@ -3389,6 +3746,9 @@ render = function () {
 };
 $("#supplier-tools").onclick = openSupplierHub;
 $("#pharmacy-batches-button").onclick = openPharmacyBatchManager;
+$("#pharmacy-medex-button") && ($("#pharmacy-medex-button").onclick = () => openPharmacyMedicineLookup(""));
+$("#pharmacy-medex-inventory-button") && ($("#pharmacy-medex-inventory-button").onclick = () => openPharmacyMedicineLookup($("#search")?.value || ""));
+$("#pharmacy-medex-sales-button") && ($("#pharmacy-medex-sales-button").onclick = () => openPharmacyMedicineLookup(""));
 // ---- Installable app (PWA) and the "connect a phone" page ----
 let installPrompt = null;
 function setupInstallButton() {
