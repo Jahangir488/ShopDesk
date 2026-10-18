@@ -56,8 +56,8 @@ if (!shop || shop.trim().length < 2) {
   console.error('Usage: node tools/license-issue.mjs --shop "Shop name" [--plan pro] [--days 365] [--install <id>]');
   process.exit(1);
 }
-if (!Number.isFinite(days) || days <= 0) {
-  console.error("--days must be a positive number.");
+if (!Number.isInteger(days) || days < 1 || days > 9999) {
+  console.error("--days must be a whole number between 1 and 9999.");
   process.exit(1);
 }
 const issued = new Date();
