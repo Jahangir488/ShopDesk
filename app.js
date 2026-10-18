@@ -3408,6 +3408,58 @@ function openPurchaseEntry(suppliers, editing = null) {
   if (paidInput) paidInput.oninput = updateTotals;
   updateTotals();
 }
+async function openPharmacyBatchManager() {
+  if (data.shopType !== "pharmacy" || !featureEnabled("pharmacy")) return toast("Pharmacy batches require a Pharmacy licence.");
+  if (!data.permissions?.inventory) return toast("Inventory access is required to manage medicine batches.");
+  try {
+    data = await api("/api/state");
+    const { today: dateToday, cutoff } = await api("/api/pharmacy/expiry");
+    const todayValue = dateToday || dateKey(new Date());
+    const batches = data.pharmacyBatches || [];
+    const expiryState = batch => {
+      if (!batch.expiry_date) return { label: "Expiry needs review", css: "out" };
+      if (batch.expiry_date < todayValue) return { label: "Expired", css: "out" };
+      if (batch.expiry_date <= cutoff) return { label: "Expiring soon", css: "low" };
+      return { label: "In date", css: "" };
+    };
+    const unknown = batches.filter(batch => !batch.expiry_date && Number(batch.quantity_remaining) > 0).length;
+    const expired = batches.filter(batch => batch.expiry_date && batch.expiry_date < todayValue && Number(batch.quantity_remaining) > 0).length;
+    const soon = batches.filter(batch => batch.expiry_date && batch.expiry_date >= todayValue && batch.expiry_date <= cutoff && Number(batch.quantity_remaining) > 0).length;
+    const rows = batches.length ? batches.map(batch => {
+      const status = expiryState(batch);
+      return `<tr><td><b>${esc(batch.product_name)}</b><small class="form-hint">${esc(batch.generic_name || "")}</small></td><td>${esc(batch.batch_number)}</td><td>${batch.expiry_date ? esc(batch.expiry_date) : "Unknown — review lot label"}</td><td>${Number(batch.quantity_remaining)} ${esc(batch.product_unit || "piece")}</td><td>${Number(batch.sellable_quantity || 0)} ${esc(batch.product_unit || "piece")}</td><td><span class="status ${status.css}">${status.label}</span></td><td><button type="button" class="user-action" data-edit-pharmacy-batch="${batch.id}">Correct batch / expiry</button></td></tr>`;
+    }).join("") : '<tr><td colspan="7" class="empty">No medicine batches recorded. Add a medicine or receive the first batch.</td></tr>';
+    openModal("Medicine batches & expiry", `<div class="pharmacy-batch-toolbar"><div><b>${batches.length} recorded batches</b><p class="form-hint">Sales use earliest-expiring eligible stock first. Expired, unknown-expiry, and returned/quarantined units are not sellable.</p></div><button type="button" class="button primary" id="pharmacy-receive-batch">＋ Receive batch</button></div><div class="pharmacy-expiry-summary"><div><b>${expired}</b><span>Expired lots with stock</span></div><div><b>${soon}</b><span>Expiring within 90 days</span></div><div><b>${unknown}</b><span>Need expiry verification</span></div></div><div class="table-scroll supplier-table"><table><thead><tr><th>Medicine</th><th>Batch / lot</th><th>Expiry date</th><th>Remaining</th><th>Sellable</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div>`, async () => {});
+    $("#submit-modal").classList.add("hidden");
+    $("#pharmacy-receive-batch").onclick = () => { closeModal(); openPharmacyReceiveBatch(); };
+    dialog.querySelectorAll("[data-edit-pharmacy-batch]").forEach(button => button.onclick = () => {
+      const batch = batches.find(item => Number(item.id) === Number(button.dataset.editPharmacyBatch));
+      if (!batch) return toast("Medicine batch not found. Refresh and try again.");
+      closeModal();
+      openPharmacyEditBatch(batch);
+    });
+  } catch (error) { toast(error.message); }
+}
+function openPharmacyReceiveBatch() {
+  const products = (data.products || []).filter(product => product.id);
+  if (!products.length) return toast("Add a medicine before receiving stock.");
+  const options = products.map(product => `<option value="${product.id}">${esc(product.name)} · ${esc(product.unit || "piece")} · current ${Number(product.qty || 0)}</option>`).join("");
+  openModal("Receive medicine batch", `<label>Medicine<select name="productId" required><option value="">Choose medicine</option>${options}</select></label><div class="form-row"><label>Batch / lot number<input name="batchNumber" maxlength="80" required placeholder="As printed on the pack"></label><label>Expiry date<input name="expiryDate" type="date" min="${dateKey(new Date())}" required></label></div><div class="form-row"><label>Quantity received<input name="quantity" type="number" min="0.001" step="any" required></label><label>Unit purchase cost (${esc(currencySymbol())})<input name="unitCost" type="number" min="0" step="0.01" required></label></div><p class="form-hint">Use the exact batch number and expiry printed by the manufacturer. For repeated receipts of the same batch, use the same batch number and expiry.</p>`, async form => {
+    const result = await api("/api/pharmacy/batches", { method: "POST", body: JSON.stringify({ productId: Number(form.get("productId")), batchNumber: form.get("batchNumber").trim(), expiryDate: form.get("expiryDate"), quantity: Number(form.get("quantity")), unitCost: Number(form.get("unitCost")) }) });
+    data = result;
+    render();
+    toast("Medicine batch received; stock and expiry are recorded.");
+  });
+}
+function openPharmacyEditBatch(batch) {
+  openModal("Correct medicine batch / expiry", `<p><b>${esc(batch.product_name)}</b></p><label>Batch / lot number<input name="batchNumber" maxlength="80" value="${esc(batch.batch_number)}" required></label><label>Expiry date<input name="expiryDate" type="date" min="${dateKey(new Date())}" value="${esc(batch.expiry_date || "")}" required></label><p class="form-hint">Confirm the value against the manufacturer's packaging before saving. Unknown-expiry legacy stock stays unavailable until verified.</p>`, async form => {
+    const result = await api(`/api/pharmacy/batches/${batch.id}`, { method: "PATCH", body: JSON.stringify({ batchNumber: form.get("batchNumber").trim(), expiryDate: form.get("expiryDate") }) });
+    data = result;
+    render();
+    toast("Medicine batch details updated.");
+  });
+}
+
 const renderBeforeSupplierTools = render;
 render = function () {
   renderBeforeSupplierTools();
