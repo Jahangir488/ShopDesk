@@ -6,7 +6,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { TRIAL_DAYS, installIdMatches, signLicense, verifyLicense, licenseStatus } from "../lib/license.mjs";
+import { TRIAL_DAYS, installIdMatches, signLicense, verifyLicense, licenseStatus, loadPublicKey } from "../lib/license.mjs";
 import { encodeQr, qrSvg } from "../lib/qr.mjs";
 import { decryptBuffer, encryptBuffer } from "../lib/offsite.mjs";
 import { compareVersions, parseManifest, signManifest, verifyManifest } from "../lib/release.mjs";
@@ -56,6 +56,8 @@ try {
 
 console.log("Licensing");
 try {
+  const deployedPublicKey = loadPublicKey();
+  if (deployedPublicKey.asymmetricKeyType !== "ed25519") fail("declared licence public key must be a valid Ed25519 key");
   // Self-contained check: use a throwaway key pair so no vendor key is needed.
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const installId = "da7b5514ceb6404b48a27a78";
