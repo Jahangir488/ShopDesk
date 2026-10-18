@@ -135,6 +135,10 @@ try {
 console.log("Commercial seller licensing and Pharmacy workflow");
 try {
   const licenser = readFileSync(join(root, "tools", "supplier-licence.mjs"), "utf8");
+  const cliIssuer = readFileSync(join(root, "tools", "license-issue.mjs"), "utf8");
+  const licenseCore = readFileSync(join(root, "lib", "license.mjs"), "utf8");
+  if (!licenser.includes("days > 9999") || !cliIssuer.includes("days > 9999")) fail("licence durations must be limited to whole days from 1 to 9999");
+  if (!licenseCore.includes("does not match lib/license-public.mjs")) fail("supplier signing must reject a private key that does not match the deployed public key");
   const oldKit = readFileSync(join(root, "tools", "make-licence-kit.mjs"), "utf8");
   const oldIssuer = readFileSync(join(root, "tools", "licence-kit.mjs"), "utf8");
   const server = readFileSync(join(root, "server.mjs"), "utf8");
