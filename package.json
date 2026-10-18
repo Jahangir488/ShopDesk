@@ -1,6 +1,6 @@
 {
   "name": "shop-desk",
-  "version": "12.0.10",
+  "version": "12.0.11",
   "private": true,
   "description": "Shop Desk - inventory, sales, dues, repairs and reports (SQLite)",
   "type": "module",
@@ -10,11 +10,7 @@
     "check": "node tools/check.mjs",
     "icons": "node tools/make-icons.mjs",
     "i18n:report": "node tools/i18n-report.mjs",
-    "license:keygen": "node tools/license-keygen.mjs",
-    "license:issue": "node tools/license-issue.mjs",
-    "release:manifest": "node tools/release-manifest.mjs",
-    "licence:kit": "node tools/make-licence-kit.mjs",
-    "license:kit": "node tools/make-licence-kit.mjs"
+    "release:manifest": "node tools/release-manifest.mjs"
   },
   "engines": {
     "node": ">=22.13"

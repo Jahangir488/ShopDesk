@@ -19,6 +19,7 @@ const dateKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).pad
 const dateLabel = value => new Date(`${value}T12:00:00`).toLocaleDateString(data.banglaDigits || hasBangla() ? "bn-BD" : (data.locale || "en-BD"), { day: "numeric", month: "short" });
 const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 let data = { shopName: "Shop Desk", workspace: "", contactNumber: "", website: "", email: "", facebookPage: "", whatsappNumber: "", contactAddress: "", shopType: "general", currencyCode: "BDT", locale: "en-BD", taxRate: 0, taxMode: "none", requireCustomer: false, allowDiscounts: true, paymentMethods: ["Cash", "bKash", "Nagad", "Card", "Due"], products: [], sales: [], onlineOrders: [], serviceJobs: [], devices: [], expenses: [], categories: [], permissions: {} };
+const productSellableQty = product => data.shopType === "pharmacy" ? Number(product.available_to_sell || 0) : Number(product.qty || 0);
 let signedInUser = null;
 let toastTimer;
 
@@ -122,30 +123,6 @@ async function loadLanguage(code) {
   document.body.classList.toggle("lang-bn", language === "bn");
   if (language === "bn") { startI18nObserver(); translateDom(document.body); }
 }
-function renderLicenseBanner() {
-  const license = data.license;
-  const main = document.querySelector(".main");
-  if (!main || !license) return;
-  const show = license.readOnly || (license.state !== "active" && license.warning) || (license.state === "active" && license.warning);
-  let banner = $("#license-banner");
-  if (!show) { banner?.remove(); return; }
-  if (!banner) {
-    banner = document.createElement("div");
-    banner.id = "license-banner";
-    banner.className = "license-banner";
-    banner.setAttribute("role", "status");
-    main.prepend(banner);
-  }
-  const days = Math.max(0, Number(license.daysLeft) || 0);
-  let message;
-  if (license.readOnly) message = `${t("Read-only mode")} — ${t("Billing is paused. Your data, reports, exports and backups are still available.")}`;
-  else if (license.state === "trial") message = `${t("Trial")} · ${t("Trial ends")}: ${days} ${t("days left")}`;
-  else message = `${t("Your licence expires soon")}: ${days} ${t("days left")}`;
-  const canActivate = signedInUser?.role === "admin";
-  banner.innerHTML = `<span class="license-banner-text">${esc(message)}</span>${canActivate
-    ? `<button type="button" class="button primary" data-open-license>${esc(t("Enter licence key"))}</button>`
-    : `<span class="license-banner-hint">${esc(t("Ask an administrator to enter a licence key."))}</span>`}`;
-}
 let backupWarningCheckedAt = 0;
 async function renderBackupWarning() {
   if (!data.permissions?.backups || !document.querySelector(".main")) return;
@@ -163,55 +140,8 @@ async function renderBackupWarning() {
   banner.setAttribute("role", "status");
   banner.innerHTML = `<span>${esc(t("Your last offsite backup is more than 48 hours old. Restore protection before the computer is lost or damaged."))}</span><button type="button" class="button secondary">${esc(t("Open backup settings"))}</button>`;
   banner.querySelector("button").onclick = () => showScreen("backup-tools", true);
-  if (!existing) {
-    const licenseBanner = $("#license-banner");
-    if (licenseBanner) licenseBanner.after(banner); else main.prepend(banner);
-  }
+  if (!existing) main.prepend(banner);
 }
-function openLicenseModal() {
-  const license = data.license || {};
-  const rows = [
-    [t("Plan"), license.plan || "—"],
-    [t("Status"), license.state === "active" ? t("Activated") : license.state === "trial" ? t("Trial") : t("Read-only mode")],
-    [t("Days left"), String(license.daysLeft ?? 0)],
-    [t("Expires"), license.expiresAt ? new Date(license.expiresAt).toLocaleDateString() : "—"],
-    [t("Licensed to"), license.licensedTo || "—"]
-  ];
-  if (license.state === "trial") rows.push([t("Trial ends"), license.trialEndsAt ? new Date(license.trialEndsAt).toLocaleDateString() : "—"]);
-  openModal(t("Licence & plan"), `<div class="license-summary">${rows.map(([label, value]) => `<div><small>${esc(label)}</small><b>${esc(value)}</b></div>`).join("")}</div>
-    <label>${esc(t("Licence key"))}<textarea name="licenseKey" rows="4" autocomplete="off" spellcheck="false" placeholder="${esc(t("Paste the licence key you received"))}"></textarea></label>
-    <p class="form-hint">${esc(t("Send this ID to your supplier when asking for a licence."))} <code id="license-install-id">${esc(license.installId || "")}</code> <button type="button" class="user-action" id="copy-install-id">${esc(t("Copy"))}</button></p>`,
-    async form => {
-      const token = String(form.get("licenseKey") || "").trim();
-      if (!token) throw new Error(t("Paste the licence key you received."));
-      data.license = await api("/api/license/activate", { method: "POST", body: JSON.stringify({ token }) });
-      renderLicenseBanner();
-      render();
-      toast(t("Activated"));
-    });
-  const submit = $("#submit-modal");
-  if (submit) submit.textContent = t("Activate");
-  const copyButton = $("#copy-install-id");
-  if (copyButton) copyButton.onclick = async () => {
-    try {
-      await navigator.clipboard.writeText(license.installId || "");
-      toast(t("Installation ID copied"));
-    } catch {
-      const field = $("#license-install-id");
-      if (field) {
-        const range = document.createRange();
-        range.selectNodeContents(field);
-        const selection = window.getSelection();
-        selection.removeAllRanges();
-        selection.addRange(range);
-      }
-      toast(t("Select the ID and copy it."));
-    }
-  };
-}
-document.addEventListener("click", event => {
-  if (event.target.closest("[data-open-license]")) { event.preventDefault(); openLicenseModal(); }
-});
 
 function refreshTopbarClock() {
   const now = new Date(), locale = data.banglaDigits || hasBangla() ? "bn-BD" : (data.locale || "en-BD");
@@ -290,7 +220,6 @@ async function api(path, options = {}) {
     throw new Error(t("Your session ended. Please sign in again."));
   }
   if (!response.ok) {
-    if (response.status === 402 && payload?.code === "license_expired") { data.license = payload.license; renderLicenseBanner(); }
     throw new Error(tt(payload?.error || "The request could not be completed."));
   }
   return payload;
@@ -595,7 +524,7 @@ function initItemSearch({ input, results, toggle, getItems, onPick, emptyText = 
       results.innerHTML = matches.map((item, index) => {
         const details = [item.brand, item.color, item.size, item.material, item.category].filter(Boolean).map(value => esc(value)).join(" · ");
         const codes = [item.sku && item.sku !== "—" ? `SKU ${item.sku}` : "", item.barcode ? `Barcode ${item.barcode}` : ""].filter(Boolean).map(value => esc(value)).join(" · ");
-        const stock = `${fmtQty(Number(item.qty) || 0, item.unit || "piece")} in stock`;
+        const stock = `${fmtQty(data.shopType === "pharmacy" ? productSellableQty(item) : Number(item.qty) || 0, item.unit || "piece")} ${data.shopType === "pharmacy" ? "unexpired in stock" : "in stock"}`;
         return `<button type="button" class="item-search-option" role="option" id="${results.id}-opt-${index}" data-index="${index}" aria-selected="false"><span class="item-search-main"><b>${esc(item.name)}</b>${details ? `<small>${details}</small>` : ""}${codes ? `<small>${codes}</small>` : ""}</span><span class="item-search-meta"><b>${esc(money(item.price))}</b><small>${esc(stock)}</small></span></button>`;
       }).join("");
     }
@@ -666,10 +595,11 @@ document.addEventListener("click", event => {
 });
 function renderInventoryProducts() {
   const query = $("#search").value.trim().toLocaleLowerCase();
-  const products = data.products.filter(item => [item.name, item.sku, item.barcode, item.unit, item.category, item.brand, item.color, item.size, item.material].some(value => String(value || "").toLocaleLowerCase().includes(query)));
+  const products = data.products.filter(item => [item.name, item.sku, item.barcode, item.unit, item.category, item.brand, item.color, item.size, item.material, item.generic_name, item.strength, item.dosage_form, item.manufacturer].some(value => String(value || "").toLocaleLowerCase().includes(query)));
   const canEditItems = signedInUser?.permissions?.records && data.permissions?.inventory;
   const canDeleteItems = canEditItems;
-  $("#products-table").innerHTML = products.map(item => { const details = [["Brand", item.brand], ["Color", item.color], ["Size", item.size], ["Material", item.material]].filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`).join(" · "); return `<tr><td class="product-cell">${esc(item.icon || "📦")} &nbsp;${esc(item.name)}${details ? `<small class="form-hint">${esc(details)}</small>` : ""}</td><td>${esc(item.category || "Other")}</td><td class="sku">${esc(item.sku)}</td><td class="sku">${esc(item.barcode || "—")}</td><td>${esc(item.unit || "piece")}</td><td>${money(item.price)}</td><td class="qty">${item.qty} ${esc(item.unit || "piece")}</td><td class="stock-value" title="${item.qty} × ${money(item.price)} per unit"><b>${money(Number(item.qty) * Number(item.price))}</b></td><td><span class="status ${item.qty === 0 ? "out" : item.qty <= item.min ? "low" : ""}">${item.qty === 0 ? "Out of stock" : item.qty <= item.min ? "Low stock" : "In stock"}</span></td><td>${canEditItems ? `<button class="user-action" data-action="rename-product" data-id="${item.id}" data-name="${esc(item.name)}" data-unit="${esc(item.unit || "piece")}" data-category="${esc(item.category || "Other")}">Edit item</button>` : ""}${canDeleteItems ? `<button class="user-action danger" data-action="delete-product" data-id="${item.id}" data-name="${esc(productLabel(item))}" data-qty="${item.qty}" data-unit="${esc(item.unit || "piece")}">Delete</button>` : ""}</td></tr>`; }).join("");
+  const sizeFieldLabel = data.shopType === "mobile" ? "Storage" : data.shopType === "hardware" ? "Spec" : data.shopType === "grocery" ? "Pack" : "Size";
+  $("#products-table").innerHTML = products.map(item => { const details = (data.shopType === "pharmacy" ? [["Generic",item.generic_name],["Strength",item.strength],["Form",item.dosage_form],["Maker",item.manufacturer]] : [["Brand", item.brand], ["Color", item.color], [sizeFieldLabel, item.size], ["Material", item.material]]).filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`).join(" · "); const medexAction = data.shopType === "pharmacy" ? `<button class="user-action" type="button" data-action="medex-product" data-id="${item.id}" data-name="${esc(item.name)}">MedEx info</button>` : ""; return `<tr><td class="product-cell">${esc(item.icon || "📦")} &nbsp;${esc(item.name)}${details ? `<small class="form-hint">${esc(details)}</small>` : ""}</td><td>${esc(item.category || "Other")}</td><td class="sku">${esc(item.sku)}</td><td class="sku">${esc(item.barcode || "—")}</td><td>${esc(item.unit || "piece")}</td><td>${money(item.price)}</td><td class="qty">${data.shopType === "pharmacy" ? `${productSellableQty(item)} sellable / ${Number(item.qty||0)} total` : `${item.qty} ${esc(item.unit || "piece")}`}</td><td class="stock-value" title="${item.qty} × ${money(item.price)} per unit"><b>${money(Number(item.qty) * Number(item.price))}</b></td><td><span class="status ${productSellableQty(item) === 0 ? "out" : productSellableQty(item) <= item.min ? "low" : ""}">${productSellableQty(item) === 0 ? (data.shopType === "pharmacy" && Number(item.qty)>0 ? "No safe-to-sell stock" : "Out of stock") : productSellableQty(item) <= item.min ? "Low stock" : "In stock"}</span></td><td>${medexAction}${canEditItems ? `<button class="user-action" data-action="rename-product" data-id="${item.id}" data-name="${esc(item.name)}" data-unit="${esc(item.unit || "piece")}" data-category="${esc(item.category || "Other")}">Edit item</button>` : ""}${canDeleteItems ? `<button class="user-action danger" data-action="delete-product" data-id="${item.id}" data-name="${esc(productLabel(item))}" data-qty="${item.qty}" data-unit="${esc(item.unit || "piece")}">Delete</button>` : ""}</td></tr>`; }).join("");
   $("#products-empty").textContent = data.products.length ? "No inventory items match your search." : "No products yet. Add your first item to get started.";
   $("#products-empty").classList.toggle("hidden", products.length > 0);
   const cost = products.reduce((sum, item) => sum + Number(item.cost || 0) * Number(item.qty || 0), 0);
@@ -782,7 +712,29 @@ const clothColors = ["Black", "White", "Navy Blue", "Maroon", "Olive Green", "Sk
 const clothMaterials = ["100% Cotton", "Linen", "Denim", "Silk", "Georgette", "Twill", "Polyester", "Rayon"];
 
 function clothingFormFields(product = {}) {
-  if (data.shopType !== "clothing") return "";
+  if (data.shopType === "pharmacy") return "";
+  if (data.shopType === "mobile") {
+    return `<div class="form-row">
+      <label>Brand<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="e.g. Samsung, Apple, Xiaomi"></label>
+      <label>Color<input name="color" maxlength="60" value="${esc(product.color || "")}" placeholder="e.g. Black, Titanium Gray"></label>
+      <label>Storage / Variant<input name="size" maxlength="60" value="${esc(product.size || "")}" placeholder="e.g. 8GB/128GB, 256GB"></label>
+    </div>`;
+  }
+  if (data.shopType === "hardware") {
+    return `<div class="form-row">
+      <label>Brand / Maker<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="e.g. BSRM, RFL, Berger"></label>
+      <label>Size / Specification<input name="size" maxlength="60" value="${esc(product.size || "")}" placeholder="e.g. 10mm, 1 inch, 2.5 sq mm"></label>
+    </div>`;
+  }
+  if (data.shopType === "grocery") {
+    return `<div class="form-row">
+      <label>Brand<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="e.g. PRAN, Teer, Radhuni"></label>
+      <label>Pack / Weight<input name="size" maxlength="60" value="${esc(product.size || "")}" placeholder="e.g. 500g, 1L, 5kg"></label>
+    </div>`;
+  }
+  if (data.shopType !== "clothing") {
+    return `<label>Brand (optional)<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="Brand or manufacturer"></label>`;
+  }
   return `<div class="clothing-presets">
     <div class="form-row">
       <label>Brand / Label<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="Brand or designer label"></label>
@@ -803,6 +755,17 @@ function clothingFormFields(product = {}) {
     </div>
     <small class="form-hint">Track each size and color variant separately with its own stock and barcode/SKU.</small>
   </div>`;
+}
+
+function pharmacyFormFields(product = {}, includeOpeningBatch = false) {
+  if (data.shopType !== "pharmacy") return "";
+  return `<fieldset class="pharmacy-fields"><legend>Medicine details</legend>
+    <div class="bill-search-head"><small class="form-hint">Need medicine details? Search MedEx.com.bd to check or auto-fill generic name, strength, dosage form, and company.</small><button type="button" class="button secondary" id="form-medex-toggle">Check MedEx.com.bd</button></div>
+    <div id="form-medex-drawer" class="medex-inline-drawer hidden"></div>
+    <div class="form-row"><label>Generic name<input name="genericName" maxlength="160" value="${esc(product.generic_name || "")}" placeholder="Active ingredient"></label><label>Strength<input name="strength" maxlength="80" value="${esc(product.strength || "")}" placeholder="e.g. 500 mg"></label></div>
+    <div class="form-row"><label>Dosage form<input name="dosageForm" maxlength="80" value="${esc(product.dosage_form || "")}" placeholder="Tablet, capsule, syrup, cream"></label><label>Manufacturer<input name="manufacturer" maxlength="160" value="${esc(product.manufacturer || "")}" placeholder="Manufacturer / company"></label></div>
+    ${includeOpeningBatch ? `<div class="pharmacy-batch-opening"><h4>Opening stock batch</h4><div class="form-row"><label>Batch number<input name="batchNumber" maxlength="80" placeholder="Printed batch / lot number"></label><label>Expiry date<input name="expiryDate" type="date"></label></div><small class="form-hint">Required when opening stock quantity is greater than zero. Unknown-expiry stock cannot be dispensed.</small></div>` : ""}
+  </fieldset>`;
 }
 
 function attachClothingChipEvents() {
@@ -1559,22 +1522,31 @@ function render() {
 
   $("#inventory-nav").classList.toggle("hidden", !permissions.inventory);
   $("#sales-nav").classList.toggle("hidden", !permissions.sales);
+  const pharmacyMedexEnabled = data.shopType === "pharmacy" && Boolean(permissions.sales || permissions.inventory);
+  $("#pharmacy-medex-button")?.classList.toggle("hidden", !pharmacyMedexEnabled);
+  $("#pharmacy-medex-inventory-button")?.classList.toggle("hidden", !(permissions.inventory && data.shopType === "pharmacy"));
+  $("#pharmacy-medex-sales-button")?.classList.toggle("hidden", !(permissions.sales && data.shopType === "pharmacy"));
+  $("#pharmacy-batches-button")?.classList.toggle("hidden", !(permissions.inventory && data.shopType === "pharmacy"));
   const onlineOrdersEnabled = !!permissions.online_orders;
   $("#online-orders-nav").classList.toggle("hidden", !onlineOrdersEnabled);
   const repairsEnabled = data.shopType === "mobile" && permissions.sales;
+  const devicesEnabled = data.shopType === "mobile" && permissions.sales;
   $("#repairs-nav").classList.toggle("hidden", !repairsEnabled);
-  $("#devices-nav").classList.toggle("hidden", !repairsEnabled);
+  $("#devices-nav").classList.toggle("hidden", !devicesEnabled);
   $("#expenses-nav").classList.toggle("hidden", !permissions.expenses);
   $("#reports-nav").classList.toggle("hidden", !permissions.sales && !permissions.expenses);
   $("#inventory").classList.toggle("hidden", !permissions.inventory);
   const canBulkInventory = signedInUser?.role === "admin" && signedInUser?.permissions?.records && permissions.inventory;
   $("#bulk-inventory-tools").classList.toggle("hidden", !canBulkInventory);
-  $("#bulk-inventory-help").classList.toggle("hidden", !canBulkInventory);
+  if ($("#bulk-inventory-help")) {
+    $("#bulk-inventory-help").textContent = bulkInventoryTemplateConfig(data.shopType).help;
+    $("#bulk-inventory-help").classList.toggle("hidden", !canBulkInventory);
+  }
   $("#manage-categories").classList.toggle("hidden", !(signedInUser?.permissions?.records && permissions.inventory));
   $("#sales").classList.toggle("hidden", !permissions.sales);
   $("#online-orders")?.classList.toggle("hidden", !onlineOrdersEnabled);
   $("#repairs").classList.toggle("hidden", !repairsEnabled);
-  $("#devices").classList.toggle("hidden", !repairsEnabled);
+  $("#devices").classList.toggle("hidden", !devicesEnabled);
   $("#expenses").classList.toggle("hidden", !permissions.expenses);
   $("#reports").classList.toggle("hidden", !permissions.sales && !permissions.expenses);
   $("#users").classList.toggle("hidden", !(signedInUser?.permissions?.team || signedInUser?.permissions?.admins));
@@ -1588,8 +1560,9 @@ function render() {
   if ($("#edit-workspace")) $("#edit-workspace").title = canSettings ? "Click to edit shop settings and location" : "Workspace location";
   const activeOrders = (data.onlineOrders || []).filter(o => ["Pending", "Confirmed", "Processing", "Shipped"].includes(o.order_status));
   if ($("#nav-online-orders")) $("#nav-online-orders").textContent = onlineOrdersEnabled && activeOrders.length ? activeOrders.length : "";
-  $("#new-sale").classList.toggle("hidden", !permissions.sales || data.requireCustomer || data.taxMode !== "none" || !quickPaymentChoices().length);
-  $("#sale-shortcut").classList.toggle("hidden", !permissions.sales || data.requireCustomer || data.taxMode !== "none" || !quickPaymentChoices().length);
+  const quickSaleHidden = !permissions.sales || data.shopType === "pharmacy" || data.requireCustomer || data.taxMode !== "none" || !quickPaymentChoices().length;
+  $("#new-sale").classList.toggle("hidden", quickSaleHidden);
+  $("#sale-shortcut").classList.toggle("hidden", quickSaleHidden);
   $("#low-count").textContent = permissions.inventory ? `${data.products.filter(item => item.qty <= item.min).length} low` : "—";
 
   const low = data.products.filter(item => item.qty <= item.min);
@@ -1624,20 +1597,89 @@ function render() {
   $("#expenses-table").innerHTML = data.expenses.map(item => `<tr><td>${dateLabel(item.date)}</td><td>${esc(item.category)}</td><td>${esc(item.note || "—")}</td><td><b>${money(item.amount)}</b></td>${canManageExpenseRecords ? `<td><button class="user-action" data-expense-action="edit" data-id="${item.id}">Edit</button><button class="user-action danger" data-expense-action="delete" data-id="${item.id}">Delete</button></td>` : ""}</tr>`).join("");
   $("#expenses-empty").classList.toggle("hidden", data.expenses.length > 0);
   $("#add-product").classList.toggle("hidden", !permissions.inventory);
-  $("#new-sale").classList.toggle("hidden", !permissions.sales || data.requireCustomer || data.taxMode !== "none" || !quickPaymentChoices().length);
-  $("#sale-shortcut").classList.toggle("hidden", !permissions.sales || data.requireCustomer || data.taxMode !== "none" || !quickPaymentChoices().length);
+  $("#new-sale").classList.toggle("hidden", quickSaleHidden);
+  $("#sale-shortcut").classList.toggle("hidden", quickSaleHidden);
   $("#add-expense").classList.toggle("hidden", !permissions.expenses);
   renderReport();
   localizeCurrencyLabels();
-  renderLicenseBanner();
   renderBackupWarning();
   translateDom(document.body);
-  if (!repairsEnabled && ["#repairs", "#devices"].includes(location.hash)) showScreen("dashboard", true);
+  if (!repairsEnabled && location.hash === "#repairs") showScreen("dashboard", true);
+  if (!devicesEnabled && location.hash === "#devices") showScreen("dashboard", true);
   if (!onlineOrdersEnabled && location.hash === "#online-orders") showScreen("dashboard", true);
 }
 
 const dialog = $("#modal");
-const bulkInventoryHeaders = ["Product ID", "Product Name", "SKU", "Selling Price", "Cost", "Quantity", "Low Stock Alert", "Unit", "Category", "Barcode", "Brand", "Color", "Size", "Material"];
+const bulkInventoryCoreHeaders = ["Product ID", "Product Name", "SKU", "Selling Price", "Cost", "Quantity", "Low Stock Alert", "Unit", "Category", "Barcode"];
+function bulkInventoryTemplateConfig(shopType = data.shopType) {
+  const baseRow = item => [
+    item.id,
+    item.name,
+    item.sku || "",
+    item.price,
+    item.cost,
+    item.qty,
+    item.min,
+    item.unit || "piece",
+    item.category || "Other",
+    item.barcode || ""
+  ];
+  if (shopType === "pharmacy") {
+    const batchesByProduct = new Map();
+    for (const batch of data.pharmacyBatches || []) {
+      if (Number(batch.quantity_remaining) > 0 && !batchesByProduct.has(batch.product_id)) {
+        batchesByProduct.set(batch.product_id, batch);
+      }
+    }
+    return {
+      filename: "pharmacy-inventory-template.csv",
+      headers: [...bulkInventoryCoreHeaders, "Generic Name", "Strength", "Dosage Form", "Manufacturer", "Batch Number", "Expiry Date"],
+      help: "Pharmacy Excel template: includes Generic Name, Strength, Dosage Form, Manufacturer, Batch Number, and Expiry Date (YYYY-MM-DD). Keep Product ID unchanged to update medicine details/prices; leave Product ID blank (with Batch Number & Expiry Date) to add new medicines.",
+      toRow: item => {
+        const batch = batchesByProduct.get(item.id);
+        return [...baseRow(item), item.generic_name || "", item.strength || "", item.dosage_form || "", item.manufacturer || "", batch?.batch_number || "", batch?.expiry_date || ""];
+      }
+    };
+  }
+  if (shopType === "clothing") {
+    return {
+      filename: "clothing-inventory-template.csv",
+      headers: [...bulkInventoryCoreHeaders, "Brand", "Color", "Size", "Material"],
+      help: "Clothing Excel template: includes Brand, Color, Size, and Material for apparel variants. Keep Product ID unchanged for existing items; leave it blank to add a new item.",
+      toRow: item => [...baseRow(item), item.brand || "", item.color || "", item.size || "", item.material || ""]
+    };
+  }
+  if (shopType === "mobile") {
+    return {
+      filename: "mobile-inventory-template.csv",
+      headers: [...bulkInventoryCoreHeaders, "Brand", "Color", "Storage / Variant"],
+      help: "Mobile shop Excel template: includes Brand, Color, and Storage / Variant (e.g. 8GB/128GB) for phones and accessories. Keep Product ID unchanged for existing items; leave it blank to add a new item.",
+      toRow: item => [...baseRow(item), item.brand || "", item.color || "", item.size || ""]
+    };
+  }
+  if (shopType === "hardware") {
+    return {
+      filename: "hardware-inventory-template.csv",
+      headers: [...bulkInventoryCoreHeaders, "Brand", "Size / Spec", "Smaller Unit", "Units per Pack"],
+      help: "Hardware Excel template: includes Brand, Size / Spec (e.g. 10mm, 1 inch), and optional Smaller Unit / Units per Pack (e.g. unit = coil, smaller unit = meter, 305 per coil).",
+      toRow: item => [...baseRow(item), item.brand || "", item.size || "", item.pack_name || "", item.pack_size ? item.pack_size : ""]
+    };
+  }
+  if (shopType === "grocery") {
+    return {
+      filename: "grocery-inventory-template.csv",
+      headers: [...bulkInventoryCoreHeaders, "Brand", "Pack / Weight", "Smaller Unit", "Units per Pack"],
+      help: "Grocery Excel template: includes Brand, Pack / Weight (e.g. 500g, 1L), and optional Smaller Unit / Units per Pack (e.g. unit = sack, smaller unit = kg, 50 per sack).",
+      toRow: item => [...baseRow(item), item.brand || "", item.size || "", item.pack_name || "", item.pack_size ? item.pack_size : ""]
+    };
+  }
+  return {
+    filename: "general-inventory-template.csv",
+    headers: [...bulkInventoryCoreHeaders, "Brand", "Smaller Unit", "Units per Pack"],
+    help: "General retail Excel template: includes Product ID, Name, SKU, Prices, Quantity, Unit, Category, Barcode, Brand, and optional Smaller Unit / Units per Pack.",
+    toRow: item => [...baseRow(item), item.brand || "", item.pack_name || "", item.pack_size ? item.pack_size : ""]
+  };
+}
 function csvCell(value) {
   let text = String(value ?? "");
   if (typeof value === "string" && /^[=+@\- \t\r]/.test(text)) text = "'" + text;
@@ -1771,18 +1813,14 @@ $("#edit-workspace").onclick = () => {
     toast("You do not have permission to change shop settings and location.");
     return;
   }
-  const select = (name, values, current) => `<select name="${name}">${values.map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join("")}</select>`;
-  openModal("Shop settings", `<label>Shop name<input name="shopName" value="${esc(data.shopName)}" required></label><label>Workspace / location<input name="workspace" value="${esc(data.workspace)}" required></label><h3>Business contact details for printed orders</h3><div class="form-row"><label>Contact number<input name="contactNumber" maxlength="60" value="${esc(data.contactNumber || "")}"></label><label>WhatsApp number<input name="whatsappNumber" maxlength="60" value="${esc(data.whatsappNumber || "")}"></label></div><div class="form-row"><label>Email address<input name="email" type="email" maxlength="254" value="${esc(data.email || "")}"></label><label>Website<input name="website" maxlength="250" value="${esc(data.website || "")}" placeholder="www.example.com"></label></div><label>Facebook page<input name="facebookPage" maxlength="250" value="${esc(data.facebookPage || "")}" placeholder="Facebook page URL"></label><label>Contact / return address<input name="contactAddress" maxlength="300" value="${esc(data.contactAddress || "")}" placeholder="Office or shop return address"></label><div class="form-row"><label>Shop type${select("shopType", [["general","General retail"],["hardware","Hardware"],["grocery","Grocery"],["clothing","Clothing"],["pharmacy","Pharmacy"],["mobile","Mobile phone sales & service"]], data.shopType)}<small class="form-hint">Adds useful starter categories; existing products stay as they are.</small></label><label>Currency${select("currencyCode", [["BDT","Bangladeshi taka (BDT)"],["USD","US dollar (USD)"],["EUR","Euro (EUR)"],["GBP","Pound sterling (GBP)"],["INR","Indian rupee (INR)"],["PKR","Pakistani rupee (PKR)"],["NPR","Nepalese rupee (NPR)"],["LKR","Sri Lankan rupee (LKR)"],["AUD","Australian dollar (AUD)"],["CAD","Canadian dollar (CAD)"]], data.currencyCode)}<small class="form-hint">Changing currency changes display only; it does not convert existing amounts.</small></label></div><label>Number and date region${select("locale", [["en-BD","English · Bangladesh"],["bn-BD","বাংলা · বাংলাদেশ"],["en-US","English · United States"],["en-GB","English · United Kingdom"],["en-IN","English · India"],["en-PK","English · Pakistan"],["en-NP","English · Nepal"],["en-LK","English · Sri Lanka"],["en-AU","English · Australia"],["en-CA","English · Canada"]], data.locale)}</label><label>Language<select name="language"><option value="bn" ${data.language === "bn" ? "selected" : ""}>বাংলা</option><option value="en" ${data.language !== "bn" ? "selected" : ""}>English</option></select></label><label class="setting-check"><input type="checkbox" name="banglaDigits" ${data.banglaDigits ? "checked" : ""}> Bangla digits (০১২৩)</label></div><div class="form-row"><label>Tax mode${select("taxMode", [["none","No tax"],["inclusive","Tax included in prices"],["exclusive","Add tax at checkout"]], data.taxMode)}</label><label>Tax rate (%)<input name="taxRate" type="number" min="0" max="100" step="0.01" value="${Number(data.taxRate || 0)}"></label></div><label>Payment methods <small class="form-hint">Separate options with commas. Example: Cash, Card, Mobile pay, Due.</small><input name="paymentMethods" maxlength="400" value="${esc((data.paymentMethods || []).join(", "))}" required></label><label class="setting-check"><input type="checkbox" name="requireCustomer" ${data.requireCustomer ? "checked" : ""}> Require a customer name on every bill</label><label class="setting-check"><input type="checkbox" name="allowDiscounts" ${data.allowDiscounts ? "checked" : ""}> Allow bill discounts</label>`, async form => {
+  const select = (name, values, current, disabled = false) => `<select name="${name}" ${disabled ? "disabled" : ""}>${values.map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join("")}</select>`;
+  openModal("Shop settings", `<label>Shop name<input name="shopName" value="${esc(data.shopName)}" required></label><label>Workspace / location<input name="workspace" value="${esc(data.workspace)}" required></label><h3>Business contact details for printed orders</h3><div class="form-row"><label>Contact number<input name="contactNumber" maxlength="60" value="${esc(data.contactNumber || "")}"></label><label>WhatsApp number<input name="whatsappNumber" maxlength="60" value="${esc(data.whatsappNumber || "")}"></label></div><div class="form-row"><label>Email address<input name="email" type="email" maxlength="254" value="${esc(data.email || "")}"></label><label>Website<input name="website" maxlength="250" value="${esc(data.website || "")}" placeholder="www.example.com"></label></div><label>Facebook page<input name="facebookPage" maxlength="250" value="${esc(data.facebookPage || "")}" placeholder="Facebook page URL"></label><label>Contact / return address<input name="contactAddress" maxlength="300" value="${esc(data.contactAddress || "")}" placeholder="Office or shop return address"></label><div class="form-row"><label>Shop type${select("shopType", [["general","General retail"],["hardware","Hardware"],["grocery","Grocery"],["clothing","Clothing"],["pharmacy","Pharmacy"],["mobile","Mobile phone sales & service"]], data.shopType)}<small class="form-hint">Adds starter categories for this business without changing existing products.</small></label><label>Currency${select("currencyCode", [["BDT","Bangladeshi taka (BDT)"],["USD","US dollar (USD)"],["EUR","Euro (EUR)"],["GBP","Pound sterling (GBP)"],["INR","Indian rupee (INR)"],["PKR","Pakistani rupee (PKR)"],["NPR","Nepalese rupee (NPR)"],["LKR","Sri Lankan rupee (LKR)"],["AUD","Australian dollar (AUD)"],["CAD","Canadian dollar (CAD)"]], data.currencyCode)}<small class="form-hint">Changing currency changes display only; it does not convert existing amounts.</small></label></div><label>Number and date region${select("locale", [["en-BD","English · Bangladesh"],["bn-BD","বাংলা · বাংলাদেশ"],["en-US","English · United States"],["en-GB","English · United Kingdom"],["en-IN","English · India"],["en-PK","English · Pakistan"],["en-NP","English · Nepal"],["en-LK","English · Sri Lanka"],["en-AU","English · Australia"],["en-CA","English · Canada"]], data.locale)}</label><label>Language<select name="language"><option value="bn" ${data.language === "bn" ? "selected" : ""}>বাংলা</option><option value="en" ${data.language !== "bn" ? "selected" : ""}>English</option></select></label><label class="setting-check"><input type="checkbox" name="banglaDigits" ${data.banglaDigits ? "checked" : ""}> Bangla digits (০১২৩)</label></div><div class="form-row"><label>Tax mode${select("taxMode", [["none","No tax"],["inclusive","Tax included in prices"],["exclusive","Add tax at checkout"]], data.taxMode)}</label><label>Tax rate (%)<input name="taxRate" type="number" min="0" max="100" step="0.01" value="${Number(data.taxRate || 0)}"></label></div><label>Payment methods <small class="form-hint">Separate options with commas. Example: Cash, Card, Mobile pay, Due.</small><input name="paymentMethods" maxlength="400" value="${esc((data.paymentMethods || []).join(", "))}" required></label><label class="setting-check"><input type="checkbox" name="requireCustomer" ${data.requireCustomer ? "checked" : ""}> Require a customer name on every bill</label><label class="setting-check"><input type="checkbox" name="allowDiscounts" ${data.allowDiscounts ? "checked" : ""}> Allow bill discounts</label>`, async form => {
     const previousLanguage = data.language, previousDigits = data.banglaDigits;
-    data = await api("/api/settings", { method: "PUT", body: JSON.stringify({ shopName: form.get("shopName").trim(), workspace: form.get("workspace").trim(), contactNumber: form.get("contactNumber").trim(), website: form.get("website").trim(), email: form.get("email").trim(), facebookPage: form.get("facebookPage").trim(), whatsappNumber: form.get("whatsappNumber").trim(), contactAddress: form.get("contactAddress").trim(), shopType: form.get("shopType"), currencyCode: form.get("currencyCode"), locale: form.get("locale"), taxMode: form.get("taxMode"), taxRate: Number(form.get("taxRate")), paymentMethods: String(form.get("paymentMethods")).split(",").map(value => value.trim()).filter(Boolean), requireCustomer: form.get("requireCustomer") === "on", allowDiscounts: form.get("allowDiscounts") === "on", language: form.get("language"), banglaDigits: form.get("banglaDigits") === "on" }) });
+    data = await api("/api/settings", { method: "PUT", body: JSON.stringify({ shopName: form.get("shopName").trim(), workspace: form.get("workspace").trim(), contactNumber: form.get("contactNumber").trim(), website: form.get("website").trim(), email: form.get("email").trim(), facebookPage: form.get("facebookPage").trim(), whatsappNumber: form.get("whatsappNumber").trim(), contactAddress: form.get("contactAddress").trim(), shopType: form.get("shopType") || data.shopType, currencyCode: form.get("currencyCode"), locale: form.get("locale"), taxMode: form.get("taxMode"), taxRate: Number(form.get("taxRate")), paymentMethods: String(form.get("paymentMethods")).split(",").map(value => value.trim()).filter(Boolean), requireCustomer: form.get("requireCustomer") === "on", allowDiscounts: form.get("allowDiscounts") === "on", language: form.get("language"), banglaDigits: form.get("banglaDigits") === "on" }) });
     if (data.language !== previousLanguage || data.banglaDigits !== previousDigits) { location.reload(); return; }
     render();
     toast("Shop details saved");
   });
-  $("#open-license-settings")?.remove();
-  $("#modal-fields")?.insertAdjacentHTML("beforeend", `<p class="settings-license-row"><button type="button" class="button secondary" id="open-license-settings">Licence & plan</button> <span class="form-hint">${esc(t("Installation ID"))}: <code title="${esc(data.license?.installShort || "")}">${esc(data.license?.installId || "")}</code></span></p>`);
-  const licenseButton = $("#open-license-settings");
-  if (licenseButton) licenseButton.onclick = () => { closeModal(); openLicenseModal(); };
   $("#settings-update-row")?.remove();
   $("#modal-fields")?.insertAdjacentHTML("beforeend", `<p class="settings-update-row" id="settings-update-row"><button type="button" class="button secondary" id="check-updates">${esc(t("Check for updates"))}</button> <span class="form-hint" id="update-status" role="status"></span></p>`);
   const updateButton = $("#check-updates");
@@ -1928,11 +1966,13 @@ $("#add-product").onclick = () => {
   const categories = data.categories || [];
   const existingNames = [...new Map(data.products.map(item => [item.name.toLocaleLowerCase(), item])).values()];
   const clothing = clothingFormFields();
-  openModal("Add a product", `<label>Product name<input name="name" list="product-name-suggestions" autocomplete="off" required placeholder="Start typing an item name"><datalist id="product-name-suggestions">${existingNames.map(item => `<option value="${esc(item.name)}" label="${esc(item.name)}">${esc(item.name)}</option>`).join("")}</datalist><small class="suggestion-hint">Start typing to see existing item names.</small></label><label>Category<select name="category">${categories.map(item => `<option>${esc(item.name)}</option>`).join("")}</select></label><div class="form-row"><label>SKU / item code<input name="sku" placeholder="Optional"></label><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" placeholder="Scan or enter barcode"></label></div>${clothing}<label>Unit of measure<input name="unit" value="piece" maxlength="30" placeholder="piece, box, kg, meter, roll" required></label><div class="form-row"><label>Selling price (${esc(currencySymbol())}) per unit<input name="price" type="number" min="0" step="0.01" required></label><label>Buying cost (${esc(currencySymbol())}) per unit<input name="cost" type="number" min="0" step="0.01" required></label></div><div class="form-row"><label>Quantity (<span class="unit-label">piece</span>)<input name="qty" type="number" min="0" required></label><label>Low-stock alert at (<span class="unit-label">piece</span>)<input name="min" type="number" min="0" value="5" required></label></div>`, async form => {
-    await updateState("/api/products", { name: form.get("name").trim(), category: form.get("category"), sku: form.get("sku").trim(), barcode: form.get("barcode").trim(), brand: form.get("brand") || "", color: form.get("color") || "", size: form.get("size") || "", material: form.get("material") || "", unit: form.get("unit").trim(), price: Number(form.get("price")), cost: Number(form.get("cost")), qty: Number(form.get("qty")), min: Number(form.get("min")), pack_name: (form.get("pack_name") || "").trim(), pack_size: Number(form.get("pack_size") || 0) });
+  const pharmacy = pharmacyFormFields({}, true);
+  openModal("Add a product", `<label>Product name<input name="name" list="product-name-suggestions" autocomplete="off" required placeholder="Start typing an item name"><datalist id="product-name-suggestions">${existingNames.map(item => `<option value="${esc(item.name)}" label="${esc(item.name)}">${esc(item.name)}</option>`).join("")}</datalist><small class="suggestion-hint">Start typing to see existing item names.</small></label><label>Category<select name="category">${categories.map(item => `<option>${esc(item.name)}</option>`).join("")}</select></label><div class="form-row"><label>SKU / item code<input name="sku" placeholder="Optional"></label><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" placeholder="Scan or enter barcode"></label></div>${clothing}${pharmacy}<label>Unit of measure<input name="unit" value="piece" maxlength="30" placeholder="piece, box, kg, meter, roll" required></label><div class="form-row"><label>Selling price (${esc(currencySymbol())}) per unit<input name="price" type="number" min="0" step="0.01" required></label><label>Buying cost (${esc(currencySymbol())}) per unit<input name="cost" type="number" min="0" step="0.01" required></label></div><div class="form-row"><label>Quantity (<span class="unit-label">piece</span>)<input name="qty" type="number" min="0" required></label><label>Low-stock alert at (<span class="unit-label">piece</span>)<input name="min" type="number" min="0" value="5" required></label></div>`, async form => {
+    await updateState("/api/products", { name: form.get("name").trim(), category: form.get("category"), sku: form.get("sku").trim(), barcode: form.get("barcode").trim(), brand: form.get("brand") || "", color: form.get("color") || "", size: form.get("size") || "", material: form.get("material") || "", genericName: form.get("genericName") || "", strength: form.get("strength") || "", dosageForm: form.get("dosageForm") || "", manufacturer: form.get("manufacturer") || "", batchNumber: form.get("batchNumber") || "", expiryDate: form.get("expiryDate") || "", unit: form.get("unit").trim(), price: Number(form.get("price")), cost: Number(form.get("cost")), qty: Number(form.get("qty")), min: Number(form.get("min")), pack_name: (form.get("pack_name") || "").trim(), pack_size: Number(form.get("pack_size") || 0) });
     toast("Product added");
   });
   attachClothingChipEvents();
+  attachPharmacyFormMedexEvents();
   $("#modal-fields [name=unit]").oninput = event => {
     document.querySelectorAll("#modal-fields .unit-label").forEach(label => label.textContent = event.target.value.trim() || "unit");
   };
@@ -2222,6 +2262,10 @@ $("#products-table").onclick = event => {
   const button = event.target.closest("button[data-action]");
   if (!button) return;
   const id = button.dataset.id;
+  if (button.dataset.action === "medex-product") {
+    openPharmacyMedicineLookup(button.dataset.name || "");
+    return;
+  }
   if (button.dataset.action === "delete-product") {
     if (!signedInUser?.permissions?.records || !data.permissions?.inventory) return;
     const { name, qty, unit } = button.dataset;
@@ -2239,9 +2283,11 @@ $("#products-table").onclick = event => {
   if (!product) return toast("Inventory item not found. Refresh and try again.");
   const oldCategory = product.category || "Other";
   const clothing = clothingFormFields(product);
-  openModal("Edit inventory item", `<label>Item name<input name="name" maxlength="200" value="${esc(product.name)}" required></label><div class="form-row"><label>SKU / item code<input name="sku" maxlength="100" value="${esc(product.sku || "")}"></label><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" value="${esc(product.barcode || "")}" placeholder="Scan or enter barcode"></label></div>${clothing}<div class="form-row"><label>Unit of measure<input name="unit" maxlength="30" value="${esc(product.unit || "piece")}" required></label><label>Category<select name="category">${(data.categories || []).map(item => `<option ${item.name === oldCategory ? "selected" : ""}>${esc(item.name)}</option>`).join("")}</select></label></div><div class="form-row"><label>Selling price per unit (${esc(currencySymbol())})<input name="price" type="number" min="0" step="0.01" value="${Number(product.price)}" required></label><label>Purchase cost per unit (${esc(currencySymbol())})<input name="cost" type="number" min="0" step="0.01" value="${Number(product.cost)}" required></label></div><div class="form-row"><label>Stock quantity (${esc(product.unit || "piece")})<input name="qty" type="number" min="0" step="1" value="${Number(product.qty)}" required></label><label>Low-stock alert at<input name="min" type="number" min="0" step="1" value="${Number(product.min)}" required></label></div><p class="form-hint">Changing stock here sets the new stock total. Past sales keep their recorded cost and unit.</p>`, async form => {
+  const pharmacy = pharmacyFormFields(product, false);
+  openModal("Edit inventory item", `<label>Item name<input name="name" maxlength="200" value="${esc(product.name)}" required></label><div class="form-row"><label>SKU / item code<input name="sku" maxlength="100" value="${esc(product.sku || "")}"></label><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" value="${esc(product.barcode || "")}" placeholder="Scan or enter barcode"></label></div>${clothing}${pharmacy}<div class="form-row"><label>Unit of measure<input name="unit" maxlength="30" value="${esc(product.unit || "piece")}" required></label><label>Category<select name="category">${(data.categories || []).map(item => `<option ${item.name === oldCategory ? "selected" : ""}>${esc(item.name)}</option>`).join("")}</select></label></div><div class="form-row"><label>Selling price per unit (${esc(currencySymbol())})<input name="price" type="number" min="0" step="0.01" value="${Number(product.price)}" required></label><label>Purchase cost per unit (${esc(currencySymbol())})<input name="cost" type="number" min="0" step="0.01" value="${Number(product.cost)}" required></label></div><div class="form-row"><label>Stock quantity (${esc(product.unit || "piece")})<input name="qty" type="number" min="0" step="1" value="${Number(product.qty)}" required></label><label>Low-stock alert at<input name="min" type="number" min="0" step="1" value="${Number(product.min)}" required></label></div><p class="form-hint">Changing stock here sets the new stock total. Past sales keep their recorded cost and unit.</p>`, async form => {
     const details = Object.fromEntries(["name","sku","barcode","unit","category"].map(key => [key, (form.get(key) || "").trim()]));
-    if (data.shopType === "clothing") for (const key of ["brand", "color", "size", "material"]) details[key] = (form.get(key) || "").trim();
+    if (data.shopType !== "pharmacy") for (const key of ["brand", "color", "size", "material"]) if (form.get(key) !== null) details[key] = (form.get(key) || "").trim();
+    if (data.shopType === "pharmacy") Object.assign(details,{genericName:form.get("genericName")||"",strength:form.get("strength")||"",dosageForm:form.get("dosageForm")||"",manufacturer:form.get("manufacturer")||""});
     for (const key of ["price","cost","qty","min"]) details[key] = Number(form.get(key));
     details.pack_name = (form.get("pack_name") || "").trim(); details.pack_size = Number(form.get("pack_size") || 0);
     data = await api(`/api/products/${id}`, { method: "PATCH", body: JSON.stringify(details) });
@@ -2249,6 +2295,7 @@ $("#products-table").onclick = event => {
     toast("Inventory item updated");
   });
   attachClothingChipEvents();
+  attachPharmacyFormMedexEvents();
 };
 $("#sales-table").onclick = async event => {
   const button = event.target.closest("[data-sale-action]");
@@ -2326,12 +2373,11 @@ $("#sales-table").onclick = async event => {
   });
 };
 $("#download-inventory-template").onclick = () => {
-  const rows = [bulkInventoryHeaders, ...data.products.map(item => [
-    item.id, item.name, item.sku, item.price, item.cost, item.qty, item.min, item.unit || "piece", item.category || "Other", item.barcode || "", item.brand || "", item.color || "", item.size || "", item.material || ""
-  ])];
+  const config = bulkInventoryTemplateConfig(data.shopType);
+  const rows = [config.headers, ...data.products.map(item => config.toRow(item))];
   const csv = "\uFEFF" + rows.map(row => row.map(csvCell).join(",")).join("\r\n");
-  downloadFile("shop-inventory-template.csv", csv);
-  toast("Excel-compatible inventory template downloaded");
+  downloadFile(config.filename, csv);
+  toast(`Excel template downloaded (${config.filename})`);
 };
 $("#bulk-inventory-file").onchange = async event => {
   const file = event.target.files?.[0];
@@ -2339,29 +2385,60 @@ $("#bulk-inventory-file").onchange = async event => {
   try {
     if (file.size > 400000) throw new Error("Please keep the CSV file under 400 KB.");
     const csvRows = parseCsv((await file.text()).replace(/^\uFEFF/, ""));
-    const headers = csvRows.shift()?.map(value => value.trim().toLowerCase());
-    const expected = bulkInventoryHeaders.map(value => value.toLowerCase());
-    const barcodeHeaders = expected.slice(0, 10), categoryHeaders = expected.slice(0, 9);
-    const unitHeaders = expected.slice(0, 8), legacyHeaders = expected.slice(0, 7);
-    const matches = template => headers?.length === template.length && template.every((header, index) => headers[index] === header);
-    const hasClothing = matches(expected);
-    const hasBarcode = hasClothing || matches(barcodeHeaders);
-    const hasCategory = hasBarcode || matches(categoryHeaders);
-    const hasUnit = matches(unitHeaders);
-    const isLegacyTemplate = matches(legacyHeaders);
-    if (!hasCategory && !hasUnit && !isLegacyTemplate) {
-      throw new Error(`Use the downloaded template without changing its columns: ${bulkInventoryHeaders.join(", ")}.`);
+    const rawHeaders = csvRows.shift();
+    if (!rawHeaders || !rawHeaders.length) throw new Error("The CSV file is empty.");
+    const headers = rawHeaders.map(value => value.trim().toLowerCase());
+    const config = bulkInventoryTemplateConfig(data.shopType);
+    const requiredCore = ["product id", "product name", "sku", "selling price", "cost", "quantity", "low stock alert"];
+    const hasRequiredPrefix = requiredCore.every((col, idx) => headers[idx] === col);
+    if (!hasRequiredPrefix) {
+      throw new Error(`Use the downloaded ${data.shopType || "shop"} template with columns: ${config.headers.join(", ")}.`);
     }
+    const colIndex = new Map(headers.map((name, idx) => [name, idx]));
+    const getCol = (values, ...names) => {
+      for (const name of names) {
+        if (colIndex.has(name)) return (values[colIndex.get(name)] ?? "").trim();
+      }
+      return null;
+    };
     const rows = csvRows.map((values, index) => {
       if (values.length !== headers.length) throw new Error(`CSV row ${index + 2} has ${values.length} columns; expected ${headers.length}.`);
-    const [id, name, sku, price, cost, qty, min, unit, category, barcode, brand, color, size, material] = values.map(value => value.trim());
-      return { id, name, sku, price, cost, qty, min, unit: hasUnit || hasCategory ? unit : "", category: hasCategory ? category : "", barcode: hasBarcode ? barcode : null, brand: hasClothing ? brand : null, color: hasClothing ? color : null, size: hasClothing ? size : null, material: hasClothing ? material : null };
+      const id = getCol(values, "product id") ?? "";
+      const name = getCol(values, "product name") ?? "";
+      const sku = getCol(values, "sku") ?? "";
+      const price = getCol(values, "selling price") ?? "";
+      const cost = getCol(values, "cost") ?? "";
+      const qty = getCol(values, "quantity") ?? "";
+      const min = getCol(values, "low stock alert") ?? "";
+      const unit = getCol(values, "unit") ?? "";
+      const category = getCol(values, "category") ?? "";
+      const barcode = getCol(values, "barcode");
+      const brand = getCol(values, "brand");
+      const color = getCol(values, "color");
+      const size = getCol(values, "size", "storage / variant", "size / spec", "pack / weight");
+      const material = getCol(values, "material");
+      const pack_name = getCol(values, "smaller unit", "pack name");
+      const packSizeRaw = getCol(values, "units per pack", "pack size");
+      const pack_size = packSizeRaw === null ? null : packSizeRaw === "" ? 0 : Number(packSizeRaw);
+      const genericName = getCol(values, "generic name");
+      const strength = getCol(values, "strength");
+      const dosageForm = getCol(values, "dosage form");
+      const manufacturer = getCol(values, "manufacturer");
+      const batchNumber = getCol(values, "batch number");
+      const expiryDate = getCol(values, "expiry date");
+      return {
+        id, name, sku, price, cost, qty, min, unit, category, barcode,
+        brand, color, size, material, pack_name, pack_size,
+        genericName, strength, dosageForm, manufacturer, batchNumber, expiryDate
+      };
     });
     if (!rows.length) throw new Error("The template has no inventory rows to upload.");
     if (rows.length > 500) throw new Error("Upload no more than 500 rows at a time.");
     const updates = rows.filter(row => row.id).length;
     const additions = rows.length - updates;
-    const summary = `${updates} existing item(s) will be updated and ${additions} new item(s) added. Quantity replaces the current stock count. Any new categories in the file will be created automatically. Continue?`;
+    const summary = data.shopType === "pharmacy"
+      ? `${updates} existing medicine(s) will be updated and ${additions} new medicine(s) added. New stock requires a Batch Number and Expiry Date. Missing categories will be created automatically. Continue?`
+      : `${updates} existing item(s) will be updated and ${additions} new item(s) added. Quantity replaces the current stock count. Any new categories in the file will be created automatically. Continue?`;
     if (!confirm(summary)) return;
     data = await api("/api/inventory/bulk", { method: "POST", body: JSON.stringify({ rows }) });
     render();
@@ -2465,10 +2542,11 @@ $("#sales-table").addEventListener("click", async event => {
 function openBillEditor(editing) {
   const pid = l => l.productId || data.products.find(p => p.name === l.name)?.id;
   const extra = Object.fromEntries((editing?.lines || []).map(l => [pid(l), l.qty]));
-  const stocked = data.products.filter(item => item.qty > 0 || extra[item.id]);
+  if (editing && data.shopType === "pharmacy") return toast("Pharmacy bills cannot be edited after saving. Process a return and create a corrected bill.");
+  const stocked = data.products.filter(item => productSellableQty(item) > 0 || extra[item.id]);
   if (!stocked.length) return toast("No products in stock.");
   let cart = (editing?.lines || []).map(l => { const p = data.products.find(x => x.id === pid(l)); return p && { id: p.id, name: productLabel(p), category: l.category || p.category || "", unit: p.unit || "piece", packSize: p.pack_size || 0, packName: p.pack_name, price: l.price, cost: p.cost, qty: l.qty, max: +(p.qty + l.qty).toFixed(6), serials: l.serials || [], warrantyMonths: Number(l.warrantyMonths || 0) }; }).filter(Boolean);
-  openModal(editing ? `Edit ${billNo(editing.id)}` : "New bill", `<div class="item-search"><label for="bill-search">Add item <span class="form-hint">Type part of a name, SKU, or barcode. Pick from the list or press Enter to add.</span></label><div class="item-search-wrap"><input id="bill-search" type="search" autocomplete="off" placeholder="Item name, SKU, or barcode"><button type="button" class="item-search-toggle" id="bill-search-toggle" aria-label="Show all in-stock items" title="Show all in-stock items">▾</button><div class="item-search-results hidden" id="bill-search-results" role="listbox" aria-label="Matching in-stock items"></div></div></div>
+  openModal(editing ? `Edit ${billNo(editing.id)}` : "New bill", `<div class="item-search"><div class="bill-search-head"><label for="bill-search">Add item <span class="form-hint">Type part of a name, SKU, or barcode. Pick from the list or press Enter to add.</span></label>${data.shopType === "pharmacy" ? `<button type="button" class="button secondary" id="bill-medex-toggle">Medicine info (MedEx)</button>` : ""}</div><div class="item-search-wrap"><input id="bill-search" type="search" autocomplete="off" placeholder="Item name, SKU, or barcode"><button type="button" class="item-search-toggle" id="bill-search-toggle" aria-label="Show all in-stock items" title="Show all in-stock items">▾</button><div class="item-search-results hidden" id="bill-search-results" role="listbox" aria-label="Matching in-stock items"></div></div></div>${data.shopType === "pharmacy" ? `<div id="bill-medex-drawer" class="medex-inline-drawer hidden"></div>` : ""}
 <div class="table-scroll bill-cart"><table><thead><tr><th>Item</th><th>Price / unit</th><th>Qty</th><th>Amount</th><th class="${data.shopType === "mobile" ? "" : "hidden"}">IMEI / serial &amp; warranty</th><th></th></tr></thead><tbody id="bill-lines"></tbody></table><div class="empty" id="bill-empty">No items yet. Search above to add the first one.</div></div>
 <div class="form-row"><label>Customer name${data.requireCustomer ? "" : " (optional)"}<input name="customer" maxlength="80" value="${esc(editing?.customer || "")}" ${data.requireCustomer && !editing ? "required" : ""}></label><label>Phone (optional)<input name="phone" maxlength="30" inputmode="tel" value="${esc(editing?.phone || "")}"></label></div>
 <div class="form-row"><label class="${editing ? "hidden" : ""}">Payment method<select name="payment">${paymentOptions(editing?.payment || "Cash")}</select></label>${data.allowDiscounts ? `<label>Discount (৳)<input id="bill-discount" name="discount" type="number" min="0" step="any" value="${editing ? editing.discount : 0}"></label>` : ""}</div>
@@ -2561,7 +2639,7 @@ ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive f
   const addProduct = item => {
     if (!item) return;
     const existing = cart.find(line => line.id === item.id);
-    if (!existing) cart.push({ id: item.id, name: productLabel(item), category: item.category || "", serials: [], warrantyMonths: 12, unit: item.unit || "piece", packSize: item.pack_size || 0, packName: item.pack_name, price: item.price, cost: item.cost, qty: 1, max: +(item.qty + (extra[item.id] || 0)).toFixed(6) });
+    if (!existing) cart.push({ id: item.id, name: productLabel(item), category: item.category || "", serials: [], warrantyMonths: 12, unit: item.unit || "piece", packSize: item.pack_size || 0, packName: item.pack_name, price: item.price, cost: item.cost, qty: 1, max: +(productSellableQty(item) + (extra[item.id] || 0)).toFixed(6) });
     else if (existing.qty < existing.max) existing.qty++;
     else { toast(`Only ${existing.max} ${existing.unit} of ${existing.name} in stock.`); return; }
     draw();
@@ -2623,6 +2701,30 @@ ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive f
     }
   }
   draw();
+  if ($("#bill-medex-toggle") && $("#bill-medex-drawer")) {
+    let billMedexMounted = null;
+    $("#bill-medex-toggle").onclick = () => {
+      const drawer = $("#bill-medex-drawer");
+      const opening = drawer.classList.contains("hidden");
+      drawer.classList.toggle("hidden", !opening);
+      if (opening) {
+        const currentBillQuery = ($("#bill-search")?.value || "").trim();
+        if (!billMedexMounted) {
+          billMedexMounted = mountMedexLookupBox(drawer, {
+            initialQuery: currentBillQuery,
+            onAddToBill: item => {
+              addProduct(item);
+              toast(`${productLabel(item)} added to bill.`);
+            }
+          });
+        } else if (currentBillQuery) {
+          billMedexMounted.setQueryAndSearch(currentBillQuery);
+        } else {
+          billMedexMounted.focusInput();
+        }
+      }
+    };
+  }
   $("#bill-search").focus();
 }
 $("#new-bill").onclick = () => openBillEditor();
@@ -3271,7 +3373,7 @@ async function openSupplierHub() {
     const canEdit = canEditSupplierHistory();
     const canRecord = !!data.permissions?.inventory;
     const supplierRows = suppliers.length ? suppliers.map(s => `<tr><td><b>${esc(s.name)}</b>${s.phone ? `<br><small>${esc(s.phone)}</small>` : ""}</td><td>${supplierMoney(s.opening_balance)}</td><td>${supplierMoney(s.total_bought)}</td><td>${supplierMoney(s.total_paid)}</td><td><b>${supplierMoney(s.balance)}</b></td><td>${canRecord && Number(s.balance) > 0 ? `<button type="button" class="user-action" data-supplier-pay="${s.id}" data-supplier-name="${esc(s.name)}" data-balance="${s.balance}">Pay supplier</button>` : "—"}${canEdit ? `<button type="button" class="user-action" data-edit-supplier="${s.id}">Edit</button>` : ""}</td></tr>`).join("") : '<tr><td colspan="6" class="empty">Add a supplier to start recording purchases.</td></tr>';
-    const purchaseRows = purchases.length ? purchases.map(p => `<tr data-history-supplier="${p.supplier_id}"><td><input type="checkbox" aria-label="Select purchase P-${String(p.id).padStart(8, "0")}" data-select-purchase="${p.id}"></td><td>P-${String(p.id).padStart(8, "0")}</td><td>${esc(p.date)}</td><td>${esc(p.supplier_name)}</td><td>${p.line_count} items <button type="button" class="user-action" aria-expanded="false" data-toggle-purchase="${p.id}">View products</button></td><td><b>${supplierMoney(p.total)}</b></td><td>${esc(p.reference || "—")}</td><td>${esc(p.created_by || "")}</td><td><button type="button" class="user-action" data-print-purchase="${p.id}">Print list</button>${canEdit ? `<button type="button" class="user-action" data-edit-purchase="${p.id}">Edit</button>` : ""}</td></tr><tr class="purchase-detail-row hidden" data-history-supplier="${p.supplier_id}" data-purchase-detail="${p.id}"><td colspan="9"><div class="purchase-detail"><b>Products bought from ${esc(p.supplier_name)}</b>${p.items?.length ? `<div class="table-scroll"><table><thead><tr><th>Product</th><th>Quantity</th><th>Unit cost</th><th>Line total</th></tr></thead><tbody>${p.items.map(item => `<tr><td>${esc(item.productName)}</td><td>${Number(item.qty)} ${esc(item.unit || "piece")}</td><td>${supplierMoney(item.cost)}</td><td>${supplierMoney(Number(item.qty) * Number(item.cost))}</td></tr>`).join("")}</tbody></table></div>` : `<p class="form-hint">Product details are unavailable for this older purchase.</p>`}</div></td></tr>`).join("") : '<tr><td colspan="9" class="empty">No purchases recorded yet.</td></tr>';
+    const purchaseRows = purchases.length ? purchases.map(p => `<tr data-history-supplier="${p.supplier_id}"><td><input type="checkbox" aria-label="Select purchase P-${String(p.id).padStart(8, "0")}" data-select-purchase="${p.id}"></td><td>P-${String(p.id).padStart(8, "0")}</td><td>${esc(p.date)}</td><td>${esc(p.supplier_name)}</td><td>${p.line_count} items <button type="button" class="user-action" aria-expanded="false" data-toggle-purchase="${p.id}">View products</button></td><td><b>${supplierMoney(p.total)}</b></td><td>${esc(p.reference || "—")}</td><td>${esc(p.created_by || "")}</td><td><button type="button" class="user-action" data-print-purchase="${p.id}">Print list</button>${canEdit ? `<button type="button" class="user-action" data-edit-purchase="${p.id}">Edit</button>` : ""}</td></tr><tr class="purchase-detail-row hidden" data-history-supplier="${p.supplier_id}" data-purchase-detail="${p.id}"><td colspan="9"><div class="purchase-detail"><b>Products bought from ${esc(p.supplier_name)}</b>${p.items?.length ? `<div class="table-scroll"><table><thead><tr><th>Product</th><th>Quantity</th><th>Unit cost</th><th>Line total</th>${data.shopType === "pharmacy" ? "<th>Batch / lot</th><th>Expiry</th>" : ""}</tr></thead><tbody>${p.items.map(item => `<tr><td>${esc(item.productName)}</td><td>${Number(item.qty)} ${esc(item.unit || "piece")}</td><td>${supplierMoney(item.cost)}</td><td>${supplierMoney(Number(item.qty) * Number(item.cost))}</td>${data.shopType === "pharmacy" ? `<td>${esc(item.batchNumber || "Not recorded")}</td><td>${esc(item.expiryDate || "Not recorded")}</td>` : ""}</tr>`).join("")}</tbody></table></div>` : `<p class="form-hint">Product details are unavailable for this older purchase.</p>`}</div></td></tr>`).join("") : '<tr><td colspan="9" class="empty">No purchases recorded yet.</td></tr>';
     const movementRows = movements.length ? movements.map(m => `<tr><td>${esc(m.at)}</td><td>${esc(m.product_name)}</td><td>${esc(m.kind)}</td><td>${Number(m.quantity_change) > 0 ? "+" : ""}${Number(m.quantity_change)} ${esc(m.unit)}</td><td>${Number(m.quantity_after)} ${esc(m.unit)}</td><td>${esc(m.reference || "—")}</td><td>${esc(m.actor || "")}</td></tr>`).join("") : '<tr><td colspan="7" class="empty">New stock movements will appear here.</td></tr>';
     const paymentRows = payments.length ? payments.map(p => `<tr data-history-supplier="${p.supplier_id}"><td><input type="checkbox" aria-label="Select supplier payment ${p.id}" data-select-payment="${p.id}"></td><td>${esc(p.date)}</td><td>${esc(p.supplier_name)}</td><td>${esc(p.method)}</td><td><b>${supplierMoney(p.amount)}</b></td><td>${esc(p.note || "—")}</td><td>${esc(p.received_by || "")}</td><td><button type="button" class="user-action" data-print-payment="${p.id}">Print</button>${canEdit ? `<button type="button" class="user-action" data-edit-payment="${p.id}">Edit</button>` : ""}</td></tr>`).join("") : '<tr><td colspan="8" class="empty">No supplier payments recorded yet.</td></tr>';
     supplierModal("Suppliers & purchases", `<div class="supplier-actions">${canRecord ? `<button type="button" class="button secondary" id="supplier-add">＋ Add supplier</button><button type="button" class="button primary" id="purchase-add" ${suppliers.length ? "" : "disabled"}>＋ Record purchase</button>` : ""}</div>
@@ -3332,8 +3434,8 @@ async function openSupplierHub() {
     dialog.querySelectorAll("[data-print-payment]").forEach(button => button.onclick = () => printRecord("payment", payments.filter(p => p.id === Number(button.dataset.printPayment))));
     dialog.querySelectorAll("[data-edit-purchase]").forEach(button => button.onclick = () => {
       const purchase = purchases.find(p => p.id === Number(button.dataset.editPurchase));
-      if (purchase.items?.length && purchase.items.every(item => item.productId && data.products.some(product => product.id === item.productId))) return openPurchaseEntry(suppliers, purchase);
-      supplierModal(`Edit purchase P-${String(purchase.id).padStart(8, "0")}`, `<label>Purchase date<input name="date" type="date" value="${esc(purchase.date)}" required></label><label>Invoice / reference<input name="reference" maxlength="100" value="${esc(purchase.reference || "")}"></label><label>Note<input name="note" maxlength="500" value="${esc(purchase.note || "")}"></label><p class="form-hint">The original item was removed or cannot be matched, so only purchase details can be edited.</p>`, async form => {
+      if (data.shopType !== "pharmacy" && purchase.items?.length && purchase.items.every(item => item.productId && data.products.some(product => product.id === item.productId))) return openPurchaseEntry(suppliers, purchase);
+      supplierModal(`Edit purchase P-${String(purchase.id).padStart(8, "0")}`, `<label>Purchase date<input name="date" type="date" value="${esc(purchase.date)}" required></label><label>Invoice / reference<input name="reference" maxlength="100" value="${esc(purchase.reference || "")}"></label><label>Note<input name="note" maxlength="500" value="${esc(purchase.note || "")}"></label><p class="form-hint">${data.shopType === "pharmacy" ? "The Pharmacy receipt and its batch/expiry history are preserved. Only date, reference, and note can be corrected here." : "The original item was removed or cannot be matched, so only purchase details can be edited."}</p>`, async form => {
         await api(`/api/purchases/${purchase.id}`, { method: "PATCH", body: JSON.stringify({ date: form.get("date"), reference: form.get("reference"), note: form.get("note") }) });
         toast("Purchase details updated"); await openSupplierHub(); return false;
       });
@@ -3352,7 +3454,7 @@ async function openSupplierHub() {
 function openPurchaseEntry(suppliers, editing = null) {
   const supplierOptions = suppliers.map(s => `<option value="${s.id}">${esc(s.name)} · due ${supplierMoney(s.balance)}</option>`).join("");
   const productOptions = (selectedId = 0) => data.products.map(p => `<option value="${p.id}" data-cost="${Number(p.cost)}" ${p.id === Number(selectedId) ? "selected" : ""}>${esc(productLabel(p))} · ${esc(p.unit || "piece")} · stock ${Number(p.qty)}</option>`).join("");
-  const row = (item = {}) => `<tr><td><select class="purchase-product" required><option value="">Select product</option>${productOptions(item.productId)}</select></td><td><input class="purchase-qty" type="number" min="0.001" step="any" value="${Number(item.qty ?? 1)}" required></td><td><input class="purchase-cost" type="number" min="0" step="0.01" value="${Number(item.cost ?? 0)}" required></td><td class="purchase-line-total">৳0.00</td><td><button type="button" class="user-action danger purchase-remove">Remove</button></td></tr>`;
+  const row = (item = {}) => `<tr><td><select class="purchase-product" required><option value="">Select product</option>${productOptions(item.productId)}</select>${data.shopType === "pharmacy" ? `<div class="pharmacy-purchase-batch"><label>Batch / lot<input class="purchase-batch" maxlength="80" value="${esc(item.batchNumber || "")}" required></label><label>Expiry<input class="purchase-expiry" type="date" value="${esc(item.expiryDate || "")}" required></label></div>` : ""}</td><td><input class="purchase-qty" type="number" min="0.001" step="any" value="${Number(item.qty ?? 1)}" required></td><td><input class="purchase-cost" type="number" min="0" step="0.01" value="${Number(item.cost ?? 0)}" required></td><td class="purchase-line-total">৳0.00</td><td><button type="button" class="user-action danger purchase-remove">Remove</button></td></tr>`;
   const lines = editing?.items?.length ? editing.items : [{}];
   const supplierField = editing
     ? `<label>Supplier<input value="${esc(editing.supplier_name)}" disabled></label>`
@@ -3360,9 +3462,10 @@ function openPurchaseEntry(suppliers, editing = null) {
   const paymentFields = editing
     ? `<p class="form-hint">Existing payments are kept in payment history. Stock is adjusted for item changes, and the item's current average cost is recalculated where enough stock remains.</p>`
     : `<div class="form-row supplier-purchase-payment"><label>Paid now (৳)<input name="paid" type="number" min="0" step="0.01" value="0" required></label><label>Payment method<select name="method"><option>Cash</option><option>bKash</option><option>Nagad</option><option>Bank</option><option>Other</option></select></label></div>`;
-  supplierModal(editing ? `Edit purchase P-${String(editing.id).padStart(8, "0")}` : "Record supplier purchase", `${supplierField}<div class="form-row"><label>Purchase date<input name="date" type="date" value="${esc(editing?.date || supplierDate())}" required></label><label>Invoice / reference<input name="reference" maxlength="100" value="${esc(editing?.reference || "")}"></label></div><div class="table-scroll purchase-lines"><table><thead><tr><th>Product</th><th>Quantity</th><th>Cost per unit (৳)</th><th>Line total</th><th></th></tr></thead><tbody id="purchase-lines">${lines.map(row).join("")}</tbody></table></div><button type="button" class="button secondary" id="purchase-line-add">＋ Add item</button>${paymentFields}<label>Note<input name="note" maxlength="500" value="${esc(editing?.note || "")}"></label><div class="bill-total"><span>Purchase total <b id="purchase-total">৳0.00</b></span>${editing ? "" : `<span>Due added <b id="purchase-due">৳0.00</b></span>`}</div>`, async form => {
-    const items = [...document.querySelectorAll("#purchase-lines tr")].map(tr => ({ productId: Number(tr.querySelector(".purchase-product").value), qty: Number(tr.querySelector(".purchase-qty").value), cost: Number(tr.querySelector(".purchase-cost").value) }));
+  supplierModal(editing ? `Edit purchase P-${String(editing.id).padStart(8, "0")}` : "Record supplier purchase", `${supplierField}<div class="form-row"><label>Purchase date<input name="date" type="date" value="${esc(editing?.date || supplierDate())}" required></label><label>Invoice / reference<input name="reference" maxlength="100" value="${esc(editing?.reference || "")}"></label></div><div class="table-scroll purchase-lines"><table><thead><tr><th>Product ${data.shopType === "pharmacy" ? "· Batch / expiry" : ""}</th><th>Quantity</th><th>Cost per unit (৳)</th><th>Line total</th><th></th></tr></thead><tbody id="purchase-lines">${lines.map(row).join("")}</tbody></table></div><button type="button" class="button secondary" id="purchase-line-add">＋ Add item</button>${paymentFields}<label>Note<input name="note" maxlength="500" value="${esc(editing?.note || "")}"></label><div class="bill-total"><span>Purchase total <b id="purchase-total">৳0.00</b></span>${editing ? "" : `<span>Due added <b id="purchase-due">৳0.00</b></span>`}</div>`, async form => {
+    const items = [...document.querySelectorAll("#purchase-lines tr")].map(tr => ({ productId: Number(tr.querySelector(".purchase-product").value), qty: Number(tr.querySelector(".purchase-qty").value), cost: Number(tr.querySelector(".purchase-cost").value), batchNumber: tr.querySelector(".purchase-batch")?.value.trim() || "", expiryDate: tr.querySelector(".purchase-expiry")?.value || "" }));
     if (items.some(i => !i.productId || !(i.qty > 0) || !(i.cost >= 0))) throw new Error("Choose each product and enter a valid quantity and cost.");
+    if (data.shopType === "pharmacy" && items.some(i => !i.batchNumber || !i.expiryDate)) throw new Error("Every Pharmacy purchase needs a batch number and expiry date.");
     const payload = { date: form.get("date"), reference: form.get("reference"), note: form.get("note"), items };
     const result = await api(editing ? `/api/purchases/${editing.id}` : "/api/purchases", { method: editing ? "PATCH" : "POST", body: JSON.stringify(editing ? payload : { ...payload, supplierId: Number(form.get("supplierId")), paid: Number(form.get("paid")), method: form.get("method") }) });
     data = await api("/api/state"); render(); toast(editing ? "Purchase and stock updated" : `Purchase P-${String(result.id).padStart(8, "0")} saved; stock updated`); await openSupplierHub(); return false;
@@ -3388,12 +3491,389 @@ function openPurchaseEntry(suppliers, editing = null) {
   if (paidInput) paidInput.oninput = updateTotals;
   updateTotals();
 }
+async function openPharmacyBatchManager() {
+  if (data.shopType !== "pharmacy") return toast("Pharmacy batches are only available when the shop type is Pharmacy.");
+  if (!data.permissions?.inventory) return toast("Inventory access is required to manage medicine batches.");
+  try {
+    data = await api("/api/state");
+    const { today: dateToday, cutoff } = await api("/api/pharmacy/expiry");
+    const todayValue = dateToday || dateKey(new Date());
+    const batches = data.pharmacyBatches || [];
+    const expiryState = batch => {
+      if (!batch.expiry_date) return { label: "Expiry needs review", css: "out" };
+      if (batch.expiry_date < todayValue) return { label: "Expired", css: "out" };
+      if (batch.expiry_date <= cutoff) return { label: "Expiring soon", css: "low" };
+      return { label: "In date", css: "" };
+    };
+    const unknown = batches.filter(batch => !batch.expiry_date && Number(batch.quantity_remaining) > 0).length;
+    const expired = batches.filter(batch => batch.expiry_date && batch.expiry_date < todayValue && Number(batch.quantity_remaining) > 0).length;
+    const soon = batches.filter(batch => batch.expiry_date && batch.expiry_date >= todayValue && batch.expiry_date <= cutoff && Number(batch.quantity_remaining) > 0).length;
+    const rows = batches.length ? batches.map(batch => {
+      const status = expiryState(batch);
+      return `<tr><td><b>${esc(batch.product_name)}</b><small class="form-hint">${esc(batch.generic_name || "")}</small></td><td>${esc(batch.batch_number)}</td><td>${batch.expiry_date ? esc(batch.expiry_date) : "Unknown — review lot label"}</td><td>${Number(batch.quantity_remaining)} ${esc(batch.product_unit || "piece")}</td><td>${Number(batch.sellable_quantity || 0)} ${esc(batch.product_unit || "piece")}</td><td><span class="status ${status.css}">${status.label}</span></td><td><button type="button" class="user-action" data-edit-pharmacy-batch="${batch.id}">Correct batch / expiry</button></td></tr>`;
+    }).join("") : '<tr><td colspan="7" class="empty">No medicine batches recorded. Add a medicine or receive the first batch.</td></tr>';
+    openModal("Medicine batches & expiry", `<div class="pharmacy-batch-toolbar"><div><b>${batches.length} recorded batches</b><p class="form-hint">Sales use earliest-expiring eligible stock first. Expired, unknown-expiry, and returned/quarantined units are not sellable.</p></div><button type="button" class="button primary" id="pharmacy-receive-batch">＋ Receive batch</button></div><div class="pharmacy-expiry-summary"><div><b>${expired}</b><span>Expired lots with stock</span></div><div><b>${soon}</b><span>Expiring within 90 days</span></div><div><b>${unknown}</b><span>Need expiry verification</span></div></div><div class="table-scroll supplier-table"><table><thead><tr><th>Medicine</th><th>Batch / lot</th><th>Expiry date</th><th>Remaining</th><th>Sellable</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div>`, async () => {});
+    $("#submit-modal").classList.add("hidden");
+    $("#pharmacy-receive-batch").onclick = () => { closeModal(); openPharmacyReceiveBatch(); };
+    dialog.querySelectorAll("[data-edit-pharmacy-batch]").forEach(button => button.onclick = () => {
+      const batch = batches.find(item => Number(item.id) === Number(button.dataset.editPharmacyBatch));
+      if (!batch) return toast("Medicine batch not found. Refresh and try again.");
+      closeModal();
+      openPharmacyEditBatch(batch);
+    });
+  } catch (error) { toast(error.message); }
+}
+function openPharmacyReceiveBatch() {
+  const products = (data.products || []).filter(product => product.id);
+  if (!products.length) return toast("Add a medicine before receiving stock.");
+  const options = products.map(product => `<option value="${product.id}">${esc(product.name)} · ${esc(product.unit || "piece")} · current ${Number(product.qty || 0)}</option>`).join("");
+  openModal("Receive medicine batch", `<label>Medicine<select name="productId" required><option value="">Choose medicine</option>${options}</select></label><div class="form-row"><label>Batch / lot number<input name="batchNumber" maxlength="80" required placeholder="As printed on the pack"></label><label>Expiry date<input name="expiryDate" type="date" required></label></div><div class="form-row"><label>Quantity received<input name="quantity" type="number" min="0.001" step="any" required></label><label>Unit purchase cost (${esc(currencySymbol())})<input name="unitCost" type="number" min="0" step="0.01" required></label></div><p class="form-hint">Use the exact batch number and expiry printed by the manufacturer. For repeated receipts of the same batch, use the same batch number and expiry.</p>`, async form => {
+    const result = await api("/api/pharmacy/batches", { method: "POST", body: JSON.stringify({ productId: Number(form.get("productId")), batchNumber: form.get("batchNumber").trim(), expiryDate: form.get("expiryDate"), quantity: Number(form.get("quantity")), unitCost: Number(form.get("unitCost")) }) });
+    data = result;
+    render();
+    toast("Medicine batch received; stock and expiry are recorded.");
+  });
+}
+function openPharmacyEditBatch(batch) {
+  openModal("Correct medicine batch / expiry", `<p><b>${esc(batch.product_name)}</b></p><label>Batch / lot number<input name="batchNumber" maxlength="80" value="${esc(batch.batch_number)}" required></label><label>Expiry date<input name="expiryDate" type="date" value="${esc(batch.expiry_date || "")}" required></label><p class="form-hint">Confirm the value against the manufacturer's packaging before saving. Unknown-expiry legacy stock stays unavailable until verified.</p>`, async form => {
+    const result = await api(`/api/pharmacy/batches/${batch.id}`, { method: "PATCH", body: JSON.stringify({ batchNumber: form.get("batchNumber").trim(), expiryDate: form.get("expiryDate") }) });
+    data = result;
+    render();
+    toast("Medicine batch details updated.");
+  });
+}
+
+function medexSearchUrl(query = "") {
+  const q = String(query || "").trim();
+  return q ? `https://medex.com.bd/search?search=${encodeURIComponent(q)}` : "https://medex.com.bd/search";
+}
+
+function mountMedexLookupBox(container, { initialQuery = "", onAddToBill = null, onFillProductForm = null } = {}) {
+  if (!container) return null;
+  container.innerHTML = `<div class="medex-lookup-root">
+    <div class="medex-search-bar">
+      <input type="search" class="medex-query-input" autocomplete="off" placeholder="Search medicine brand or generic name (e.g. Napa, Sergel 20, Paracetamol)..." value="${esc(initialQuery)}">
+      <button type="button" class="button primary medex-search-btn">Search medicine info</button>
+      <a class="button secondary medex-external-btn" href="${esc(medexSearchUrl(initialQuery))}" target="_blank" rel="noopener noreferrer">Open medex.com.bd/search ↗</a>
+    </div>
+    <p class="form-hint">Check medicine details, generic name, strength, dosage form, manufacturer, unit price, indications, and shop stock or same-generic alternatives.</p>
+    <div class="medex-local-section medex-section"></div>
+    <div class="medex-remote-section medex-section"></div>
+  </div>`;
+  translateDom(container);
+
+  const input = container.querySelector(".medex-query-input");
+  const searchBtn = container.querySelector(".medex-search-btn");
+  const externalBtn = container.querySelector(".medex-external-btn");
+  const localSection = container.querySelector(".medex-local-section");
+  const remoteSection = container.querySelector(".medex-remote-section");
+  let lastRemoteResults = [];
+  let extraGenerics = [];
+
+  const updateExternalHref = () => {
+    if (externalBtn) externalBtn.href = medexSearchUrl(input?.value || "");
+  };
+
+  const renderShopCard = (item, isAlternative = false) => {
+    const sellable = productSellableQty(item);
+    const totalQty = Number(item.qty || 0);
+    const statusClass = sellable === 0 ? "out" : sellable <= Number(item.min || 0) ? "low" : "";
+    const statusText = sellable === 0 ? (totalQty > 0 ? "No safe-to-sell stock" : "Out of stock") : sellable <= Number(item.min || 0) ? "Low stock" : "In stock";
+    const meta = [
+      item.generic_name ? `Generic: ${item.generic_name}` : "",
+      item.strength ? `Strength: ${item.strength}` : "",
+      item.dosage_form ? `Form: ${item.dosage_form}` : "",
+      item.manufacturer ? `Maker: ${item.manufacturer}` : ""
+    ].filter(Boolean).join(" · ");
+    return `<div class="medex-card">
+      <div class="medex-card-head">
+        <div>
+          <span class="medex-card-title">${esc(item.name)}</span>
+          ${item.dosage_form ? `<span class="medex-badge">${esc(item.dosage_form)}</span>` : ""}
+          ${isAlternative ? `<span class="medex-badge">Same generic in shop</span>` : ""}
+          ${meta ? `<div class="medex-meta">${esc(meta)}</div>` : ""}
+        </div>
+        <div>
+          <b>${money(item.price)}</b> / ${esc(item.unit || "piece")} · <span class="status ${statusClass}">${esc(statusText)} (${sellable} sellable)</span>
+        </div>
+      </div>
+      <div class="medex-actions">
+        <button type="button" class="user-action" data-medex-check-brand="${esc(item.name)}">Check on MedEx</button>
+        ${item.generic_name ? `<button type="button" class="user-action" data-medex-check-generic="${esc(item.generic_name)}">Same generic (${esc(item.generic_name)})</button>` : ""}
+        ${onAddToBill && sellable > 0 ? `<button type="button" class="user-action" data-medex-add-bill="${item.id}">＋ Add to bill</button>` : ""}
+        <a class="user-action" href="${esc(medexSearchUrl(item.name))}" target="_blank" rel="noopener noreferrer">Open MedEx ↗</a>
+      </div>
+    </div>`;
+  };
+
+  const renderLocal = () => {
+    const rawQuery = (input?.value || "").trim();
+    const q = rawQuery.toLocaleLowerCase();
+    const allProducts = data.products || [];
+    const directMatches = q
+      ? allProducts.filter(item => [item.name, item.generic_name, item.strength, item.dosage_form, item.manufacturer, item.sku, item.barcode].some(v => String(v || "").toLocaleLowerCase().includes(q)))
+      : allProducts.slice(0, 8);
+
+    const directIds = new Set(directMatches.map(item => item.id));
+    const matchedGenerics = new Set([
+      ...directMatches.map(item => String(item.generic_name || "").trim().toLocaleLowerCase()).filter(Boolean),
+      ...extraGenerics.map(g => String(g || "").trim().toLocaleLowerCase()).filter(Boolean)
+    ]);
+
+    const genericAlternatives = matchedGenerics.size
+      ? allProducts.filter(item => !directIds.has(item.id) && matchedGenerics.has(String(item.generic_name || "").trim().toLocaleLowerCase()))
+      : [];
+
+    const combined = [
+      ...directMatches.map(item => renderShopCard(item, false)),
+      ...genericAlternatives.map(item => renderShopCard(item, true))
+    ];
+
+    localSection.innerHTML = `<h3><span>In your pharmacy stock${q ? ` (${directMatches.length} match${directMatches.length === 1 ? "" : "es"}${genericAlternatives.length ? ` + ${genericAlternatives.length} same-generic alternative${genericAlternatives.length === 1 ? "" : "s"}` : ""})` : ""}</span><small class="form-hint">${allProducts.length} total medicines in inventory</small></h3>
+      ${combined.length ? `<div class="medex-list">${combined.join("")}</div>` : `<div class="empty">No matching medicine found in your shop inventory${q ? ` for “${esc(rawQuery)}”` : ""}. Check the MedEx directory below.</div>`}`;
+    translateDom(localSection);
+  };
+
+  const renderRemotePlaceholder = () => {
+    const q = (input?.value || "").trim();
+    remoteSection.innerHTML = `<h3><span>MedEx Bangladesh directory (medex.com.bd/search)</span></h3>
+      <div class="empty">Type a medicine brand or generic name above and click <b>Search medicine info</b>, or <a href="${esc(medexSearchUrl(q))}" target="_blank" rel="noopener noreferrer"><b>open medex.com.bd/search in a new tab ↗</b></a>.</div>`;
+    translateDom(remoteSection);
+  };
+
+  const runSearch = async customQuery => {
+    if (typeof customQuery === "string" && input) input.value = customQuery;
+    updateExternalHref();
+    const q = (input?.value || "").trim();
+    extraGenerics = [];
+    renderLocal();
+    if (!q) {
+      renderRemotePlaceholder();
+      return;
+    }
+    remoteSection.innerHTML = `<h3><span>MedEx Bangladesh directory (medex.com.bd/search)</span></h3><div class="empty">Searching MedEx for “${esc(q)}”…</div>`;
+    try {
+      const result = await api(`/api/pharmacy/medex?q=${encodeURIComponent(q)}`);
+      lastRemoteResults = result.results || [];
+      extraGenerics = lastRemoteResults.map(item => item.genericName).filter(Boolean);
+      renderLocal();
+      if (!lastRemoteResults.length) {
+        remoteSection.innerHTML = `<h3><span>MedEx Bangladesh directory (medex.com.bd/search)</span><a class="user-action" href="${esc(result.searchUrl || medexSearchUrl(q))}" target="_blank" rel="noopener noreferrer">Open on medex.com.bd ↗</a></h3>
+          <div class="medex-card">
+            <div class="medex-meta">${esc(result.message || `Click below to view “${q}” directly on MedEx.com.bd.`)}</div>
+            <div class="medex-actions">
+              <a class="button primary" href="${esc(result.searchUrl || medexSearchUrl(q))}" target="_blank" rel="noopener noreferrer">Search “${esc(q)}” on medex.com.bd/search ↗</a>
+            </div>
+          </div>`;
+        translateDom(remoteSection);
+        return;
+      }
+      const cards = lastRemoteResults.map((item, idx) => {
+        const meta = [
+          item.genericName ? `Generic: ${item.genericName}` : "",
+          item.strength ? `Strength: ${item.strength}` : "",
+          item.manufacturer ? `Company: ${item.manufacturer}` : "",
+          item.priceText ? item.priceText : ""
+        ].filter(Boolean).join(" · ");
+        return `<div class="medex-card">
+          <div class="medex-card-head">
+            <div>
+              <span class="medex-card-title">${esc(item.name)}</span>
+              ${item.dosageForm ? `<span class="medex-badge">${esc(item.dosageForm)}</span>` : ""}
+              ${item.strength ? `<span class="medex-badge">${esc(item.strength)}</span>` : ""}
+              ${meta ? `<div class="medex-meta">${esc(meta)}</div>` : ""}
+            </div>
+          </div>
+          <div class="medex-actions">
+            <button type="button" class="user-action" data-medex-detail-idx="${idx}">Check medicine info &amp; price</button>
+            ${item.genericName ? `<button type="button" class="user-action" data-medex-check-generic="${esc(item.genericName)}">Find generic in shop (${esc(item.genericName)})</button>` : ""}
+            ${onFillProductForm ? `<button type="button" class="user-action" data-medex-fill-idx="${idx}">Fill product fields</button>` : ""}
+            <a class="user-action" href="${esc(item.url || medexSearchUrl(item.name))}" target="_blank" rel="noopener noreferrer">Open on MedEx ↗</a>
+          </div>
+          <div class="medex-details-box hidden" data-medex-detail-box="${idx}"></div>
+        </div>`;
+      }).join("");
+      remoteSection.innerHTML = `<h3><span>MedEx Bangladesh results (${lastRemoteResults.length})</span><a class="user-action" href="${esc(result.searchUrl || medexSearchUrl(q))}" target="_blank" rel="noopener noreferrer">View all on medex.com.bd/search ↗</a></h3>
+        <div class="medex-list">${cards}</div>`;
+      translateDom(remoteSection);
+    } catch (error) {
+      remoteSection.innerHTML = `<h3><span>MedEx Bangladesh directory (medex.com.bd/search)</span></h3>
+        <div class="medex-card">
+          <div class="medex-meta">${esc(error.message || "Could not load MedEx results from the server.")}</div>
+          <div class="medex-actions">
+            <a class="button primary" href="${esc(medexSearchUrl(q))}" target="_blank" rel="noopener noreferrer">Open “${esc(q)}” on medex.com.bd/search ↗</a>
+          </div>
+        </div>`;
+    }
+  };
+
+  let searchDebounce = null;
+  input?.addEventListener("input", () => {
+    updateExternalHref();
+    renderLocal();
+    clearTimeout(searchDebounce);
+    const val = (input?.value || "").trim();
+    if (val.length >= 2) {
+      searchDebounce = setTimeout(() => runSearch(), 180);
+    } else if (!val) {
+      extraGenerics = [];
+      renderLocal();
+      renderRemotePlaceholder();
+    }
+  });
+  input?.addEventListener("keydown", event => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      runSearch();
+    }
+  });
+  searchBtn?.addEventListener("click", () => runSearch());
+
+  container.addEventListener("click", async event => {
+    const brandBtn = event.target.closest("[data-medex-check-brand]");
+    if (brandBtn) {
+      runSearch(brandBtn.dataset.medexCheckBrand || "");
+      return;
+    }
+    const genericBtn = event.target.closest("[data-medex-check-generic]");
+    if (genericBtn) {
+      runSearch(genericBtn.dataset.medexCheckGeneric || "");
+      return;
+    }
+    const addBillBtn = event.target.closest("[data-medex-add-bill]");
+    if (addBillBtn && onAddToBill) {
+      const product = (data.products || []).find(p => Number(p.id) === Number(addBillBtn.dataset.medexAddBill));
+      if (product) onAddToBill(product);
+      return;
+    }
+    const fillBtn = event.target.closest("[data-medex-fill-idx]");
+    if (fillBtn && onFillProductForm) {
+      const item = lastRemoteResults[Number(fillBtn.dataset.medexFillIdx)];
+      if (item) onFillProductForm(item);
+      return;
+    }
+    const detailBtn = event.target.closest("[data-medex-detail-idx]");
+    if (detailBtn) {
+      const idx = Number(detailBtn.dataset.medexDetailIdx);
+      const item = lastRemoteResults[idx];
+      const box = container.querySelector(`[data-medex-detail-box="${idx}"]`);
+      if (!item || !box) return;
+      if (!box.classList.contains("hidden") && box.dataset.loaded === "1") {
+        box.classList.add("hidden");
+        return;
+      }
+      box.classList.remove("hidden");
+      box.innerHTML = `<span>Loading medicine info from MedEx…</span>`;
+      try {
+        const res = await api(`/api/pharmacy/medex/details?url=${encodeURIComponent(item.url)}`);
+        const d = res.details;
+        if (!res.ok || !d) {
+          box.innerHTML = `<div class="medex-meta">${esc(res.message || "Detailed view could not be loaded inside Shop Desk.")}</div>
+            <div class="medex-actions"><a class="user-action" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Open medicine page on MedEx.com.bd ↗</a></div>`;
+          return;
+        }
+        if (d.genericName && !item.genericName) item.genericName = d.genericName;
+        if (d.strength && !item.strength) item.strength = d.strength;
+        if (d.dosageForm && !item.dosageForm) item.dosageForm = d.dosageForm;
+        if (d.manufacturer && !item.manufacturer) item.manufacturer = d.manufacturer;
+        if (d.unitPrice != null && item.unitPrice == null) item.unitPrice = d.unitPrice;
+        box.dataset.loaded = "1";
+        const summaryLines = [
+          d.genericName ? `<b>Generic:</b> ${esc(d.genericName)}` : "",
+          d.strength ? `<b>Strength:</b> ${esc(d.strength)}` : "",
+          d.dosageForm ? `<b>Form:</b> ${esc(d.dosageForm)}` : "",
+          d.manufacturer ? `<b>Manufacturer:</b> ${esc(d.manufacturer)}` : "",
+          d.pricing ? `<b>Price / Pack:</b> ${esc(d.pricing)}` : ""
+        ].filter(Boolean).join(" · ");
+        const sectionHtml = (d.sections || []).map(sec => `<div class="medex-details-section"><strong>${esc(sec.title)}</strong><p>${esc(sec.content)}</p></div>`).join("");
+        box.innerHTML = `${summaryLines ? `<div>${summaryLines}</div>` : ""}
+          ${sectionHtml || `<div class="medex-meta">Open the MedEx page below to view the complete monograph.</div>`}
+          <div class="medex-actions">
+            ${onFillProductForm ? `<button type="button" class="user-action" data-medex-fill-idx="${idx}">Use these details in product form</button>` : ""}
+            <a class="user-action" href="${esc(d.url || item.url)}" target="_blank" rel="noopener noreferrer">View full page on MedEx.com.bd ↗</a>
+          </div>`;
+      } catch (error) {
+        box.innerHTML = `<div class="medex-meta">${esc(error.message)}</div><div class="medex-actions"><a class="user-action" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Open on MedEx.com.bd ↗</a></div>`;
+      }
+    }
+  });
+
+  renderLocal();
+  if (initialQuery.trim()) runSearch(initialQuery.trim());
+  else renderRemotePlaceholder();
+
+  return {
+    setQueryAndSearch: q => runSearch(q),
+    focusInput: () => input?.focus()
+  };
+}
+
+function attachPharmacyFormMedexEvents() {
+  const toggleBtn = $("#form-medex-toggle");
+  const drawer = $("#form-medex-drawer");
+  if (!toggleBtn || !drawer) return;
+  let helper = null;
+  toggleBtn.onclick = () => {
+    const opening = drawer.classList.contains("hidden");
+    drawer.classList.toggle("hidden", !opening);
+    if (!opening) return;
+    const nameInput = $("#modal-fields [name=name]");
+    const currentName = (nameInput?.value || "").trim();
+    if (!helper) {
+      helper = mountMedexLookupBox(drawer, {
+        initialQuery: currentName,
+        onFillProductForm: item => {
+          const setField = (fieldName, value) => {
+            const el = $(`#modal-fields [name=${fieldName}]`);
+            if (el && value) {
+              el.value = value;
+              el.dispatchEvent(new Event("input", { bubbles: true }));
+            }
+          };
+          setField("name", item.name);
+          setField("genericName", item.genericName);
+          setField("strength", item.strength);
+          setField("dosageForm", item.dosageForm);
+          setField("manufacturer", item.manufacturer);
+          if (item.unitPrice != null && Number.isFinite(Number(item.unitPrice))) {
+            setField("price", String(item.unitPrice));
+          }
+          toast("Medicine details filled from MedEx.");
+        }
+      });
+    } else if (currentName) {
+      helper.setQueryAndSearch(currentName);
+    } else {
+      helper.focusInput();
+    }
+  };
+}
+
+function openPharmacyMedicineLookup(initialQuery = "") {
+  if (data.shopType !== "pharmacy") return toast("Medicine info lookup is only available when the shop type is Pharmacy.");
+  openModal("Medicine info · MedEx lookup", `<div id="pharmacy-medex-modal-root"></div>`, async () => false);
+  dialog.classList.add("wide");
+  $("#submit-modal").classList.add("hidden");
+  dialog.addEventListener("close", () => {
+    dialog.classList.remove("wide");
+    $("#submit-modal").classList.remove("hidden");
+  }, { once: true });
+  const root = $("#pharmacy-medex-modal-root");
+  const mounted = mountMedexLookupBox(root, { initialQuery: String(initialQuery || "").trim() });
+  setTimeout(() => mounted?.focusInput(), 40);
+}
+
 const renderBeforeSupplierTools = render;
 render = function () {
   renderBeforeSupplierTools();
   $("#supplier-tools").classList.toggle("hidden", !data.permissions?.inventory && !data.permissions?.supplier_purchases);
 };
 $("#supplier-tools").onclick = openSupplierHub;
+$("#pharmacy-batches-button").onclick = openPharmacyBatchManager;
+$("#pharmacy-medex-button") && ($("#pharmacy-medex-button").onclick = () => openPharmacyMedicineLookup(""));
+$("#pharmacy-medex-inventory-button") && ($("#pharmacy-medex-inventory-button").onclick = () => openPharmacyMedicineLookup($("#search")?.value || ""));
+$("#pharmacy-medex-sales-button") && ($("#pharmacy-medex-sales-button").onclick = () => openPharmacyMedicineLookup(""));
 // ---- Installable app (PWA) and the "connect a phone" page ----
 let installPrompt = null;
 function setupInstallButton() {

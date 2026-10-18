@@ -5,7 +5,7 @@ Shop Desk is a small shop server: one Windows PC or Linux box on the shop Wi-Fi 
 single SQLite database, so it works without an internet connection.
 
 This guide covers Windows, Linux and Docker installs, Google Drive offsite backups,
-licence keys, HTTPS/PWA, updates and uninstall.
+HTTPS/PWA, updates and uninstall.
 
 ---
 
@@ -95,7 +95,7 @@ powershell -ExecutionPolicy Bypass -File .\install\windows\repair-shopdesk.ps1 -
 ```
 
 The repair script finds the installation on its own — from the marker file, the
-**Shop Desk** task, the licence file or a scan of `C:\ShopDesk` … `Z:\ShopDesk` — so no
+**Shop Desk** task or a scan of `C:\ShopDesk` … `Z:\ShopDesk` — so no
 parameters are needed in the usual case.
 
 ---
@@ -170,16 +170,14 @@ docker run -d --name shopdesk --restart unless-stopped \
 ## 5. First-run checklist
 
 1. Create the owner account with the one-time setup code.
-2. **Shop settings**: shop name, location, currency, region, language (বাংলা/English),
+2. **Shop settings**: shop name, location, shop type, currency, region, language (বাংলা/English),
    Bangla digits, tax mode, payment methods.
-3. **Settings → Licence & plan**: paste the licence key from your supplier. New installs
-   start a 30-day trial; existing databases also get 30 days.
-4. **Backup and restore → Offsite backup**: connect Google Drive, run **Test connection**,
+3. **Backup and restore → Offsite backup**: connect Google Drive, run **Test connection**,
    then **Back up now**.
-5. Copy **`data/offsite.key`** to a safe place. Without it, downloaded offsite backups
+4. Copy **`data/offsite.key`** to a safe place. Without it, downloaded offsite backups
    cannot be decrypted.
-6. Give the server PC a static/reserved IP in the router.
-7. Add staff accounts under **Team access**; grant only the modules they need.
+5. Give the server PC a static/reserved IP in the router.
+6. Add staff accounts under **Team access**; grant only the modules they need.
 
 ---
 
@@ -255,65 +253,7 @@ encrypted original until you have confirmed the restored database.
 
 ---
 
-## 7. Licence keys and trial
-
-- **Trial:** 30 days for every installation, including existing databases upgraded
-  without a licence.
-- **Warning:** a banner appears during the last 7 days.
-- **Expired:** the app becomes **read-only**. Billing and other writes are blocked by the
-  API (HTTP 402), but signing in, viewing data, reports, exports, local backups and
-  offsite backups keep working.
-- A licence is signed with **Ed25519** and can be checked offline. It is bound to the
-  shop's **installation ID** shown in **Settings → Licence & plan**.
-
-### Vendor: create the signing keys once
-
-```bash
-npm run license:keygen
-# writes vendor/license-private-key.pem and lib/license-public.mjs
-```
-
-- Commit `lib/license-public.mjs` (public key) and ship it with every release.
-- Keep `vendor/license-private-key.pem` offline. **Never** put it on a shop PC, in a
-  release zip, or in Git. It is git-ignored.
-- Back the private key up. Losing it means you cannot issue licences for existing
-  installations; replacing the key pair invalidates all previously issued keys.
-
-### Vendor: issue a licence
-
-The quickest way at a shop is the portable USB kit:
-
-```bash
-npm run licence:kit          # builds releases/ShopDesk-Licence-Kit
-```
-
-Copy that folder to an encrypted USB stick, then double-click
-**`Make Licence Key.bat`** on the shop PC. It finds the installation, reads the
-Installation ID, signs a 365-day key, copies it to the clipboard and saves a receipt.
-Unplug the stick when the app shows **Activated**. The full workflow, safety rules and
-Bangla instructions are in [LICENSING.md](LICENSING.md).
-
-For scripts and remote keys:
-
-```bash
-node tools/license-issue.mjs \
-  --shop "Mohammad Hardware" \
-  --plan pro \
-  --days 365 \
-  --install abcd-1234-5678 \
-  --out licenses/mohammad-hardware.txt
-```
-
-Options: `--expires YYYY-MM-DD` (instead of `--days`), `--seats N`, `--out file`.
-Send the one-line `SD1.…` key to the shop. They paste it into
-**Settings → Licence & plan → Activate**.
-
-The activation endpoint rejects keys for a different installation ID
-(`code: "install"`) and tampered keys (`code: "signature"`).
-
----
-
-## 8. HTTPS, PWA and the "Connect a phone" page
+## 7. HTTPS, PWA and the "Connect a phone" page
 
 Browsers only allow service workers and **Install app** on a secure context: HTTPS or
 `http://localhost`. A plain `http://192.168.x.x` address still works as a normal web app,
@@ -474,7 +414,6 @@ Delete `/var/lib/shopdesk` and the service user only after you have copied the d
 | `redirect_uri_mismatch` | The URI in Google Cloud Console must match the one shown in the app exactly, including scheme, port and path. |
 | Offsite reconnects every week | Publish the OAuth consent screen so refresh tokens do not expire after 7 days. |
 | Red backup banner | The last successful upload is over 48 hours old. Open **Backup and restore** and check the error; press **Back up now**. |
-| Licence expired | The app is read-only by design. Enter a key in **Settings → Licence & plan**; reports, exports and backups still work. |
 | Install app button missing | PWA installation needs HTTPS (or `localhost`). Set up a reverse proxy and `SHOP_PUBLIC_URL`. |
 | Cannot sign in after moving the PC | The browser session is tied to the address. Open the new LAN address; sign in again. |
 | Forgot owner password | Use a configured recovery code/email, or another administrator. Keep the database file and `offsite.key` backed up. |
@@ -487,5 +426,4 @@ Delete `/var/lib/shopdesk` and the service user only after you have copied the d
   internet without HTTPS and additional access controls.
 - The data folder contains the database, encryption key and backups. Restrict OS
   permissions; never email `offsite.key` with the backups.
-- The licence private key belongs only on the vendor's offline machine.
 - Backups are only useful if you test a restore. Do one restore drill before launch.
