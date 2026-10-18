@@ -41,10 +41,12 @@ npm run license:supplier
 
 The wizard asks you for:
 - Customer/shop name.
-- Licensed shop type: general, hardware, grocery, clothing, pharmacy, or mobile.
+- One licensed shop type: general, hardware, grocery, clothing, pharmacy, or mobile.
 - Customer's full Installation ID.
-- Plan name and licence duration.
-- Optional modules to include, such as online orders, Pharmacy, Clothing, Repairs, and Devices.
+- A plan label (for example, standard, pro, or premium) and a whole-number duration from **1 to 9999 days**.
+- Optional compatible modules to include, such as online orders, Pharmacy, Clothing, Repairs, and Devices.
+
+The plan name is currently a label, not an automatic feature bundle. Actual module access comes from the signed feature list. A single installation currently supports one shop type; combining different shop types in one installation requires a broader application change, not just a different licence key.
 
 It writes a `.txt` key into `releases/licences/` and copies the key to the supplier PC's clipboard on Windows. The key is signed using your private key and bound to that customer's Installation ID.
 
