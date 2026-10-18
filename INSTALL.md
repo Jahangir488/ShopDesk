@@ -255,63 +255,29 @@ encrypted original until you have confirmed the restored database.
 
 ---
 
-## 7. Licence keys and trial
+## 7. Commercial licence keys and trial
 
-- **Trial:** 30 days for every installation, including existing databases upgraded
-  without a licence.
-- **Warning:** a banner appears during the last 7 days.
-- **Expired:** the app becomes **read-only**. Billing and other writes are blocked by the
-  API (HTTP 402), but signing in, viewing data, reports, exports, local backups and
-  offsite backups keep working.
-- A licence is signed with **Ed25519** and can be checked offline. It is bound to the
-  shop's **installation ID** shown in **Settings → Licence & plan**.
+ShopDesk uses an **offline Ed25519-signed licence**. You, the software seller, decide the package for each customer: shop type, enabled modules, installation ID, plan name, and expiry date. The customer receives only the signed key and enters it in **Settings → Licence & plan**.
 
-### Vendor: create the signing keys once
+- **Trial:** 30 days for every installation.
+- **Active:** signed key controls the licensed shop type and entitlements. The shop type selector is read-only for customers.
+- **Expired:** the app becomes read-only. Customers can still view their data, reports, exports, and backups.
+- **Offline:** licence checks do not require internet access. Keys bound to another installation are rejected.
 
-```bash
-npm run license:keygen
-# writes vendor/license-private-key.pem and lib/license-public.mjs
-```
+### Supplier setup (do this on your own PC)
 
-- Commit `lib/license-public.mjs` (public key) and ship it with every release.
-- Keep `vendor/license-private-key.pem` offline. **Never** put it on a shop PC, in a
-  release zip, or in Git. It is git-ignored.
-- Back the private key up. Losing it means you cannot issue licences for existing
-  installations; replacing the key pair invalidates all previously issued keys.
+Keep the matching private key at `vendor/license-private-key.pem`, or point `SHOP_LICENSE_PRIVATE_KEY` to its protected location. Never commit or send this key. Keep an encrypted offline backup. Do not generate a replacement key pair if you have existing paid customers: every app release must trust the matching public key in `lib/license-public.mjs`.
 
-### Vendor: issue a licence
+### Issue a customer licence
 
-The quickest way at a shop is the portable USB kit:
+1. Install ShopDesk at the customer's site. Ask the customer to copy the full **Installation ID** from **Settings → Licence & plan** and send it to you.
+2. On your supplier PC, open your restricted ShopDesk source folder and double-click **`4 - Issue Customer Licence.bat`**, or run `npm run license:supplier`.
+3. Enter the customer/shop name, shop type, full Installation ID, plan, duration, and the modules you are selling. The tool saves the signed key in `releases/licences/` and copies it to the clipboard on Windows.
+4. Send **only the signed key** to the customer. The customer pastes it into **Settings → Licence & plan → Activate**. ShopDesk applies the signed shop type and locks that profile to the licence.
 
-```bash
-npm run licence:kit          # builds releases/ShopDesk-Licence-Kit
-```
+The supplier wizard must run on your PC because it requires the private signing key. **Do not issue keys on the customer computer, and do not send a USB/source kit containing the private key.** The detailed workflow and commercial security limitations are in [LICENSING.md](LICENSING.md).
 
-Copy that folder to an encrypted USB stick, then double-click
-**`Make Licence Key.bat`** on the shop PC. It finds the installation, reads the
-Installation ID, signs a 365-day key, copies it to the clipboard and saves a receipt.
-Unplug the stick when the app shows **Activated**. The full workflow, safety rules and
-Bangla instructions are in [LICENSING.md](LICENSING.md).
-
-For scripts and remote keys:
-
-```bash
-node tools/license-issue.mjs \
-  --shop "Mohammad Hardware" \
-  --plan pro \
-  --days 365 \
-  --install abcd-1234-5678 \
-  --out licenses/mohammad-hardware.txt
-```
-
-Options: `--expires YYYY-MM-DD` (instead of `--days`), `--seats N`, `--out file`.
-Send the one-line `SD1.…` key to the shop. They paste it into
-**Settings → Licence & plan → Activate**.
-
-The activation endpoint rejects keys for a different installation ID
-(`code: "install"`) and tampered keys (`code: "signature"`).
-
----
+For a scripted issue, use `npm run license:issue -- --shop "Customer Name" --plan standard --days 365 --install FULL_INSTALLATION_ID --shop-type pharmacy --features pharmacy`. Use `--shop-type` and `--features` to set the package. Pharmacy licences must include the `pharmacy` feature. Before commercial release, test a fresh activation, an incorrect Installation ID, an expired key, and each sold package.
 
 ## 8. HTTPS, PWA and the "Connect a phone" page
 
