@@ -239,6 +239,9 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS supplier_payments_supplier_date_idx ON supplier_payments(supplier_id,date);
   CREATE INDEX IF NOT EXISTS stock_movements_product_idx ON stock_movements(product_id, id DESC);
 `);
+const purchaseLineColumns = new Set(db.prepare("PRAGMA table_info(purchase_lines)").all().map(column => column.name));
+if (!purchaseLineColumns.has("batch_number")) db.exec("ALTER TABLE purchase_lines ADD COLUMN batch_number TEXT NOT NULL DEFAULT ''");
+if (!purchaseLineColumns.has("expiry_date")) db.exec("ALTER TABLE purchase_lines ADD COLUMN expiry_date TEXT NOT NULL DEFAULT ''");
 db.exec(`CREATE TABLE IF NOT EXISTS sales_returns (
   id INTEGER PRIMARY KEY,
   date TEXT NOT NULL,
@@ -485,6 +488,8 @@ function upgradeRestoredDatabase() {
     dosage_form TEXT NOT NULL DEFAULT '', manufacturer TEXT NOT NULL DEFAULT ''
   );
   upgradeSalesReturnsSchema();
+  ensure("purchase_lines", "batch_number", "TEXT NOT NULL DEFAULT ''");
+  ensure("purchase_lines", "expiry_date", "TEXT NOT NULL DEFAULT ''");
   ensure("bills", "tax_amount", "REAL NOT NULL DEFAULT 0");
   ensure("bills", "tax_rate", "REAL NOT NULL DEFAULT 0");
   ensure("bills", "tax_mode", "TEXT NOT NULL DEFAULT 'none'");
@@ -1059,7 +1064,7 @@ function stateFor(user) {
     whatsappNumber: settings?.whatsapp_number || "",
     contactAddress: settings?.contact_address || "",
     shopType: settings?.shop_type || "general",
-    shopTypeLocked: Boolean(currentLicense().packageLocked),
+    shopTypeLocked: true,
     licenseFeatures: currentLicense().features || null,
     pharmacyBatches: inventory && settings?.shop_type === "pharmacy"
       ? db.prepare(`SELECT b.*,p.name AS product_name,p.unit AS product_unit,
@@ -1490,12 +1495,8 @@ async function handleApi(request, response, url) {
     const contactAddress = String(body.contactAddress || "").trim();
     const taxRate = Number(body.taxRate);
     const existingSettings = db.prepare("SELECT language,bangla_digits,shop_type FROM settings WHERE id=1").get() || {};
-    const packageType = currentLicense().shopType;
-    if (packageType && body.shopType !== packageType) {
-      return json(response, 403, { error: "Shop type and package features are controlled by your ShopDesk supplier. Request a new signed licence to change this package." });
-    }
-    if (currentLicense().packageLocked && body.shopType !== existingSettings.shop_type) {
-      return json(response, 403, { error: "This licensed shop type cannot be changed from Shop settings. Request a new signed licence from your supplier." });
+    if (body.shopType !== existingSettings.shop_type) {
+      return json(response, 403, { error: "Shop type and licensed package can only be changed by the supplier with a new offline signed licence. Contact your ShopDesk supplier." });
     }
     const language = body.language === undefined ? (existingSettings.language || "en") : (body.language === "bn" ? "bn" : "en");
     const banglaDigits = body.banglaDigits === undefined ? Boolean(existingSettings.bangla_digits) : Boolean(body.banglaDigits);
@@ -1849,7 +1850,7 @@ async function handleApi(request, response, url) {
       (SELECT COUNT(*) FROM purchase_lines l WHERE l.purchase_id=p.id) AS line_count
       FROM purchases p JOIN suppliers s ON s.id=p.supplier_id ORDER BY p.id DESC`).all().map(p => ({
         ...p,
-        items: db.prepare("SELECT product_id AS productId,product_name AS productName,qty,unit,unit_cost AS cost FROM purchase_lines WHERE purchase_id=? ORDER BY id").all(p.id)
+        items: db.prepare("SELECT product_id AS productId,product_name AS productName,qty,unit,unit_cost AS cost,batch_number AS batchNumber,expiry_date AS expiryDate FROM purchase_lines WHERE purchase_id=? ORDER BY id").all(p.id)
       }));
     const movements = can(user, "inventory")
       ? db.prepare("SELECT * FROM stock_movements ORDER BY id DESC LIMIT 300").all()
@@ -1969,8 +1970,8 @@ async function handleApi(request, response, url) {
         const before = Number(current.qty), after = Number((before + qty).toFixed(6));
         const averageCost = after > 0 ? Math.round(((before * Number(current.cost) + qty * cost) / after) * 100) / 100 : cost;
         db.prepare("UPDATE products SET qty=?,cost=? WHERE id=?").run(after, averageCost, current.id);
-        db.prepare("INSERT INTO purchase_lines(purchase_id,product_id,product_name,qty,unit,unit_cost,line_total) VALUES(?,?,?,?,?,?,?)")
-          .run(id, product.id, product.name, qty, product.unit || "piece", cost, item.total);
+        db.prepare("INSERT INTO purchase_lines(purchase_id,product_id,product_name,qty,unit,unit_cost,line_total,batch_number,expiry_date) VALUES(?,?,?,?,?,?,?,?,?)")
+          .run(id, product.id, product.name, qty, product.unit || "piece", cost, item.total, pharmacyPurchase ? item.batchNumber : "", pharmacyPurchase ? item.expiryDate : "");
         if (pharmacyPurchase) {
           const existingBatch = db.prepare("SELECT id,expiry_date FROM medicine_batches WHERE product_id=? AND batch_number=? COLLATE NOCASE").get(product.id,item.batchNumber);
           if (existingBatch && existingBatch.expiry_date !== item.expiryDate) throw httpError(409,`Batch ${item.batchNumber} already exists for ${product.name} with a different expiry date.`);
