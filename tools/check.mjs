@@ -118,7 +118,7 @@ try {
   if (missing.length) fail("missing install files: " + missing.join(", "));
   else ok(`${required.length} install, licence and PWA files present`);
   // Batch files must keep Windows line endings; LF-only copies break cmd.exe blocks.
-  for (const bat of ["1 - Install Shop Desk.bat", "2 - Uninstall Shop Desk.bat", "install/windows/install-shopdesk.bat", "install/windows/uninstall-shopdesk.bat", "install/windows/repair-shopdesk.bat"]) {
+  for (const bat of ["1 - Install Shop Desk.bat", "2 - Uninstall Shop Desk.bat", "3 - Build Licence Kit.bat", "install/windows/install-shopdesk.bat", "install/windows/uninstall-shopdesk.bat", "install/windows/repair-shopdesk.bat"]) {
     const bytes = readFileSync(join(root, bat));
     if (!bytes.includes("\r\n") || bytes.toString("latin1").replace(/\r\n/g, "").includes("\n")) fail(`${bat} must use CRLF line endings`);
   }
@@ -127,6 +127,10 @@ try {
   const installer = readFileSync(join(root, "install", "windows", "install-shopdesk.ps1"), "utf8");
   for (const token of ["vendor", "licences", "*.pem"]) if (!installer.includes(token)) fail(`installer should exclude ${token}`);
   ok("installer excludes the signing key, PEM files and licence receipts");
+  const licenceBuilder = readFileSync(join(root, "3 - Build Licence Kit.bat"), "utf8");
+  for (const token of ["license-keygen.mjs", "license-key-sync-pending.txt", "lib\\license-public.mjs", "NEVER send vendor\\license-private-key.pem"]) {
+    if (!licenceBuilder.includes(token)) fail(`licence builder must provide the safe one-click setup (${token})`);
+  }
   const ico = readFileSync(join(root, "icons", "shopdesk.ico"));
   const imageOffset = ico.readUInt32LE(18);
   if (ico.readUInt16LE(2) !== 1 || ico.readUInt16LE(4) !== 1 || ico[6] !== 0 || ico[7] !== 0) fail("Shop Desk Windows icon must be a single 256px ICO image");
