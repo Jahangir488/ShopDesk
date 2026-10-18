@@ -711,6 +711,15 @@ function ensurePharmacyDetails() {
   db.prepare(`INSERT OR IGNORE INTO medicine_details(product_id) SELECT id FROM products`).run();
   ensurePharmacyBatches();
 }
+// A seller-signed shop package is authoritative. Repair stale profile settings after a restore.
+const startupPackage = currentLicense();
+if (startupPackage.state === "active" && startupPackage.shopType) {
+  const storedShopType = db.prepare("SELECT shop_type FROM settings WHERE id=1").get()?.shop_type || "general";
+  if (storedShopType !== startupPackage.shopType) {
+    db.prepare("UPDATE settings SET shop_type=? WHERE id=1").run(startupPackage.shopType);
+    addProfileCategories(startupPackage.shopType);
+  }
+}
 ensurePharmacyDetails();
 function recordStockMovement(product, kind, quantityChange, quantityAfter, actor, reference = "", note = "", unitCost = product.cost || 0) {
   db.prepare(`INSERT INTO stock_movements(product_id,product_name,kind,quantity_change,quantity_after,unit,unit_cost,reference,note,actor)
