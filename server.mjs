@@ -487,6 +487,7 @@ function upgradeRestoredDatabase() {
     product_id INTEGER PRIMARY KEY, generic_name TEXT NOT NULL DEFAULT '', strength TEXT NOT NULL DEFAULT '',
     dosage_form TEXT NOT NULL DEFAULT '', manufacturer TEXT NOT NULL DEFAULT ''
   );
+  `);
   upgradeSalesReturnsSchema();
   ensure("purchase_lines", "batch_number", "TEXT NOT NULL DEFAULT ''");
   ensure("purchase_lines", "expiry_date", "TEXT NOT NULL DEFAULT ''");
