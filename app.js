@@ -19,6 +19,8 @@ const dateKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).pad
 const dateLabel = value => new Date(`${value}T12:00:00`).toLocaleDateString(data.banglaDigits || hasBangla() ? "bn-BD" : (data.locale || "en-BD"), { day: "numeric", month: "short" });
 const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 let data = { shopName: "Shop Desk", workspace: "", contactNumber: "", website: "", email: "", facebookPage: "", whatsappNumber: "", contactAddress: "", shopType: "general", currencyCode: "BDT", locale: "en-BD", taxRate: 0, taxMode: "none", requireCustomer: false, allowDiscounts: true, paymentMethods: ["Cash", "bKash", "Nagad", "Card", "Due"], products: [], sales: [], onlineOrders: [], serviceJobs: [], devices: [], expenses: [], categories: [], permissions: {} };
+const featureEnabled = feature => !Array.isArray(data.licenseFeatures) || data.licenseFeatures.includes(feature);
+const productSellableQty = product => data.shopType === "pharmacy" ? Number(product.available_to_sell || 0) : Number(product.qty || 0);
 let signedInUser = null;
 let toastTimer;
 
@@ -782,7 +784,7 @@ const clothColors = ["Black", "White", "Navy Blue", "Maroon", "Olive Green", "Sk
 const clothMaterials = ["100% Cotton", "Linen", "Denim", "Silk", "Georgette", "Twill", "Polyester", "Rayon"];
 
 function clothingFormFields(product = {}) {
-  if (data.shopType !== "clothing") return "";
+  if (data.shopType !== "clothing" || !featureEnabled("clothing")) return "";
   return `<div class="clothing-presets">
     <div class="form-row">
       <label>Brand / Label<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="Brand or designer label"></label>
@@ -803,6 +805,15 @@ function clothingFormFields(product = {}) {
     </div>
     <small class="form-hint">Track each size and color variant separately with its own stock and barcode/SKU.</small>
   </div>`;
+}
+
+function pharmacyFormFields(product = {}, includeOpeningBatch = false) {
+  if (data.shopType !== "pharmacy" || !featureEnabled("pharmacy")) return "";
+  return `<fieldset class="pharmacy-fields"><legend>Medicine details</legend>
+    <div class="form-row"><label>Generic name<input name="genericName" maxlength="160" value="${esc(product.generic_name || "")}" placeholder="Active ingredient"></label><label>Strength<input name="strength" maxlength="80" value="${esc(product.strength || "")}" placeholder="e.g. 500 mg"></label></div>
+    <div class="form-row"><label>Dosage form<input name="dosageForm" maxlength="80" value="${esc(product.dosage_form || "")}" placeholder="Tablet, capsule, syrup, cream"></label><label>Manufacturer<input name="manufacturer" maxlength="160" value="${esc(product.manufacturer || "")}" placeholder="Manufacturer / company"></label></div>
+    ${includeOpeningBatch ? `<div class="pharmacy-batch-opening"><h4>Opening stock batch</h4><div class="form-row"><label>Batch number<input name="batchNumber" maxlength="80" placeholder="Printed batch / lot number"></label><label>Expiry date<input name="expiryDate" type="date" min="${dateKey(new Date())}"></label></div><small class="form-hint">Required when opening stock quantity is greater than zero. Unknown-expiry stock cannot be dispensed.</small></div>` : ""}
+  </fieldset>`;
 }
 
 function attachClothingChipEvents() {
@@ -1561,9 +1572,10 @@ function render() {
   $("#sales-nav").classList.toggle("hidden", !permissions.sales);
   const onlineOrdersEnabled = !!permissions.online_orders;
   $("#online-orders-nav").classList.toggle("hidden", !onlineOrdersEnabled);
-  const repairsEnabled = data.shopType === "mobile" && permissions.sales;
+  const repairsEnabled = data.shopType === "mobile" && permissions.sales && featureEnabled("repairs");
+  const devicesEnabled = data.shopType === "mobile" && permissions.sales && featureEnabled("devices");
   $("#repairs-nav").classList.toggle("hidden", !repairsEnabled);
-  $("#devices-nav").classList.toggle("hidden", !repairsEnabled);
+  $("#devices-nav").classList.toggle("hidden", !devicesEnabled);
   $("#expenses-nav").classList.toggle("hidden", !permissions.expenses);
   $("#reports-nav").classList.toggle("hidden", !permissions.sales && !permissions.expenses);
   $("#inventory").classList.toggle("hidden", !permissions.inventory);
@@ -1574,7 +1586,7 @@ function render() {
   $("#sales").classList.toggle("hidden", !permissions.sales);
   $("#online-orders")?.classList.toggle("hidden", !onlineOrdersEnabled);
   $("#repairs").classList.toggle("hidden", !repairsEnabled);
-  $("#devices").classList.toggle("hidden", !repairsEnabled);
+  $("#devices").classList.toggle("hidden", !devicesEnabled);
   $("#expenses").classList.toggle("hidden", !permissions.expenses);
   $("#reports").classList.toggle("hidden", !permissions.sales && !permissions.expenses);
   $("#users").classList.toggle("hidden", !(signedInUser?.permissions?.team || signedInUser?.permissions?.admins));
@@ -1632,7 +1644,8 @@ function render() {
   renderLicenseBanner();
   renderBackupWarning();
   translateDom(document.body);
-  if (!repairsEnabled && ["#repairs", "#devices"].includes(location.hash)) showScreen("dashboard", true);
+  if (!repairsEnabled && location.hash === "#repairs") showScreen("dashboard", true);
+  if (!devicesEnabled && location.hash === "#devices") showScreen("dashboard", true);
   if (!onlineOrdersEnabled && location.hash === "#online-orders") showScreen("dashboard", true);
 }
 
@@ -1928,8 +1941,9 @@ $("#add-product").onclick = () => {
   const categories = data.categories || [];
   const existingNames = [...new Map(data.products.map(item => [item.name.toLocaleLowerCase(), item])).values()];
   const clothing = clothingFormFields();
-  openModal("Add a product", `<label>Product name<input name="name" list="product-name-suggestions" autocomplete="off" required placeholder="Start typing an item name"><datalist id="product-name-suggestions">${existingNames.map(item => `<option value="${esc(item.name)}" label="${esc(item.name)}">${esc(item.name)}</option>`).join("")}</datalist><small class="suggestion-hint">Start typing to see existing item names.</small></label><label>Category<select name="category">${categories.map(item => `<option>${esc(item.name)}</option>`).join("")}</select></label><div class="form-row"><label>SKU / item code<input name="sku" placeholder="Optional"></label><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" placeholder="Scan or enter barcode"></label></div>${clothing}<label>Unit of measure<input name="unit" value="piece" maxlength="30" placeholder="piece, box, kg, meter, roll" required></label><div class="form-row"><label>Selling price (${esc(currencySymbol())}) per unit<input name="price" type="number" min="0" step="0.01" required></label><label>Buying cost (${esc(currencySymbol())}) per unit<input name="cost" type="number" min="0" step="0.01" required></label></div><div class="form-row"><label>Quantity (<span class="unit-label">piece</span>)<input name="qty" type="number" min="0" required></label><label>Low-stock alert at (<span class="unit-label">piece</span>)<input name="min" type="number" min="0" value="5" required></label></div>`, async form => {
-    await updateState("/api/products", { name: form.get("name").trim(), category: form.get("category"), sku: form.get("sku").trim(), barcode: form.get("barcode").trim(), brand: form.get("brand") || "", color: form.get("color") || "", size: form.get("size") || "", material: form.get("material") || "", unit: form.get("unit").trim(), price: Number(form.get("price")), cost: Number(form.get("cost")), qty: Number(form.get("qty")), min: Number(form.get("min")), pack_name: (form.get("pack_name") || "").trim(), pack_size: Number(form.get("pack_size") || 0) });
+  const pharmacy = pharmacyFormFields({}, true);
+  openModal("Add a product", `<label>Product name<input name="name" list="product-name-suggestions" autocomplete="off" required placeholder="Start typing an item name"><datalist id="product-name-suggestions">${existingNames.map(item => `<option value="${esc(item.name)}" label="${esc(item.name)}">${esc(item.name)}</option>`).join("")}</datalist><small class="suggestion-hint">Start typing to see existing item names.</small></label><label>Category<select name="category">${categories.map(item => `<option>${esc(item.name)}</option>`).join("")}</select></label><div class="form-row"><label>SKU / item code<input name="sku" placeholder="Optional"></label><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" placeholder="Scan or enter barcode"></label></div>${clothing}${pharmacy}<label>Unit of measure<input name="unit" value="piece" maxlength="30" placeholder="piece, box, kg, meter, roll" required></label><div class="form-row"><label>Selling price (${esc(currencySymbol())}) per unit<input name="price" type="number" min="0" step="0.01" required></label><label>Buying cost (${esc(currencySymbol())}) per unit<input name="cost" type="number" min="0" step="0.01" required></label></div><div class="form-row"><label>Quantity (<span class="unit-label">piece</span>)<input name="qty" type="number" min="0" required></label><label>Low-stock alert at (<span class="unit-label">piece</span>)<input name="min" type="number" min="0" value="5" required></label></div>`, async form => {
+    await updateState("/api/products", { name: form.get("name").trim(), category: form.get("category"), sku: form.get("sku").trim(), barcode: form.get("barcode").trim(), brand: form.get("brand") || "", color: form.get("color") || "", size: form.get("size") || "", material: form.get("material") || "", genericName: form.get("genericName") || "", strength: form.get("strength") || "", dosageForm: form.get("dosageForm") || "", manufacturer: form.get("manufacturer") || "", batchNumber: form.get("batchNumber") || "", expiryDate: form.get("expiryDate") || "", unit: form.get("unit").trim(), price: Number(form.get("price")), cost: Number(form.get("cost")), qty: Number(form.get("qty")), min: Number(form.get("min")), pack_name: (form.get("pack_name") || "").trim(), pack_size: Number(form.get("pack_size") || 0) });
     toast("Product added");
   });
   attachClothingChipEvents();
@@ -2239,9 +2253,11 @@ $("#products-table").onclick = event => {
   if (!product) return toast("Inventory item not found. Refresh and try again.");
   const oldCategory = product.category || "Other";
   const clothing = clothingFormFields(product);
-  openModal("Edit inventory item", `<label>Item name<input name="name" maxlength="200" value="${esc(product.name)}" required></label><div class="form-row"><label>SKU / item code<input name="sku" maxlength="100" value="${esc(product.sku || "")}"></label><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" value="${esc(product.barcode || "")}" placeholder="Scan or enter barcode"></label></div>${clothing}<div class="form-row"><label>Unit of measure<input name="unit" maxlength="30" value="${esc(product.unit || "piece")}" required></label><label>Category<select name="category">${(data.categories || []).map(item => `<option ${item.name === oldCategory ? "selected" : ""}>${esc(item.name)}</option>`).join("")}</select></label></div><div class="form-row"><label>Selling price per unit (${esc(currencySymbol())})<input name="price" type="number" min="0" step="0.01" value="${Number(product.price)}" required></label><label>Purchase cost per unit (${esc(currencySymbol())})<input name="cost" type="number" min="0" step="0.01" value="${Number(product.cost)}" required></label></div><div class="form-row"><label>Stock quantity (${esc(product.unit || "piece")})<input name="qty" type="number" min="0" step="1" value="${Number(product.qty)}" required></label><label>Low-stock alert at<input name="min" type="number" min="0" step="1" value="${Number(product.min)}" required></label></div><p class="form-hint">Changing stock here sets the new stock total. Past sales keep their recorded cost and unit.</p>`, async form => {
+  const pharmacy = pharmacyFormFields(product, false);
+  openModal("Edit inventory item", `<label>Item name<input name="name" maxlength="200" value="${esc(product.name)}" required></label><div class="form-row"><label>SKU / item code<input name="sku" maxlength="100" value="${esc(product.sku || "")}"></label><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" value="${esc(product.barcode || "")}" placeholder="Scan or enter barcode"></label></div>${clothing}${pharmacy}<div class="form-row"><label>Unit of measure<input name="unit" maxlength="30" value="${esc(product.unit || "piece")}" required></label><label>Category<select name="category">${(data.categories || []).map(item => `<option ${item.name === oldCategory ? "selected" : ""}>${esc(item.name)}</option>`).join("")}</select></label></div><div class="form-row"><label>Selling price per unit (${esc(currencySymbol())})<input name="price" type="number" min="0" step="0.01" value="${Number(product.price)}" required></label><label>Purchase cost per unit (${esc(currencySymbol())})<input name="cost" type="number" min="0" step="0.01" value="${Number(product.cost)}" required></label></div><div class="form-row"><label>Stock quantity (${esc(product.unit || "piece")})<input name="qty" type="number" min="0" step="1" value="${Number(product.qty)}" required></label><label>Low-stock alert at<input name="min" type="number" min="0" step="1" value="${Number(product.min)}" required></label></div><p class="form-hint">Changing stock here sets the new stock total. Past sales keep their recorded cost and unit.</p>`, async form => {
     const details = Object.fromEntries(["name","sku","barcode","unit","category"].map(key => [key, (form.get(key) || "").trim()]));
-    if (data.shopType === "clothing") for (const key of ["brand", "color", "size", "material"]) details[key] = (form.get(key) || "").trim();
+    if (data.shopType === "clothing" && featureEnabled("clothing")) for (const key of ["brand", "color", "size", "material"]) details[key] = (form.get(key) || "").trim();
+    if (data.shopType === "pharmacy" && featureEnabled("pharmacy")) Object.assign(details,{genericName:form.get("genericName")||"",strength:form.get("strength")||"",dosageForm:form.get("dosageForm")||"",manufacturer:form.get("manufacturer")||""});
     for (const key of ["price","cost","qty","min"]) details[key] = Number(form.get(key));
     details.pack_name = (form.get("pack_name") || "").trim(); details.pack_size = Number(form.get("pack_size") || 0);
     data = await api(`/api/products/${id}`, { method: "PATCH", body: JSON.stringify(details) });
@@ -2444,7 +2460,7 @@ function billHtml(bill) {
     const returnNote = returnedQty > 0 ? `<br><small style="color:#a33;font-weight:700">Returned: ${esc(fmtQty(returnedQty, line.unit || "piece"))} · ${money(returnedValue)}</small>` : "";
     return `<tr><td>${esc(line.name)}<br><small>${esc(lineDetail(line))}</small>${returnNote}${line.serials?.length ? `<br><small>IMEI/serial: ${esc(line.serials.join(", "))}${Number(line.warrantyMonths) ? ` · Warranty ${Number(line.warrantyMonths)} months` : " · No warranty"}</small>` : ""}</td><td class="r">${money(line.qty * line.price)}</td></tr>`;
   }).join("");
-  const clothingNotice = data.shopType === "clothing" ? `<p class="c" style="font-size:11px;color:#555">Exchanges accepted within 7 days with original tags and receipt.</p>` : "";
+  const clothingNotice = data.shopType === "clothing" && featureEnabled("clothing") ? `<p class="c" style="font-size:11px;color:#555">Exchanges accepted within 7 days with original tags and receipt.</p>` : "";
   return `<!doctype html><html><head><meta charset="utf-8"><title>${billNo(bill.id)}</title><style>
 @page{margin:6mm}body{font:13px/1.35 system-ui,"Segoe UI",sans-serif;color:#000;width:76mm;margin:0 auto}
 h1{font-size:18px;margin:0;text-align:center}.c{text-align:center}small{color:#333}table{width:100%;border-collapse:collapse}td{padding:4px 0;vertical-align:top}.r{text-align:right;white-space:nowrap}
@@ -2465,7 +2481,8 @@ $("#sales-table").addEventListener("click", async event => {
 function openBillEditor(editing) {
   const pid = l => l.productId || data.products.find(p => p.name === l.name)?.id;
   const extra = Object.fromEntries((editing?.lines || []).map(l => [pid(l), l.qty]));
-  const stocked = data.products.filter(item => item.qty > 0 || extra[item.id]);
+  if (editing && data.shopType === "pharmacy") return toast("Pharmacy bills cannot be edited after saving. Process a return and create a corrected bill.");
+  const stocked = data.products.filter(item => productSellableQty(item) > 0 || extra[item.id]);
   if (!stocked.length) return toast("No products in stock.");
   let cart = (editing?.lines || []).map(l => { const p = data.products.find(x => x.id === pid(l)); return p && { id: p.id, name: productLabel(p), category: l.category || p.category || "", unit: p.unit || "piece", packSize: p.pack_size || 0, packName: p.pack_name, price: l.price, cost: p.cost, qty: l.qty, max: +(p.qty + l.qty).toFixed(6), serials: l.serials || [], warrantyMonths: Number(l.warrantyMonths || 0) }; }).filter(Boolean);
   openModal(editing ? `Edit ${billNo(editing.id)}` : "New bill", `<div class="item-search"><label for="bill-search">Add item <span class="form-hint">Type part of a name, SKU, or barcode. Pick from the list or press Enter to add.</span></label><div class="item-search-wrap"><input id="bill-search" type="search" autocomplete="off" placeholder="Item name, SKU, or barcode"><button type="button" class="item-search-toggle" id="bill-search-toggle" aria-label="Show all in-stock items" title="Show all in-stock items">▾</button><div class="item-search-results hidden" id="bill-search-results" role="listbox" aria-label="Matching in-stock items"></div></div></div>
@@ -2561,7 +2578,7 @@ ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive f
   const addProduct = item => {
     if (!item) return;
     const existing = cart.find(line => line.id === item.id);
-    if (!existing) cart.push({ id: item.id, name: productLabel(item), category: item.category || "", serials: [], warrantyMonths: 12, unit: item.unit || "piece", packSize: item.pack_size || 0, packName: item.pack_name, price: item.price, cost: item.cost, qty: 1, max: +(item.qty + (extra[item.id] || 0)).toFixed(6) });
+    if (!existing) cart.push({ id: item.id, name: productLabel(item), category: item.category || "", serials: [], warrantyMonths: 12, unit: item.unit || "piece", packSize: item.pack_size || 0, packName: item.pack_name, price: item.price, cost: item.cost, qty: 1, max: +(productSellableQty(item) + (extra[item.id] || 0)).toFixed(6) });
     else if (existing.qty < existing.max) existing.qty++;
     else { toast(`Only ${existing.max} ${existing.unit} of ${existing.name} in stock.`); return; }
     draw();
