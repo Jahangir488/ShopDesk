@@ -156,6 +156,8 @@ try {
   const repair = readFileSync(join(root, "install", "windows", "repair-shopdesk.ps1"), "utf8");
   if (!repair.includes("$oldWorkingDir = 'cd /d \"%~dp0\"'") || !repair.includes("$runContents.Replace($oldWorkingDir, 'cd /d \"%~dp0app\"')")) fail("repair must migrate an existing run-shop.cmd to the app directory");
   if (!installer.includes("Waiting for the local server") || !installer.includes("timed out")) fail("the installer should show progress while checking server startup");
+  if (!installer.includes("[System.IO.DriveInfo]::new") || !installer.includes("$drive.IsReady")) fail("the installer must reject a drive that is not ready");
+  if (!installer.includes('"/R:2", "/W:2"')) fail("Robocopy must not retry a failed copy for hours");
   ok(`${scripts.length} Windows scripts probe drives, quote Robocopy exclusions, set the desktop icon and use IPv4 loopback`);
 } catch (error) { fail("Windows scripts: " + error.message); }
 
