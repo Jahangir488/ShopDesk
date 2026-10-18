@@ -821,7 +821,7 @@ function saveBill(body, user, editId = 0) {
       if (used.get(id) > availableStock + 0.000001) throw httpError(409, `Not enough ${settings.shop_type === "pharmacy" ? "unexpired, non-quarantined " : ""}stock for "${product.name}". Available: ${availableStock} ${product.unit || "piece"}, requested on bill: ${used.get(id)}.`);
       const serials = Array.isArray(item.serials) ? item.serials.map(value => String(value || "").trim()) : [];
       const warrantyMonths = Number(item.warrantyMonths || 0);
-      const deviceTracked = settings.shop_type === "mobile" && /smartphone|feature phone|tablet|mobile phone/i.test(String(product.category || ""));
+      const deviceTracked = settings.shop_type === "mobile" && licensedFeatureEnabled("devices") && /smartphone|feature phone|tablet|mobile phone/i.test(String(product.category || ""));
       if (!Number.isInteger(warrantyMonths) || warrantyMonths < 0 || warrantyMonths > 120 ||
           (deviceTracked && (!Number.isInteger(qty) || serials.length !== qty || serials.some(value => value.length < 4 || value.length > 60))) ||
           serials.some(value => value.length > 60)) throw httpError(400, `${product.name} needs one valid IMEI/serial for each whole device sold. Warranty must be 0 to 120 months.`);
@@ -1117,7 +1117,7 @@ function stateFor(user) {
       }) : [],
     salesReturns: salesPermission ? db.prepare("SELECT * FROM sales_returns ORDER BY id DESC LIMIT 2000").all() : [],
     onlineOrderReturns: onlineOrdersPermission ? db.prepare("SELECT * FROM sales_returns WHERE online_order_id IS NOT NULL ORDER BY id DESC LIMIT 2000").all() : [],
-    serviceJobs: salesPermission && settings?.shop_type === "mobile" ? db.prepare("SELECT * FROM service_jobs ORDER BY id DESC LIMIT 2000").all().map(job => {
+    serviceJobs: salesPermission && settings?.shop_type === "mobile" && licensedFeatureEnabled("repairs") ? db.prepare("SELECT * FROM service_jobs ORDER BY id DESC LIMIT 2000").all().map(job => {
       const payments = db.prepare("SELECT date,amount,method,received_by FROM service_job_payments WHERE job_id=? ORDER BY id").all(job.id);
       const parts = db.prepare("SELECT product_id,product_name,qty,unit,unit_cost FROM service_job_parts WHERE job_id=? ORDER BY id").all(job.id);
       const paid = payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
@@ -1129,7 +1129,7 @@ function stateFor(user) {
       ...order,
       lines: JSON.parse(order.lines || "[]")
     })) : [],
-    devices: salesPermission && settings?.shop_type === "mobile" ? db.prepare("SELECT * FROM sold_devices ORDER BY sold_date DESC,id DESC LIMIT 5000").all() : [],
+    devices: salesPermission && settings?.shop_type === "mobile" && licensedFeatureEnabled("devices") ? db.prepare("SELECT * FROM sold_devices ORDER BY sold_date DESC,id DESC LIMIT 5000").all() : [],
     expenses: expensesPermission ? db.prepare("SELECT * FROM expenses ORDER BY id DESC").all() : []
   };
 }
@@ -1675,7 +1675,11 @@ async function handleApi(request, response, url) {
       const existing = db.prepare("SELECT name FROM products WHERE barcode=? COLLATE NOCASE").get(barcode);
       return json(response, 409, { error: `Barcode "${barcode}" is already assigned to "${existing.name}".` });
     }
-    const clothing = Object.fromEntries(["brand", "color", "size", "material"].map(key => [key, String(body[key] || "").trim().slice(0, 60)]));
+    const clothingKeys = ["brand", "color", "size", "material"];
+    const clothing = Object.fromEntries(clothingKeys.map(key => [key, String(body[key] || "").trim().slice(0, 60)]));
+    if (currentShopType() === "clothing" && !licensedFeatureEnabled("clothing") && clothingKeys.some(key => clothing[key])) {
+      return json(response,403,{error:"Clothing-specific fields are not included in this licence. Ask your supplier to add the Clothing module."});
+    }
     db.exec("BEGIN IMMEDIATE");
     try {
       const created = db.prepare("INSERT INTO products(name,sku,price,cost,qty,min,icon,unit,category,pack_name,pack_size,barcode,brand,color,size,material) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
@@ -1714,7 +1718,12 @@ async function handleApi(request, response, url) {
     const unit = typeof body.unit === "string" ? body.unit.trim() : product.unit;
     const packSize = Object.hasOwn(body, "pack_size") ? Number(body.pack_size || 0) : product.pack_size;
     const packName = typeof body.pack_name === "string" ? body.pack_name.trim().slice(0, 20) : product.pack_name;
-    const clothing = Object.fromEntries(["brand", "color", "size", "material"].map(key => [key, typeof body[key] === "string" ? body[key].trim().slice(0, 60) : product[key]]));
+    const clothingKeys = ["brand", "color", "size", "material"];
+    const clothing = Object.fromEntries(clothingKeys.map(key => [key, typeof body[key] === "string" ? body[key].trim().slice(0, 60) : product[key]]));
+    if (currentShopType() === "clothing" && !licensedFeatureEnabled("clothing") &&
+        clothingKeys.some(key => Object.hasOwn(body,key) && String(clothing[key]||"") !== String(product[key]||""))) {
+      return json(response,403,{error:"Clothing-specific fields are not included in this licence. Ask your supplier to add the Clothing module."});
+    }
     const category = typeof body.category === "string" ? body.category.trim() : product.category;
 
     if (!name) return json(response, 400, { error: "Product name is required." });
@@ -2069,7 +2078,7 @@ async function handleApi(request, response, url) {
         db.exec("ROLLBACK");
         return json(response, 409, { error: `Not enough stock for "${product.name}". Available in stock: ${product.qty} ${product.unit || 'piece'}, Requested: ${quantity}.` });
       }
-      if (settings.shop_type === "mobile" && /smartphone|feature phone|tablet|mobile phone/i.test(String(product.category || ""))) {
+      if (settings.shop_type === "mobile" && licensedFeatureEnabled("devices") && /smartphone|feature phone|tablet|mobile phone/i.test(String(product.category || ""))) {
         db.exec("ROLLBACK");
         return json(response, 400, { error: "Use New bill for phones and tablets so their IMEI/serial and warranty are recorded." });
       }
