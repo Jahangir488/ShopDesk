@@ -513,10 +513,23 @@ function upgradeRestoredDatabase() {
     connected_email TEXT NOT NULL DEFAULT '', last_attempt_at TEXT NOT NULL DEFAULT '', last_success_at TEXT NOT NULL DEFAULT '',
     last_error TEXT NOT NULL DEFAULT '', last_file TEXT NOT NULL DEFAULT '');
     INSERT OR IGNORE INTO offsite_backup(id) VALUES(1);`);
+  // Keep installation identity/trial state local to this installed copy. These values
+  // must not be transferred from another shop's restored database.
+  setMetaValue("install_id", installId);
+  setMetaValue("trial_started_at", localTrialStartedAt);
+  setMetaValue("trial_days", String(localTrialDays));
+  refreshLicense();
+  const restoredPackage = currentLicense();
+  if (restoredPackage.state === "active" && restoredPackage.shopType) {
+    const restoredShopType = db.prepare("SELECT shop_type FROM settings WHERE id=1").get()?.shop_type || "general";
+    if (restoredShopType !== restoredPackage.shopType) {
+      db.prepare("UPDATE settings SET shop_type=? WHERE id=1").run(restoredPackage.shopType);
+      addProfileCategories(restoredPackage.shopType);
+    }
+  }
   // A backup from an older Shop Desk version may not contain Pharmacy tables.
   // Recreate compatible empty tables and preserve its existing product data.
   ensurePharmacyDetails();
-  refreshLicense();
 }
 
 const mime = {
@@ -538,6 +551,8 @@ if (!metaValue("trial_started_at")) {
   setMetaValue("trial_started_at", new Date().toISOString());
   setMetaValue("trial_days", String(existingUsers > 0 ? UPGRADE_TRIAL_DAYS : TRIAL_DAYS));
 }
+const localTrialStartedAt = metaValue("trial_started_at");
+const localTrialDays = Number(metaValue("trial_days") || TRIAL_DAYS);
 const licenseRow = () => db.prepare("SELECT token, activated_at FROM license WHERE id=1").get();
 let licenseCache = { at: 0, value: null };
 function currentLicense() {
@@ -545,8 +560,8 @@ function currentLicense() {
   const row = licenseRow();
   const status = licenseStatus({
     license: row ? { token: row.token, activatedAt: row.activated_at } : null,
-    trialStartedAt: metaValue("trial_started_at"),
-    trialDays: Number(metaValue("trial_days") || TRIAL_DAYS),
+    trialStartedAt: localTrialStartedAt,
+    trialDays: localTrialDays,
     installId
   });
   status.installId = installId;
