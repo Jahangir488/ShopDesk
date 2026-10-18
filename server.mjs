@@ -757,6 +757,7 @@ function saveBill(body, user, editId = 0) {
   const discount = Number(body.discount || 0);
   const settings = db.prepare("SELECT tax_rate,tax_mode,require_customer,allow_discounts,payment_methods,shop_type FROM settings WHERE id=1").get() || {};
   const allowedPayments = String(settings.payment_methods || "Cash,bKash,Nagad,Card,Due").split(",").map(value => value.trim()).filter(Boolean);
+  if (editId && settings.shop_type === "pharmacy") throw httpError(409,"Pharmacy bills cannot be edited or deleted because the original medicine batches must remain traceable. Process a return and create a corrected bill instead.");
   const method = String(body.payment || "Cash").slice(0, 40);
   const customer = String(body.customer || "").trim().slice(0, 80), phone = String(body.phone || "").trim().slice(0, 30);
   if (!items.length) throw httpError(400, "Please add at least one product item to the bill.");
@@ -779,7 +780,8 @@ function saveBill(body, user, editId = 0) {
       if (!validQty(qty, product.unit, product.pack_size > 0 ? 0.000001 : 0.001, product.pack_size > 0)) throw httpError(400, `Enter a valid quantity for "${product.name}" in unit "${product.unit}".`);
       if (!validAmount(item.price)) throw httpError(400, `Enter a valid price for "${product.name}".`);
       used.set(id, (used.get(id) || 0) + qty);
-      if (used.get(id) > product.qty + 0.000001) throw httpError(409, `Not enough stock for "${product.name}". Available in stock: ${product.qty} ${product.unit || 'piece'}, Requested on bill: ${used.get(id)}.`);
+      const availableStock = settings.shop_type === "pharmacy" ? pharmacyAvailableQty(id) : Number(product.qty);
+      if (used.get(id) > availableStock + 0.000001) throw httpError(409, `Not enough ${settings.shop_type === "pharmacy" ? "unexpired, non-quarantined " : ""}stock for "${product.name}". Available: ${availableStock} ${product.unit || "piece"}, requested on bill: ${used.get(id)}.`);
       const serials = Array.isArray(item.serials) ? item.serials.map(value => String(value || "").trim()) : [];
       const warrantyMonths = Number(item.warrantyMonths || 0);
       const deviceTracked = settings.shop_type === "mobile" && /smartphone|feature phone|tablet|mobile phone/i.test(String(product.category || ""));
@@ -860,6 +862,7 @@ function saveBill(body, user, editId = 0) {
       recordStockMovement(product, "sale", -qty, after, user.username, "B-" + String(billId).padStart(8, "0"), "Sold on bill.");
       const saleId = Number(db.prepare("INSERT INTO sales(date,product,qty,total,payment,cost,unit,product_id,bill_id,tax_amount) VALUES(?,?,?,?,?,?,?,?,?,?)")
         .run(date, productLabel(product), qty, gross - share - (taxMode === "inclusive" ? lineTax : 0), method, qty * product.cost, product.unit, product.id, billId, lineTax).lastInsertRowid);
+      if (settings.shop_type === "pharmacy") allocatePharmacyBatchStock(product.id,qty,saleId);
       for (const serial of serials) {
         const expiry = warrantyMonths > 0 ? warrantyExpiry(date, warrantyMonths) : "";
         db.prepare("INSERT INTO sold_devices(serial,product_id,product_name,bill_id,sale_id,sold_date,warranty_months,warranty_expires,customer,phone) VALUES(?,?,?,?,?,?,?,?,?,?)")
@@ -1443,7 +1446,7 @@ async function handleApi(request, response, url) {
   }
   if (route === "/api/export" && method === "GET") {
     if (user.role !== "admin") return json(response, 403, { error: "Administrator access required." });
-    const tables = ["settings", "products", "categories", "sales", "sales_returns", "expenses", "bills", "bill_payments", "online_orders", "service_jobs", "service_job_payments", "service_job_parts", "sold_devices", "customers", "suppliers", "purchases", "purchase_lines", "supplier_payments", "stock_movements", "activity_log"];
+    const tables = ["settings", "products", "categories", "medicine_details", "medicine_batches", "medicine_batch_sales", "medicine_batch_returns", "sales", "sales_returns", "expenses", "bills", "bill_payments", "online_orders", "service_jobs", "service_job_payments", "service_job_parts", "sold_devices", "customers", "suppliers", "purchases", "purchase_lines", "supplier_payments", "stock_movements", "activity_log"];
     const backup = { format: "shop-desk-json-backup-v2", exportedAt: new Date().toISOString(), tables: {} };
     for (const table of tables) backup.tables[table] = db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all();
     return json(response, 200, backup, { "Content-Disposition": "attachment; filename=shop-desk-backup.json" });
@@ -1614,6 +1617,17 @@ async function handleApi(request, response, url) {
     const qty = Number(body.qty);
     const min = Number(body.min);
     const packSize = Number(body.pack_size || 0), packName = String(body.pack_name || "").trim().slice(0, 20);
+    const batchNumber = String(body.batchNumber || "").trim().slice(0,80), expiryDate = String(body.expiryDate || "").trim();
+    const medicineDetails = {
+      generic_name: String(body.genericName || "").trim().slice(0,160),
+      strength: String(body.strength || "").trim().slice(0,80),
+      dosage_form: String(body.dosageForm || "").trim().slice(0,80),
+      manufacturer: String(body.manufacturer || "").trim().slice(0,160)
+    };
+    const pharmacy = pharmacyMode();
+    if (pharmacy && qty > 0 && (!validText(batchNumber) || !validDate(expiryDate))) {
+      return json(response,400,{error:"For opening stock, enter the medicine batch number and expiry date. You can receive more stock later from Batches & expiry."});
+    }
 
     if (!name) return json(response, 400, { error: "Product name is required." });
     if (name.length > 200) return json(response, 400, { error: "Product name must be 200 characters or fewer." });
@@ -1629,10 +1643,25 @@ async function handleApi(request, response, url) {
       return json(response, 409, { error: `Barcode "${barcode}" is already assigned to "${existing.name}".` });
     }
     const clothing = Object.fromEntries(["brand", "color", "size", "material"].map(key => [key, String(body[key] || "").trim().slice(0, 60)]));
-    const created = db.prepare("INSERT INTO products(name,sku,price,cost,qty,min,icon,unit,category,pack_name,pack_size,barcode,brand,color,size,material) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-      .run(name, sku, price, cost, qty, min, String(body.icon || "📦").slice(0, 16), unit, category, packName, packSize, barcode, clothing.brand, clothing.color, clothing.size, clothing.material);
-    if (Number(qty) > 0) recordStockMovement({ id: Number(created.lastInsertRowid), name, unit, cost }, "opening stock", qty, qty, user.username, "New product");
-    return json(response, 201, stateFor(user));
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const created = db.prepare("INSERT INTO products(name,sku,price,cost,qty,min,icon,unit,category,pack_name,pack_size,barcode,brand,color,size,material) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        .run(name, sku, price, cost, qty, min, String(body.icon || "📦").slice(0, 16), unit, category, packName, packSize, barcode, clothing.brand, clothing.color, clothing.size, clothing.material);
+      const productId = Number(created.lastInsertRowid);
+      if (pharmacy) {
+        db.prepare("INSERT INTO medicine_details(product_id,generic_name,strength,dosage_form,manufacturer) VALUES(?,?,?,?,?)")
+          .run(productId,medicineDetails.generic_name,medicineDetails.strength,medicineDetails.dosage_form,medicineDetails.manufacturer);
+        if (Number(qty)>0) db.prepare(`INSERT INTO medicine_batches(product_id,batch_number,expiry_date,quantity_received,quantity_remaining,quantity_quarantined,unit_cost,received_date,created_by)
+          VALUES(?,?,?,?,?,0,?,?,?)`).run(productId,batchNumber,expiryDate,qty,qty,cost,today(),user.username);
+      }
+      if (Number(qty) > 0) recordStockMovement({ id: productId, name, unit, cost }, "opening stock", qty, qty, user.username, "New product", pharmacy ? `Batch ${batchNumber}; expires ${expiryDate}.` : "");
+      db.exec("COMMIT");
+      return json(response, 201, stateFor(user));
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch {}
+      if (String(error.message).includes("UNIQUE")) return json(response,409,{error:"A batch with that number already exists for this medicine."});
+      throw error;
+    }
   }
   const productMatch = route.match(/^\/api\/products\/(\d+)$/);
   if (productMatch && method === "PATCH") {
@@ -1647,6 +1676,7 @@ async function handleApi(request, response, url) {
     const price = Object.hasOwn(body, "price") ? Number(body.price) : product.price;
     const cost = Object.hasOwn(body, "cost") ? Number(body.cost) : product.cost;
     const qty = Object.hasOwn(body, "qty") ? Number(body.qty) : product.qty;
+    if (pharmacyMode() && Math.abs(qty-Number(product.qty))>0.000001) return json(response,409,{error:"Direct stock edits are disabled for Pharmacy so batch totals remain accurate. Use Batches & expiry or Record supplier purchase."});
     const min = Object.hasOwn(body, "min") ? Number(body.min) : product.min;
     const unit = typeof body.unit === "string" ? body.unit.trim() : product.unit;
     const packSize = Object.hasOwn(body, "pack_size") ? Number(body.pack_size || 0) : product.pack_size;
@@ -1669,10 +1699,13 @@ async function handleApi(request, response, url) {
     const result = db.prepare("UPDATE products SET name=?,sku=?,barcode=?,price=?,cost=?,qty=?,min=?,unit=?,category=?,pack_name=?,pack_size=?,brand=?,color=?,size=?,material=? WHERE id=?")
       .run(name, sku, barcode, price, cost, qty, min, unit, category, packName, packSize, clothing.brand, clothing.color, clothing.size, clothing.material, Number(productMatch[1]));
     if (!result.changes) return json(response, 404, { error: "Inventory item not found." });
+    if (pharmacyMode()) db.prepare("INSERT INTO medicine_details(product_id,generic_name,strength,dosage_form,manufacturer) VALUES(?,?,?,?,?) ON CONFLICT(product_id) DO UPDATE SET generic_name=excluded.generic_name,strength=excluded.strength,dosage_form=excluded.dosage_form,manufacturer=excluded.manufacturer")
+      .run(Number(productMatch[1]),String(body.genericName||"").trim().slice(0,160),String(body.strength||"").trim().slice(0,80),String(body.dosageForm||"").trim().slice(0,80),String(body.manufacturer||"").trim().slice(0,160));
     if (Math.abs(qty - product.qty) > 1e-6) recordStockMovement({ ...product, name, unit, cost }, "manual adjustment", qty - product.qty, qty, user.username, "Inventory edit", "Quantity set from item editor.");
     return json(response, 200, stateFor(user));
   }
   if (productMatch && method === "DELETE") {
+    if (pharmacyMode() && db.prepare("SELECT 1 FROM medicine_batches WHERE product_id=? LIMIT 1").get(Number(productMatch[1]))) return json(response,409,{error:"This medicine has batch history. Keep the record for audit and set sellable stock to zero instead of deleting it."});
     if (!can(user, "records") || !requirePermission(user, "inventory")) {
       return json(response, 403, { error: "Edit-record and inventory access are required to delete inventory items." });
     }
@@ -1684,6 +1717,7 @@ async function handleApi(request, response, url) {
     return json(response, 200, stateFor(user));
   }
   if (route === "/api/inventory/bulk" && method === "POST") {
+    if (pharmacyMode()) return json(response,409,{error:"Bulk stock replacement is disabled for Pharmacy because it cannot preserve batch and expiry traceability. Receive batches through Batches & expiry or Record supplier purchase."});
     if (user.role !== "admin" || !can(user, "records") || !requirePermission(user, "inventory")) {
       return json(response, 403, { error: "Administrator, edit-record, and inventory access are required for bulk inventory upload." });
     }
@@ -1802,6 +1836,17 @@ async function handleApi(request, response, url) {
   }
   const purchaseEditMatch = route.match(/^\/api\/purchases\/(\d+)$/);
   if (purchaseEditMatch && method === "PATCH") {
+    if (pharmacyMode()) {
+      const body = await readJson(request);
+      if (body.items !== undefined) return json(response,409,{error:"Editing Pharmacy purchase quantities is disabled to preserve batch history. Keep the original supplier receipt and make a new stock receipt or documented batch correction."});
+      const date=String(body.date||""),reference=String(body.reference||"").trim(),note=String(body.note||"").trim(),id=Number(purchaseEditMatch[1]);
+      if (!validDate(date) || reference.length>100 || note.length>500) return json(response,400,{error:"Enter a valid purchase date, reference, and note."});
+      const purchase=db.prepare("SELECT id FROM purchases WHERE id=?").get(id);
+      if (!purchase) return json(response,404,{error:"Purchase not found."});
+      if (!can(user,"supplier_purchases")) return json(response,403,{error:"Supplier purchase edit access is required."});
+      db.prepare("UPDATE purchases SET date=?,reference=?,note=? WHERE id=?").run(date,reference,note,id);
+      return json(response,200,{ok:true});
+    }
     if (!can(user, "supplier_purchases")) return json(response, 403, { error: "Supplier purchase edit access is required." });
     const body = await readJson(request), id = Number(purchaseEditMatch[1]);
     const date = String(body.date || ""), reference = String(body.reference || "").trim(), note = String(body.note || "").trim();
@@ -1876,6 +1921,7 @@ async function handleApi(request, response, url) {
     if (!requirePermission(user, "inventory")) return json(response, 403, { error: "You do not have inventory permission." });
     const body = await readJson(request), supplierId = Number(body.supplierId), lines = Array.isArray(body.items) ? body.items : [];
     const date = body.date || today(), paid = Number(body.paid || 0), method = String(body.method || "Cash").trim().slice(0, 40);
+    const pharmacyPurchase = pharmacyMode();
     const reference = String(body.reference || "").trim().slice(0, 100), note = String(body.note || "").trim().slice(0, 500);
     if (!Number.isInteger(supplierId) || !validDate(date) || !lines.length || lines.length > 100 || !validAmount(paid)) return json(response, 400, { error: "Purchase details are invalid." });
     db.exec("BEGIN IMMEDIATE");
@@ -1885,8 +1931,10 @@ async function handleApi(request, response, url) {
       const items = lines.map(line => {
         const product = db.prepare("SELECT * FROM products WHERE id=?").get(Number(line.productId));
         const qty = Number(line.qty), cost = Number(line.cost);
+        const batchNumber = String(line.batchNumber||"").trim().slice(0,80), expiryDate = String(line.expiryDate||"").trim();
         if (!product || !validQty(qty, product.unit, 0.001, product.pack_size > 0) || !validAmount(cost)) throw httpError(400, "A purchase line is invalid. Check the product, quantity, and buying cost.");
-        return { product, qty, cost, total: Math.round(qty * cost * 100) / 100 };
+        if (pharmacyPurchase && (!validText(batchNumber) || !validDate(expiryDate))) throw httpError(400,"Every Pharmacy purchase line needs a batch number and expiry date.");
+        return { product, qty, cost, batchNumber, expiryDate, total: Math.round(qty * cost * 100) / 100 };
       });
       const total = Math.round(items.reduce((sum, item) => sum + item.total, 0) * 100) / 100;
       if (paid > total + 0.001) throw httpError(400, "Payment cannot be more than this purchase total.");
@@ -1900,7 +1948,14 @@ async function handleApi(request, response, url) {
         db.prepare("UPDATE products SET qty=?,cost=? WHERE id=?").run(after, averageCost, current.id);
         db.prepare("INSERT INTO purchase_lines(purchase_id,product_id,product_name,qty,unit,unit_cost,line_total) VALUES(?,?,?,?,?,?,?)")
           .run(id, product.id, product.name, qty, product.unit || "piece", cost, item.total);
-        recordStockMovement(current, "purchase", qty, after, user.username, "P-" + String(id).padStart(8, "0"), `Supplier: ${supplier.name}`, cost);
+        if (pharmacyPurchase) {
+          const existingBatch = db.prepare("SELECT id,expiry_date FROM medicine_batches WHERE product_id=? AND batch_number=? COLLATE NOCASE").get(product.id,item.batchNumber);
+          if (existingBatch && existingBatch.expiry_date !== item.expiryDate) throw httpError(409,`Batch ${item.batchNumber} already exists for ${product.name} with a different expiry date.`);
+          if (existingBatch) db.prepare("UPDATE medicine_batches SET quantity_received=quantity_received+?,quantity_remaining=quantity_remaining+?,unit_cost=?,supplier_id=?,purchase_id=? WHERE id=?").run(qty,qty,cost,supplierId,id,existingBatch.id);
+          else db.prepare(`INSERT INTO medicine_batches(product_id,batch_number,expiry_date,quantity_received,quantity_remaining,quantity_quarantined,unit_cost,supplier_id,purchase_id,received_date,created_by)
+            VALUES(?,?,?,?,?,0,?,?,?,?,?)`).run(product.id,item.batchNumber,item.expiryDate,qty,qty,cost,supplierId,id,date,user.username);
+        }
+        recordStockMovement(current, "purchase", qty, after, user.username, "P-" + String(id).padStart(8, "0"), pharmacyPurchase ? `Supplier: ${supplier.name}; batch ${item.batchNumber}; expiry ${item.expiryDate}` : `Supplier: ${supplier.name}`, cost);
       }
       if (paid > 0) db.prepare("INSERT INTO supplier_payments(supplier_id,date,amount,method,note,received_by) VALUES(?,?,?,?,?,?)")
         .run(supplierId, date, paid, method, `Payment on purchase P-${String(id).padStart(8, "0")}`, user.username);
@@ -1955,6 +2010,7 @@ async function handleApi(request, response, url) {
 
   if (route === "/api/sales" && method === "POST") {
     if (!requirePermission(user, "sales")) return json(response, 403, { error: "You do not have sales permission." });
+    if (pharmacyMode()) return json(response,400,{error:"Use New bill for Pharmacy sales so unexpired batches are selected and recorded."});
     const body = await readJson(request);
     const quantity = Number(body.qty);
     const productId = Number(body.productId);
@@ -2151,6 +2207,7 @@ async function handleApi(request, response, url) {
     try { const id = saveBill(await readJson(request), user); return json(response, 201, { ...stateFor(user), bill: billById(id) }); } catch (error) { return billFail(error); }
   }
   if (billPath && !billPath[2] && (method === "PUT" || method === "DELETE")) {
+    if (pharmacyMode()) return json(response,409,{error:"Pharmacy bills are read-only after saving to preserve medicine batch traceability. Process a return and create a corrected bill."});
     if (!requirePermission(user, "sales") || !can(user, "records")) return json(response, 403, { error: "You do not have permission to edit or delete bills." });
     const id = Number(billPath[1]);
     try {
@@ -2216,10 +2273,11 @@ async function handleApi(request, response, url) {
       const refundMethod = refundAmount > 0 ? String(body.refundMethod || "").trim().slice(0, 40) : "";
       if (refundAmount > 0 && !validText(refundMethod)) throw httpError(400, "Choose a refund method.");
       const after = Number((product.qty + qty).toFixed(6));
-      db.prepare("UPDATE products SET qty=? WHERE id=?").run(after, product.id);
-      recordStockMovement(product, "sales return", qty, after, user.username, sale.bill_id ? "B-" + String(sale.bill_id).padStart(8, "0") : "Sale #" + sale.id, reason || "Customer return.", sale.qty > 0 ? sale.cost / sale.qty : product.cost);
-      db.prepare(`INSERT INTO sales_returns(date,product,qty,total,payment,cost,unit,product_id,reason,sale_id,bill_id,refund_amount,refund_method,actor)
+      const returnRecord = db.prepare(`INSERT INTO sales_returns(date,product,qty,total,payment,cost,unit,product_id,reason,sale_id,bill_id,refund_amount,refund_method,actor)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(today(), sale.product, qty, returnedValue, refundAmount > 0 ? refundMethod : "Credit adjustment", sale.qty > 0 ? sale.cost / sale.qty * qty : 0, sale.unit || "piece", product.id, reason, sale.id, sale.bill_id, refundAmount, refundMethod, user.username);
+      db.prepare("UPDATE products SET qty=? WHERE id=?").run(after, product.id);
+      if (pharmacyMode()) quarantinePharmacyReturn(sale.id,qty,Number(returnRecord.lastInsertRowid),product,user.username);
+      recordStockMovement(product, "sales return", qty, after, user.username, sale.bill_id ? "B-" + String(sale.bill_id).padStart(8, "0") : "Sale #" + sale.id, reason || (pharmacyMode() ? "Customer return quarantined from resale." : "Customer return."), sale.qty > 0 ? sale.cost / sale.qty : product.cost);
       for (const serial of returnSerials) db.prepare("UPDATE sold_devices SET status='Returned' WHERE sale_id=? AND serial=? COLLATE NOCASE AND status='Sold'").run(saleId, serial);
       if (sale.bill_id) syncSales(sale.bill_id);
       db.exec("COMMIT");
@@ -2228,6 +2286,7 @@ async function handleApi(request, response, url) {
   }
   const saleMatch = route.match(/^\/api\/sales\/(\d+)$/);
   if (saleMatch && method === "PATCH") {
+    if (pharmacyMode()) return json(response,409,{error:"Pharmacy sales cannot be edited directly because that would break the medicine-batch audit trail. Process a return and create a corrected bill."});
     if (!canManageSalesRecords(user)) return json(response, 403, { error: "Sales and edit-record access are required to edit sales records." });
     const body = await readJson(request);
     db.exec("BEGIN IMMEDIATE");
@@ -2330,6 +2389,7 @@ async function handleApi(request, response, url) {
     }
   }
   if (saleMatch && method === "DELETE") {
+    if (pharmacyMode()) return json(response,409,{error:"Pharmacy sales cannot be deleted directly because that would break the medicine-batch audit trail."});
     if (!canManageSalesRecords(user)) return json(response, 403, { error: "Sales and edit-record access are required to delete sales records." });
     db.exec("BEGIN IMMEDIATE");
     try {
