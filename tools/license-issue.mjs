@@ -23,16 +23,27 @@ const defaultFeatures = shopType === "pharmacy" ? ["pharmacy"] : shopType === "c
 const rawFeatures = value("--features");
 const features = rawFeatures === undefined ? defaultFeatures : rawFeatures.split(",").map(feature => feature.trim()).filter(Boolean);
 const days = Number(value("--days") || 365);
-if (shopType && !LICENSE_SHOP_TYPES.includes(shopType)) {
-  console.error(`--shop-type must be one of: ${LICENSE_SHOP_TYPES.join(", ")}.`);
+if (!shopType || !LICENSE_SHOP_TYPES.includes(shopType)) {
+  console.error(`--shop-type is required and must be one of: ${LICENSE_SHOP_TYPES.join(", ")}.`);
   process.exit(1);
 }
-if (shopType && !install) {
-  console.error("--install is required when issuing a shop-specific package. Ask the customer to copy the Installation ID shown in ShopDesk.");
+const normalizedInstall = install.replace(/[^a-z0-9]/gi, "");
+if (!/^[a-f0-9]{24}$/i.test(normalizedInstall)) {
+  console.error("--install must be the customer's full 24-character Installation ID from ShopDesk → Settings → Licence & plan.");
   process.exit(1);
 }
 if (features.some(feature => !LICENSE_FEATURES.includes(feature)) || new Set(features).size !== features.length) {
   console.error(`--features may contain unique values from: ${LICENSE_FEATURES.join(", ")}.`);
+  process.exit(1);
+}
+const incompatibleFeatures = features.filter(feature =>
+  (feature === "pharmacy" && shopType !== "pharmacy") ||
+  (feature === "clothing" && shopType !== "clothing") ||
+  (["repairs", "devices"].includes(feature) && shopType !== "mobile") ||
+  (feature === "online_orders" && shopType === "pharmacy")
+);
+if (incompatibleFeatures.length) {
+  console.error(`These modules do not apply to the selected shop type: ${incompatibleFeatures.join(", ")}.`);
   process.exit(1);
 }
 if (shopType === "pharmacy" && !features.includes("pharmacy")) {
@@ -62,13 +73,11 @@ const payload = {
   plan,
   seats: Number.isFinite(seats) ? seats : 0,
   issued: issued.toISOString(),
-  expires: expires.toISOString()
+  expires: expires.toISOString(),
+  install: normalizedInstall,
+  shopType,
+  features
 };
-if (install) payload.install = install;
-if (shopType) {
-  payload.shopType = shopType;
-  payload.features = features;
-}
 
 const token = signLicense(payload, loadPrivateKey());
 const out = value("--out");
@@ -78,4 +87,4 @@ if (out) {
 } else {
   console.log(token);
 }
-console.error(`\nShop: ${payload.shop}\nPlan: ${payload.plan}\nExpires: ${payload.expires.slice(0, 10)}${shopType ? `\nShop type: ${shopType}\nModules: ${features.join(", ") || "core"}` : ""}${install ? `\nInstall: ${install}` : ""}`);
+console.error(`\nShop: ${payload.shop}\nPlan: ${payload.plan}\nShop type: ${shopType}\nModules: ${features.join(", ") || "core only"}\nExpires: ${payload.expires.slice(0, 10)}\nInstall: ${normalizedInstall}`);
