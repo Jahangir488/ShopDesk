@@ -3393,12 +3393,13 @@ scheduledBackup();
 setInterval(scheduledBackup, 30000).unref();
 
 const server = createServer(async (request, response) => {
+  const allowEmbed = process.env.SHOP_ALLOW_EMBED === "1";
   response.setHeader("X-Content-Type-Options", "nosniff");
-  response.setHeader("X-Frame-Options", "DENY");
+  if (!allowEmbed) response.setHeader("X-Frame-Options", "DENY");
   response.setHeader("Referrer-Policy", "same-origin");
   if (isSecureRequest(request)) response.setHeader("Strict-Transport-Security", "max-age=31536000");
   if (request.url === "/healthz") { response.writeHead(200, { "Content-Type": "text/plain" }); response.end("ok"); return; }
-  response.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");
+  response.setHeader("Content-Security-Policy", `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'${allowEmbed ? "" : "; frame-ancestors 'none'"}`);
   const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
   if (url.pathname.startsWith("/api/")) {
     try { await handleApi(request, response, url); }
