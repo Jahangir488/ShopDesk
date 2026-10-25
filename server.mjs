@@ -346,8 +346,29 @@ if (!teamColumns.has("can_repair_records")) {
   db.exec("ALTER TABLE users ADD COLUMN can_repair_records INTEGER NOT NULL DEFAULT 0");
   db.exec("UPDATE users SET can_repair_records=1 WHERE role='admin'");
 }
+if (!teamColumns.has("can_food_packages")) {
+  db.exec("ALTER TABLE users ADD COLUMN can_food_packages INTEGER NOT NULL DEFAULT 0");
+  db.exec("UPDATE users SET can_food_packages=1 WHERE role='admin'");
+}
 // jahangir is always an active administrator with every power, even if the database was edited by hand.
-db.exec("UPDATE users SET role='admin',active=1,can_inventory=1,can_sales=1,can_expenses=1,can_team=1,can_admins=1,can_records=1,can_repair_records=1,can_settings=1,can_supplier_purchases=1,can_backups=1,can_server_load=1,can_online_orders=1,can_delete_online_orders=1 WHERE username='jahangir' COLLATE NOCASE");
+db.exec("UPDATE users SET role='admin',active=1,can_inventory=1,can_sales=1,can_expenses=1,can_team=1,can_admins=1,can_records=1,can_repair_records=1,can_food_packages=1,can_settings=1,can_supplier_purchases=1,can_backups=1,can_server_load=1,can_online_orders=1,can_delete_online_orders=1 WHERE username='jahangir' COLLATE NOCASE");
+db.exec(`CREATE TABLE IF NOT EXISTS food_packages (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  code TEXT NOT NULL DEFAULT '',
+  price REAL NOT NULL DEFAULT 0 CHECK(price>=0),
+  cost REAL NOT NULL DEFAULT 0 CHECK(cost>=0),
+  qty REAL NOT NULL DEFAULT 0 CHECK(qty>=0),
+  min REAL NOT NULL DEFAULT 5 CHECK(min>=0),
+  portion TEXT NOT NULL DEFAULT '1:1',
+  items TEXT NOT NULL DEFAULT '[]',
+  notes TEXT NOT NULL DEFAULT '',
+  product_id INTEGER,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);`);
 db.exec(`CREATE TABLE IF NOT EXISTS bill_payments (id INTEGER PRIMARY KEY, bill_id INTEGER NOT NULL, date TEXT NOT NULL,
   amount REAL NOT NULL CHECK(amount>0), method TEXT NOT NULL, received_by TEXT NOT NULL DEFAULT '')`);
 db.exec(`CREATE TABLE IF NOT EXISTS service_jobs (
@@ -497,9 +518,27 @@ function upgradeRestoredDatabase() {
   ensure("users", "email", "TEXT NOT NULL DEFAULT ''");
   ensure("users", "email_verified", "INTEGER NOT NULL DEFAULT 0");
   const userColumns = new Set(db.prepare("PRAGMA table_info(users)").all().map(column => column.name));
-  for (const column of ["can_team", "can_admins", "can_records", "can_settings", "can_supplier_purchases", "can_backups", "can_repair_records", "can_server_load", "can_online_orders", "can_delete_online_orders"]) ensure("users", column, "INTEGER NOT NULL DEFAULT 0");
+  for (const column of ["can_team", "can_admins", "can_records", "can_settings", "can_supplier_purchases", "can_backups", "can_repair_records", "can_food_packages", "can_server_load", "can_online_orders", "can_delete_online_orders"]) ensure("users", column, "INTEGER NOT NULL DEFAULT 0");
   if (!userColumns.has("can_repair_records")) db.exec("UPDATE users SET can_repair_records=1 WHERE role='admin'");
-  db.exec("UPDATE users SET role='admin',active=1,can_inventory=1,can_sales=1,can_expenses=1,can_team=1,can_admins=1,can_records=1,can_repair_records=1,can_settings=1,can_supplier_purchases=1,can_backups=1,can_server_load=1,can_online_orders=1,can_delete_online_orders=1 WHERE username='jahangir' COLLATE NOCASE");
+  if (!userColumns.has("can_food_packages")) db.exec("UPDATE users SET can_food_packages=1 WHERE role='admin'");
+  db.exec("UPDATE users SET role='admin',active=1,can_inventory=1,can_sales=1,can_expenses=1,can_team=1,can_admins=1,can_records=1,can_repair_records=1,can_food_packages=1,can_settings=1,can_supplier_purchases=1,can_backups=1,can_server_load=1,can_online_orders=1,can_delete_online_orders=1 WHERE username='jahangir' COLLATE NOCASE");
+  db.exec(`CREATE TABLE IF NOT EXISTS food_packages (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    code TEXT NOT NULL DEFAULT '',
+    price REAL NOT NULL DEFAULT 0 CHECK(price>=0),
+    cost REAL NOT NULL DEFAULT 0 CHECK(cost>=0),
+    qty REAL NOT NULL DEFAULT 0 CHECK(qty>=0),
+    min REAL NOT NULL DEFAULT 5 CHECK(min>=0),
+    portion TEXT NOT NULL DEFAULT '1:1',
+    items TEXT NOT NULL DEFAULT '[]',
+    notes TEXT NOT NULL DEFAULT '',
+    product_id INTEGER,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );`);
   db.exec("CREATE TABLE IF NOT EXISTS recovery_codes (user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, code_hash TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
   db.exec("CREATE TABLE IF NOT EXISTS email_verifications (user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, email TEXT NOT NULL, code_hash TEXT NOT NULL, expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0)");
   db.exec("CREATE TABLE IF NOT EXISTS email_recovery_codes (user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, code_hash TEXT NOT NULL, expires_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0)");
@@ -525,6 +564,180 @@ const mime = {
 
 const metaValue = key => db.prepare("SELECT value FROM app_meta WHERE key=?").get(key)?.value || "";
 const setMetaValue = (key, value) => db.prepare("INSERT INTO app_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key, String(value));
+
+const STARTER_FOOD_PACKAGES = [
+  {
+    name: "Rice + Chicken + Vegetables Package",
+    code: "PKG-01",
+    price: 180,
+    cost: 110,
+    qty: 30,
+    min: 5,
+    portion: "1:1",
+    notes: "Standard lunch/dinner meal set",
+    items: [
+      { name: "Plain Rice", qty: 1, unit: "plate" },
+      { name: "Chicken Curry", qty: 1, unit: "pcs" },
+      { name: "Mixed Vegetables", qty: 1, unit: "bowl" },
+      { name: "Masoor Dal", qty: 1, unit: "bowl" },
+      { name: "Green Salad", qty: 1, unit: "portion" }
+    ]
+  },
+  {
+    name: "Rice + Beef + Vegetables Package",
+    code: "PKG-02",
+    price: 240,
+    cost: 155,
+    qty: 25,
+    min: 5,
+    portion: "1:1",
+    notes: "Beef bhuna meal set with rice & vegetables",
+    items: [
+      { name: "Plain Rice", qty: 1, unit: "plate" },
+      { name: "Beef Bhuna", qty: 1, unit: "bowl" },
+      { name: "Mixed Vegetables", qty: 1, unit: "bowl" },
+      { name: "Masoor Dal", qty: 1, unit: "bowl" },
+      { name: "Green Salad", qty: 1, unit: "portion" }
+    ]
+  },
+  {
+    name: "Rice + Fish + Vegetables Package",
+    code: "PKG-03",
+    price: 190,
+    cost: 115,
+    qty: 25,
+    min: 5,
+    portion: "1:1",
+    notes: "Fish curry meal set with rice & vegetables",
+    items: [
+      { name: "Plain Rice", qty: 1, unit: "plate" },
+      { name: "Rui Fish Curry", qty: 1, unit: "pcs" },
+      { name: "Mixed Vegetables", qty: 1, unit: "bowl" },
+      { name: "Masoor Dal", qty: 1, unit: "bowl" },
+      { name: "Green Salad", qty: 1, unit: "portion" }
+    ]
+  },
+  {
+    name: "Polao + Chicken Roast + Vegetables + Drink",
+    code: "PKG-04",
+    price: 260,
+    cost: 165,
+    qty: 20,
+    min: 5,
+    portion: "1:1",
+    notes: "Special polao platter with roast, vegetables & borhani",
+    items: [
+      { name: "Plain Polao", qty: 1, unit: "plate" },
+      { name: "Chicken Roast", qty: 1, unit: "pcs" },
+      { name: "Chinese / Mixed Vegetables", qty: 1, unit: "bowl" },
+      { name: "Borhani", qty: 1, unit: "glass" },
+      { name: "Green Salad", qty: 1, unit: "portion" }
+    ]
+  }
+];
+
+function normalizeFoodPackageItems(rawItems) {
+  if (!Array.isArray(rawItems)) return [];
+  const out = [];
+  for (const raw of rawItems.slice(0, 30)) {
+    const name = String(raw?.name || "").trim().slice(0, 80);
+    if (!name) continue;
+    const qty = Number(raw?.qty);
+    const unit = String(raw?.unit || "portion").trim().slice(0, 24) || "portion";
+    out.push({
+      name,
+      qty: Number.isFinite(qty) && qty > 0 ? Math.round(qty * 1000) / 1000 : 1,
+      unit
+    });
+  }
+  return out;
+}
+
+function formatPackageItemsSummary(items) {
+  const list = Array.isArray(items) ? items : [];
+  return list.map(item => {
+    const qty = Number(item.qty || 1);
+    return qty !== 1 ? `${item.name} (${qty} ${item.unit || "pcs"})` : item.name;
+  }).join(" + ").slice(0, 80);
+}
+
+function syncFoodPackageProduct(pkgId) {
+  const pkg = db.prepare("SELECT * FROM food_packages WHERE id=?").get(Number(pkgId));
+  if (!pkg) return null;
+  seedCategory("Combo Meals");
+  let items = [];
+  try { items = JSON.parse(pkg.items || "[]"); } catch { items = []; }
+  const summary = formatPackageItemsSummary(items) || "Custom Food Package";
+  const sku = String(pkg.code || `PKG-${String(pkg.id).padStart(2, "0")}`).trim().slice(0, 40);
+  const size = String(pkg.portion || "1:1").trim().slice(0, 40);
+  const color = String(pkg.notes || "Custom Package").trim().slice(0, 60);
+  const material = "Package Counter";
+  const existingProduct = pkg.product_id ? db.prepare("SELECT id FROM products WHERE id=?").get(pkg.product_id) : null;
+  if (existingProduct) {
+    db.prepare(`UPDATE products SET name=?,sku=?,price=?,cost=?,qty=?,min=?,icon='🍱',unit='package',category='Combo Meals',brand=?,color=?,size=?,material=? WHERE id=?`)
+      .run(pkg.name, sku, pkg.price, pkg.cost, pkg.qty, pkg.min, summary, color, size, material, existingProduct.id);
+    return existingProduct.id;
+  }
+  const inserted = db.prepare(`INSERT INTO products(name,sku,barcode,price,cost,qty,min,icon,unit,pack_name,pack_size,category,brand,color,size,material)
+    VALUES(?,?,'',?,?,?,?,'🍱','package','',0,'Combo Meals',?,?,?,?)`)
+    .run(pkg.name, sku, pkg.price, pkg.cost, pkg.qty, pkg.min, summary, color, size, material);
+  const newProductId = Number(inserted.lastInsertRowid);
+  db.prepare("UPDATE food_packages SET product_id=? WHERE id=?").run(newProductId, pkg.id);
+  return newProductId;
+}
+
+function seedStarterFoodPackages(force = false) {
+  const count = db.prepare("SELECT COUNT(*) AS count FROM food_packages").get()?.count || 0;
+  if (!force && (count > 0 || metaValue("restaurant_packages_seeded") === "1")) return 0;
+  let added = 0;
+  for (const starter of STARTER_FOOD_PACKAGES) {
+    const exists = db.prepare("SELECT id FROM food_packages WHERE name=? COLLATE NOCASE").get(starter.name);
+    if (exists) continue;
+    const result = db.prepare(`INSERT INTO food_packages(name,code,price,cost,qty,min,portion,items,notes,active,created_by)
+      VALUES(?,?,?,?,?,?,?,?,?,1,'system')`)
+      .run(starter.name, starter.code, starter.price, starter.cost, starter.qty, starter.min, starter.portion, JSON.stringify(starter.items), starter.notes);
+    syncFoodPackageProduct(Number(result.lastInsertRowid));
+    added += 1;
+  }
+  setMetaValue("restaurant_packages_seeded", "1");
+  return added;
+}
+
+function readFoodPackages() {
+  const rows = db.prepare(`
+    SELECT fp.*,
+      p.qty AS product_qty,
+      p.price AS product_price,
+      p.cost AS product_cost,
+      p.min AS product_min,
+      p.sku AS product_sku
+    FROM food_packages fp
+    LEFT JOIN products p ON p.id = fp.product_id
+    ORDER BY fp.id ASC
+  `).all();
+  return rows.map(row => {
+    let items = [];
+    try { items = JSON.parse(row.items || "[]"); } catch { items = []; }
+    return {
+      id: row.id,
+      name: row.name,
+      code: row.product_sku || row.code || `PKG-${String(row.id).padStart(2, "0")}`,
+      price: row.product_price != null ? Number(row.product_price) : Number(row.price || 0),
+      cost: row.product_cost != null ? Number(row.product_cost) : Number(row.cost || 0),
+      qty: row.product_qty != null ? Number(row.product_qty) : Number(row.qty || 0),
+      min: row.product_min != null ? Number(row.product_min) : Number(row.min || 0),
+      portion: row.portion || "1:1",
+      items,
+      itemsSummary: formatPackageItemsSummary(items),
+      notes: row.notes || "",
+      productId: row.product_id || null,
+      active: Boolean(row.active),
+      createdBy: row.created_by || "",
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  });
+}
 function connectInfo() {
   const settings = db.prepare("SELECT shop_name FROM settings WHERE id=1").get();
   const lanPort = typeof port === "number" ? port : 8765;
@@ -1011,6 +1224,8 @@ function stateFor(user) {
   const onlineOrdersPermission = can(user, "online_orders");
   const expensesPermission = can(user, "expenses");
   const supplierEditPermission = can(user, "supplier_purchases");
+  const foodPackagesPermission = can(user, "food_packages");
+  if (settings?.shop_type === "restaurant") seedStarterFoodPackages(false);
   return {
     shopName: settings?.shop_name || "Bolts & Boards",
     workspace: settings?.workspace || "Uttara, Dhaka",
@@ -1021,6 +1236,9 @@ function stateFor(user) {
     whatsappNumber: settings?.whatsapp_number || "",
     contactAddress: settings?.contact_address || "",
     shopType: settings?.shop_type || "general",
+    foodPackages: settings?.shop_type === "restaurant" && (inventory || salesPermission || foodPackagesPermission)
+      ? readFoodPackages()
+      : [],
     pharmacyBatches: inventory && settings?.shop_type === "pharmacy"
       ? db.prepare(`SELECT b.*,p.name AS product_name,p.unit AS product_unit,md.generic_name,md.strength,md.dosage_form,md.manufacturer,
           MAX(0,b.quantity_remaining-b.quantity_quarantined) AS sellable_quantity
@@ -1081,10 +1299,12 @@ function stateFor(user) {
 const mobileServiceEnabled = () => db.prepare("SELECT shop_type FROM settings WHERE id=1").get()?.shop_type === "mobile";
 
 // The owner is the "jahangir" account (or, if that does not exist, the first administrator) and always has every power. Everyone else has only what is granted to them.
-const CAPS = ["inventory", "sales", "expenses", "server_load", "team", "admins", "records", "repair_records", "settings", "supplier_purchases", "backups", "online_orders", "delete_online_orders"];
+const CAPS = ["inventory", "sales", "expenses", "server_load", "team", "admins", "records", "repair_records", "food_packages", "settings", "supplier_purchases", "backups", "online_orders", "delete_online_orders"];
 const ownerId = () => (db.prepare("SELECT id FROM users WHERE username='jahangir' COLLATE NOCASE").get() || db.prepare("SELECT MIN(id) AS id FROM users WHERE role='admin'").get()).id;
 const can = (user, permission) => permission === "repair_records"
   ? user.id === ownerId() || user.role === "admin" || Boolean(user.can_repair_records)
+  : permission === "food_packages"
+  ? user.id === ownerId() || user.role === "admin" || Boolean(user.can_food_packages)
   : permission === "online_orders"
   ? !pharmacyMode() && (user.id === ownerId() || Boolean(user.can_online_orders))
   : permission === "delete_online_orders"
@@ -1103,8 +1323,8 @@ const grantCaps = (actor, role, wanted, current = {}) => Object.fromEntries(CAPS
     ? actor.username.toLowerCase() === "jahangir" && actor.role === "admin" ? Boolean(wanted?.[cap]) : Boolean(current[cap])
     : cap === "server_load"
     ? actor.role === "admin" ? Boolean(wanted?.[cap]) : Boolean(current[cap])
-    : ["repair_records", "online_orders", "delete_online_orders"].includes(cap)
-    ? actor.role === "admin" ? Boolean(wanted?.[cap]) : Boolean(current[cap])
+    : ["repair_records", "food_packages", "online_orders", "delete_online_orders"].includes(cap)
+    ? actor.role === "admin" || can(actor, cap) ? Boolean(wanted?.[cap]) : Boolean(current[cap])
     : protectedGrant
     ? can(actor, cap) ? Boolean(wanted?.[cap]) : Boolean(current[cap])
     : Boolean(current[cap]) || can(actor, cap);
@@ -1164,7 +1384,7 @@ async function handleApi(request, response, url) {
       return json(response, 400, { error: "Use a 3–32 character username and a password of at least 12 characters." });
     }
     const { salt, hash } = makePassword(body.password);
-    const result = db.prepare("INSERT INTO users(username,salt,password_hash,role,can_inventory,can_sales,can_expenses,can_team,can_admins,can_records,can_repair_records,can_settings,can_supplier_purchases,can_backups) VALUES(?,?,?,'admin',1,1,1,1,1,1,1,1,1,1)").run(body.username, salt, hash);
+    const result = db.prepare("INSERT INTO users(username,salt,password_hash,role,can_inventory,can_sales,can_expenses,can_team,can_admins,can_records,can_repair_records,can_food_packages,can_settings,can_supplier_purchases,can_backups) VALUES(?,?,?,'admin',1,1,1,1,1,1,1,1,1,1,1)").run(body.username, salt, hash);
     setupToken = null;
     const user = db.prepare("SELECT * FROM users WHERE id=?").get(Number(result.lastInsertRowid));
     createSession(user, response);
@@ -1400,7 +1620,7 @@ async function handleApi(request, response, url) {
   }
   if (route === "/api/export" && method === "GET") {
     if (user.role !== "admin") return json(response, 403, { error: "Administrator access required." });
-    const tables = ["settings", "products", "categories", "medicine_details", "medicine_batches", "medicine_batch_sales", "medicine_batch_returns", "sales", "sales_returns", "expenses", "bills", "bill_payments", "online_orders", "service_jobs", "service_job_payments", "service_job_parts", "sold_devices", "customers", "suppliers", "purchases", "purchase_lines", "supplier_payments", "stock_movements", "activity_log"];
+    const tables = ["settings", "products", "categories", "food_packages", "medicine_details", "medicine_batches", "medicine_batch_sales", "medicine_batch_returns", "sales", "sales_returns", "expenses", "bills", "bill_payments", "online_orders", "service_jobs", "service_job_payments", "service_job_parts", "sold_devices", "customers", "suppliers", "purchases", "purchase_lines", "supplier_payments", "stock_movements", "activity_log"];
     const backup = { format: "shop-desk-json-backup-v2", exportedAt: new Date().toISOString(), tables: {} };
     for (const table of tables) backup.tables[table] = db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all();
     return json(response, 200, backup, { "Content-Disposition": "attachment; filename=shop-desk-backup.json" });
@@ -1435,6 +1655,98 @@ async function handleApi(request, response, url) {
       .run(body.shopName.trim(), body.workspace.trim(), body.shopType, body.currencyCode, body.locale, taxRate, body.taxMode, body.requireCustomer ? 1 : 0, body.allowDiscounts ? 1 : 0, methods.join(","), contactNumber, website, email, facebookPage, whatsappNumber, contactAddress, language, banglaDigits ? 1 : 0);
     addProfileCategories(body.shopType);
     ensurePharmacyDetails();
+    if (body.shopType === "restaurant") seedStarterFoodPackages(false);
+    return json(response, 200, stateFor(user));
+  }
+
+  if (route === "/api/restaurant/packages" && method === "GET") {
+    if (!can(user, "inventory") && !can(user, "sales") && !can(user, "food_packages")) {
+      return json(response, 403, { error: "Access is required to view food packages." });
+    }
+    return json(response, 200, { packages: readFoodPackages() });
+  }
+  if (route === "/api/restaurant/packages/seed" && method === "POST") {
+    if (!can(user, "food_packages")) {
+      return json(response, 403, { error: "You do not have permission to create or manage food packages. Ask an administrator to grant Food Packages access." });
+    }
+    const added = seedStarterFoodPackages(true);
+    logActivity(user, `Loaded ${added} starter food package(s)`);
+    return json(response, 200, { ...stateFor(user), added });
+  }
+  if (route === "/api/restaurant/packages" && method === "POST") {
+    if (!can(user, "food_packages")) {
+      return json(response, 403, { error: "You do not have permission to create food packages. Ask an administrator to grant Food Packages access." });
+    }
+    const body = await readJson(request);
+    const name = String(body.name || "").trim().slice(0, 100);
+    const code = String(body.code || "").trim().slice(0, 40);
+    const portion = String(body.portion || "1:1").trim().slice(0, 40) || "1:1";
+    const notes = String(body.notes || "").trim().slice(0, 160);
+    const price = Number(body.price);
+    const cost = Number(body.cost || 0);
+    const qty = Number(body.qty ?? 20);
+    const min = Number(body.min ?? 5);
+    const items = normalizeFoodPackageItems(body.items);
+    if (!name || !Number.isFinite(price) || price < 0 || !Number.isFinite(cost) || cost < 0 || !Number.isFinite(qty) || qty < 0 || !Number.isFinite(min) || min < 0) {
+      return json(response, 400, { error: "Enter a valid package name, selling price, cost, and quantity." });
+    }
+    if (!items.length) {
+      return json(response, 400, { error: "Add at least one food item (e.g. Rice, Chicken, Vegetables) to the package." });
+    }
+    const result = db.prepare(`INSERT INTO food_packages(name,code,price,cost,qty,min,portion,items,notes,active,created_by)
+      VALUES(?,?,?,?,?,?,?,?,?,1,?)`)
+      .run(name, code, price, cost, qty, min, portion, JSON.stringify(items), notes, user.username);
+    const pkgId = Number(result.lastInsertRowid);
+    if (!code) {
+      const autoCode = `PKG-${String(pkgId).padStart(2, "0")}`;
+      db.prepare("UPDATE food_packages SET code=? WHERE id=?").run(autoCode, pkgId);
+    }
+    syncFoodPackageProduct(pkgId);
+    logActivity(user, `Created food package "${name}"`);
+    return json(response, 201, stateFor(user));
+  }
+  const foodPkgMatch = route.match(/^\/api\/restaurant\/packages\/(\d+)$/);
+  if (foodPkgMatch && method === "PUT") {
+    if (!can(user, "food_packages")) {
+      return json(response, 403, { error: "You do not have permission to edit food packages. Ask an administrator to grant Food Packages access." });
+    }
+    const pkgId = Number(foodPkgMatch[1]);
+    const existing = db.prepare("SELECT * FROM food_packages WHERE id=?").get(pkgId);
+    if (!existing) return json(response, 404, { error: "Food package not found." });
+    const body = await readJson(request);
+    const name = String(body.name || "").trim().slice(0, 100);
+    const code = String(body.code || existing.code || `PKG-${String(pkgId).padStart(2, "0")}`).trim().slice(0, 40);
+    const portion = String(body.portion || "1:1").trim().slice(0, 40) || "1:1";
+    const notes = String(body.notes || "").trim().slice(0, 160);
+    const price = Number(body.price);
+    const cost = Number(body.cost || 0);
+    const qty = Number(body.qty ?? existing.qty ?? 0);
+    const min = Number(body.min ?? existing.min ?? 5);
+    const items = normalizeFoodPackageItems(body.items);
+    if (!name || !Number.isFinite(price) || price < 0 || !Number.isFinite(cost) || cost < 0 || !Number.isFinite(qty) || qty < 0 || !Number.isFinite(min) || min < 0) {
+      return json(response, 400, { error: "Enter a valid package name, selling price, cost, and quantity." });
+    }
+    if (!items.length) {
+      return json(response, 400, { error: "Add at least one food item (e.g. Rice, Chicken, Vegetables) to the package." });
+    }
+    db.prepare(`UPDATE food_packages SET name=?,code=?,price=?,cost=?,qty=?,min=?,portion=?,items=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+      .run(name, code, price, cost, qty, min, portion, JSON.stringify(items), notes, pkgId);
+    syncFoodPackageProduct(pkgId);
+    logActivity(user, `Updated food package "${name}"`);
+    return json(response, 200, stateFor(user));
+  }
+  if (foodPkgMatch && method === "DELETE") {
+    if (!can(user, "food_packages")) {
+      return json(response, 403, { error: "You do not have permission to delete food packages. Ask an administrator to grant Food Packages access." });
+    }
+    const pkgId = Number(foodPkgMatch[1]);
+    const existing = db.prepare("SELECT * FROM food_packages WHERE id=?").get(pkgId);
+    if (!existing) return json(response, 404, { error: "Food package not found." });
+    db.prepare("DELETE FROM food_packages WHERE id=?").run(pkgId);
+    if (existing.product_id) {
+      db.prepare("DELETE FROM products WHERE id=?").run(existing.product_id);
+    }
+    logActivity(user, `Removed food package "${existing.name}"`);
     return json(response, 200, stateFor(user));
   }
 
@@ -3173,8 +3485,8 @@ async function handleApi(request, response, url) {
     const g = grantCaps(user, role, body.permissions);
     const { salt, hash } = makePassword(body.password);
     try {
-    db.prepare("INSERT INTO users(username,salt,password_hash,role,can_inventory,can_sales,can_expenses,can_server_load,can_online_orders,can_delete_online_orders,can_team,can_admins,can_records,can_repair_records,can_settings,can_supplier_purchases,can_backups) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-        .run(body.username, salt, hash, role, g.inventory, g.sales, g.expenses, g.server_load, g.online_orders, g.delete_online_orders, g.team, g.admins, g.records, g.repair_records, g.settings, g.supplier_purchases, g.backups);
+    db.prepare("INSERT INTO users(username,salt,password_hash,role,can_inventory,can_sales,can_expenses,can_server_load,can_online_orders,can_delete_online_orders,can_team,can_admins,can_records,can_repair_records,can_food_packages,can_settings,can_supplier_purchases,can_backups) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        .run(body.username, salt, hash, role, g.inventory, g.sales, g.expenses, g.server_load, g.online_orders, g.delete_online_orders, g.team, g.admins, g.records, g.repair_records, g.food_packages, g.settings, g.supplier_purchases, g.backups);
     } catch {
       return json(response, 409, { error: "That username is already in use." });
     }
@@ -3203,8 +3515,8 @@ async function handleApi(request, response, url) {
     if (body.active === false && target.role === "admin" && target.active && adminCount() <= 1) return json(response, 409, { error: "You cannot disable the last active administrator." });
     if (body.permissions) {
       const g = grantCaps(user, target.role, body.permissions, capsOf(target));
-      db.prepare("UPDATE users SET can_inventory=?,can_sales=?,can_expenses=?,can_server_load=?,can_online_orders=?,can_delete_online_orders=?,can_team=?,can_admins=?,can_records=?,can_repair_records=?,can_settings=?,can_supplier_purchases=?,can_backups=? WHERE id=?")
-        .run(g.inventory, g.sales, g.expenses, g.server_load, g.online_orders, g.delete_online_orders, g.team, g.admins, g.records, g.repair_records, g.settings, g.supplier_purchases, g.backups, target.id);
+      db.prepare("UPDATE users SET can_inventory=?,can_sales=?,can_expenses=?,can_server_load=?,can_online_orders=?,can_delete_online_orders=?,can_team=?,can_admins=?,can_records=?,can_repair_records=?,can_food_packages=?,can_settings=?,can_supplier_purchases=?,can_backups=? WHERE id=?")
+        .run(g.inventory, g.sales, g.expenses, g.server_load, g.online_orders, g.delete_online_orders, g.team, g.admins, g.records, g.repair_records, g.food_packages, g.settings, g.supplier_purchases, g.backups, target.id);
     }
     if (typeof body.active === "boolean") {
       db.prepare("UPDATE users SET active=? WHERE id=?").run(body.active ? 1 : 0, target.id);

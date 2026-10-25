@@ -1561,6 +1561,10 @@ function render() {
   $("#pharmacy-medex-inventory-button")?.classList.toggle("hidden", !(permissions.inventory && data.shopType === "pharmacy"));
   $("#pharmacy-medex-sales-button")?.classList.toggle("hidden", !(permissions.sales && data.shopType === "pharmacy"));
   $("#pharmacy-batches-button")?.classList.toggle("hidden", !(permissions.inventory && data.shopType === "pharmacy"));
+  const restaurantPackagesEnabled = data.shopType === "restaurant" && Boolean(permissions.sales || permissions.inventory || permissions.food_packages);
+  $("#restaurant-packages-button")?.classList.toggle("hidden", !restaurantPackagesEnabled);
+  $("#restaurant-packages-inventory-button")?.classList.toggle("hidden", !(data.shopType === "restaurant" && (permissions.inventory || permissions.food_packages)));
+  $("#restaurant-packages-sales-button")?.classList.toggle("hidden", !(data.shopType === "restaurant" && (permissions.sales || permissions.food_packages)));
   const onlineOrdersEnabled = !!permissions.online_orders;
   $("#online-orders-nav").classList.toggle("hidden", !onlineOrdersEnabled);
   const repairsEnabled = data.shopType === "mobile" && permissions.sales;
@@ -2221,17 +2225,19 @@ $("#download-stock-watch").onclick = () => {
   toast("Stock watch downloaded");
 };
 // ---- Team access: owner, administrators and staff, each with powers that can be given or taken away ----
-const CAP_LABELS = [["inventory", "View and add inventory"], ["sales", "View and record sales and bills"], ["expenses", "View and add expenses"], ["online_orders", "Manage online orders"], ["delete_online_orders", "Delete online orders"], ["server_load", "View server load in the top bar"],
+const CAP_LABELS = [["inventory", "View and add inventory"], ["sales", "View and record sales and bills"], ["expenses", "View and add expenses"], ["food_packages", "Create and manage custom food packages (Food & restaurant)"], ["online_orders", "Manage online orders"], ["delete_online_orders", "Delete online orders"], ["server_load", "View server load in the top bar"],
   ["records", "Correct or delete records and manage categories"], ["team", "Manage staff accounts (add, reset password, set access, disable)"],
   ["admins", "Manage administrators (create them, change roles, grant admin powers)"], ["settings", "Change shop name and shop address/location"],
   ["supplier_purchases", "Edit supplier purchase and payment records"], ["backups", "Manage backups and restore the database"],
   ["repair_records", "Edit and delete delivered repair jobs (mobile shop only)"]];
-const CAP_SHORT = { inventory: "inventory", sales: "sales", expenses: "expenses", server_load: "view server load", records: "edit/delete", team: "manage staff", admins: "manage admins", settings: "shop settings", supplier_purchases: "edit supplier purchases", backups: "backups and restore", repair_records: "edit/delete delivered repair jobs", online_orders: "online orders", delete_online_orders: "delete online orders" };
+const CAP_SHORT = { inventory: "inventory", sales: "sales", expenses: "expenses", food_packages: "create food packages", server_load: "view server load", records: "edit/delete", team: "manage staff", admins: "manage admins", settings: "shop settings", supplier_purchases: "edit supplier purchases", backups: "backups and restore", repair_records: "edit/delete delivered repair jobs", online_orders: "online orders", delete_online_orders: "delete online orders" };
 const myCaps = () => signedInUser?.permissions || {};
 const canGrantCap = cap => cap === "online_orders"
   ? signedInUser?.role === "admin"
   : cap === "delete_online_orders"
   ? signedInUser?.role === "admin"
+  : cap === "food_packages"
+  ? signedInUser?.role === "admin" || !!myCaps().food_packages
   : cap === "backups"
   ? signedInUser?.username?.toLowerCase() === "jahangir" && signedInUser?.role === "admin"
   : cap === "server_load"
@@ -2239,7 +2245,7 @@ const canGrantCap = cap => cap === "online_orders"
   : cap === "repair_records"
     ? signedInUser?.role === "admin"
   : !!myCaps()[cap];
-const accessFields = (perms, role) => `<fieldset class="permissions"><legend>Allow this ${role === "admin" ? "administrator" : "staff member"} to:</legend>${CAP_LABELS.filter(([cap]) => (role === "admin" || !["team", "admins", "backups"].includes(cap)) && (cap !== "repair_records" || (data.shopType === "mobile" && role !== "admin"))).map(([cap, label]) => { const grantable = canGrantCap(cap), reason = ["delete_online_orders", "online_orders", "server_load", "repair_records"].includes(cap) ? "only administrators can grant this access" : cap === "backups" ? "only Jahangir can grant this power" : "you do not hold this power"; return `<label><input type="checkbox" name="${cap}" ${perms[cap] ? "checked" : ""} ${grantable ? "" : "disabled"}> ${label}${grantable ? "" : ` <small>(${reason})</small>`}</label>`; }).join("")}${data.shopType !== "mobile" && role === "staff" ? `<input class="hidden" type="checkbox" name="repair_records" ${perms.repair_records ? "checked" : ""} hidden>` : ""}${role === "admin" && data.shopType === "mobile" ? `<small class="form-hint">Administrators always have access to delivered repair jobs. Use the staff access checkbox to grant or remove this power for a staff member.</small>` : ""}</fieldset>`;
+const accessFields = (perms, role) => `<fieldset class="permissions"><legend>Allow this ${role === "admin" ? "administrator" : "staff member"} to:</legend>${CAP_LABELS.filter(([cap]) => (role === "admin" || !["team", "admins", "backups"].includes(cap)) && (cap !== "repair_records" || (data.shopType === "mobile" && role !== "admin"))).map(([cap, label]) => { const grantable = canGrantCap(cap), reason = ["delete_online_orders", "online_orders", "server_load", "repair_records", "food_packages"].includes(cap) ? "only administrators can grant this access" : cap === "backups" ? "only Jahangir can grant this power" : "you do not hold this power"; return `<label><input type="checkbox" name="${cap}" ${perms[cap] ? "checked" : ""} ${grantable ? "" : "disabled"}> ${label}${grantable ? "" : ` <small>(${reason})</small>`}</label>`; }).join("")}${data.shopType !== "mobile" && role === "staff" ? `<input class="hidden" type="checkbox" name="repair_records" ${perms.repair_records ? "checked" : ""} hidden>` : ""}${role === "admin" && data.shopType === "mobile" ? `<small class="form-hint">Administrators always have access to delivered repair jobs. Use the staff access checkbox to grant or remove this power for a staff member.</small>` : ""}</fieldset>`;
 const readCaps = () => Object.fromEntries(CAP_LABELS.map(([cap]) => [cap, !!document.querySelector(`#modal-fields input[name="${cap}"]`)?.checked]));
 async function loadUsers() {
   if (!(myCaps().team || myCaps().admins)) return;
@@ -2581,14 +2587,14 @@ $("#sales-table").addEventListener("click", async event => {
   if (!button) return;
   try { printBill(await api("/api/bills/" + button.dataset.printBill)); } catch (error) { toast(error.message); }
 });
-function openBillEditor(editing) {
+function openBillEditor(editing, initialProduct = null) {
   const pid = l => l.productId || data.products.find(p => p.name === l.name)?.id;
   const extra = Object.fromEntries((editing?.lines || []).map(l => [pid(l), l.qty]));
   if (editing && data.shopType === "pharmacy") return toast("Pharmacy bills cannot be edited after saving. Process a return and create a corrected bill.");
   const stocked = data.products.filter(item => productSellableQty(item) > 0 || extra[item.id]);
   if (!stocked.length) return toast("No products in stock.");
   let cart = (editing?.lines || []).map(l => { const p = data.products.find(x => x.id === pid(l)); return p && { id: p.id, name: productLabel(p), category: l.category || p.category || "", unit: p.unit || "piece", packSize: p.pack_size || 0, packName: p.pack_name, price: l.price, cost: p.cost, qty: l.qty, max: +(p.qty + l.qty).toFixed(6), serials: l.serials || [], warrantyMonths: Number(l.warrantyMonths || 0) }; }).filter(Boolean);
-  openModal(editing ? `Edit ${billNo(editing.id)}` : "New bill", `<div class="item-search"><div class="bill-search-head"><label for="bill-search">Add item <span class="form-hint">Type part of a name, SKU, or barcode. Pick from the list or press Enter to add.</span></label>${data.shopType === "pharmacy" ? `<button type="button" class="button secondary" id="bill-medex-toggle">Medicine info (MedEx)</button>` : ""}</div><div class="item-search-wrap"><input id="bill-search" type="search" autocomplete="off" placeholder="Item name, SKU, or barcode"><button type="button" class="item-search-toggle" id="bill-search-toggle" aria-label="Show all in-stock items" title="Show all in-stock items">▾</button><div class="item-search-results hidden" id="bill-search-results" role="listbox" aria-label="Matching in-stock items"></div></div></div>${data.shopType === "pharmacy" ? `<div id="bill-medex-drawer" class="medex-inline-drawer hidden"></div>` : ""}
+  openModal(editing ? `Edit ${billNo(editing.id)}` : "New bill", `<div class="item-search"><div class="bill-search-head"><label for="bill-search">Add item <span class="form-hint">Type part of a name, SKU, or barcode. Pick from the list or press Enter to add.</span></label>${data.shopType === "pharmacy" ? `<button type="button" class="button secondary" id="bill-medex-toggle">Medicine info (MedEx)</button>` : data.shopType === "restaurant" ? `<button type="button" class="button secondary" id="bill-manage-food-packages">Food packages</button>` : ""}</div><div class="item-search-wrap"><input id="bill-search" type="search" autocomplete="off" placeholder="Item name, SKU, or barcode"><button type="button" class="item-search-toggle" id="bill-search-toggle" aria-label="Show all in-stock items" title="Show all in-stock items">▾</button><div class="item-search-results hidden" id="bill-search-results" role="listbox" aria-label="Matching in-stock items"></div></div></div>${data.shopType === "pharmacy" ? `<div id="bill-medex-drawer" class="medex-inline-drawer hidden"></div>` : ""}${data.shopType === "restaurant" && (data.foodPackages || []).length ? `<div class="cloth-quick-chips" id="bill-food-packages-bar" style="margin-bottom:10px"><span class="form-hint" style="margin-right:4px">🍱 Quick packages:</span>${(data.foodPackages || []).map(pkg => `<button type="button" class="cloth-chip" data-bill-pkg-product="${pkg.productId || ""}" title="${esc(pkg.itemsSummary || "")}">🍱 ${esc(pkg.name)} (${esc(pkg.portion || "1:1")}) · ${money(pkg.price)}</button>`).join("")}</div>` : ""}
 <div class="table-scroll bill-cart"><table><thead><tr><th>Item</th><th>Price / unit</th><th>Qty</th><th>Amount</th><th class="${data.shopType === "mobile" ? "" : "hidden"}">IMEI / serial &amp; warranty</th><th></th></tr></thead><tbody id="bill-lines"></tbody></table><div class="empty" id="bill-empty">No items yet. Search above to add the first one.</div></div>
 <div class="form-row"><label>Customer name${data.requireCustomer ? "" : " (optional)"}<input name="customer" maxlength="80" value="${esc(editing?.customer || "")}" ${data.requireCustomer && !editing ? "required" : ""}></label><label>Phone (optional)<input name="phone" maxlength="30" inputmode="tel" value="${esc(editing?.phone || "")}"></label></div>
 <div class="form-row"><label class="${editing ? "hidden" : ""}">Payment method<select name="payment">${paymentOptions(editing?.payment || "Cash")}</select></label>${data.allowDiscounts ? `<label>Discount (৳)<input id="bill-discount" name="discount" type="number" min="0" step="any" value="${editing ? editing.discount : 0}"></label>` : ""}</div>
@@ -2743,6 +2749,7 @@ ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive f
     }
   }
   draw();
+  if (initialProduct) addProduct(initialProduct);
   if ($("#bill-medex-toggle") && $("#bill-medex-drawer")) {
     let billMedexMounted = null;
     $("#bill-medex-toggle").onclick = () => {
@@ -2765,6 +2772,20 @@ ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive f
           billMedexMounted.focusInput();
         }
       }
+    };
+  }
+  if ($("#bill-manage-food-packages")) {
+    $("#bill-manage-food-packages").onclick = () => openFoodPackageManager();
+  }
+  if ($("#bill-food-packages-bar")) {
+    $("#bill-food-packages-bar").onclick = event => {
+      const btn = event.target.closest("[data-bill-pkg-product]");
+      if (!btn) return;
+      const productId = Number(btn.dataset.billPkgProduct);
+      const item = stocked.find(p => p.id === productId);
+      if (!item) return toast("This package is currently out of stock.");
+      addProduct(item);
+      toast(`${item.name} added to bill.`);
     };
   }
   $("#bill-search").focus();
@@ -3906,6 +3927,347 @@ function openPharmacyMedicineLookup(initialQuery = "") {
   setTimeout(() => mounted?.focusInput(), 40);
 }
 
+const FOOD_PACKAGE_PRESET_ITEMS = [
+  ["Plain Rice", 1, "plate"],
+  ["Plain Polao", 1, "plate"],
+  ["Khichuri", 1, "plate"],
+  ["Biryani Rice", 1, "plate"],
+  ["Chicken Curry", 1, "pcs"],
+  ["Chicken Roast", 1, "pcs"],
+  ["Chicken Fry", 1, "pcs"],
+  ["Beef Bhuna", 1, "bowl"],
+  ["Mutton Curry", 1, "bowl"],
+  ["Rui Fish Curry", 1, "pcs"],
+  ["Mixed Vegetables", 1, "bowl"],
+  ["Chinese Vegetables", 1, "bowl"],
+  ["Masoor Dal", 1, "bowl"],
+  ["Egg Curry", 1, "pcs"],
+  ["Shami Kebab", 1, "pcs"],
+  ["Green Salad", 1, "portion"],
+  ["Borhani", 1, "glass"],
+  ["Soft Drink", 1, "bottle"],
+  ["Mineral Water", 1, "bottle"],
+  ["Firni / Dessert", 1, "cup"]
+];
+
+function openFoodPackageEditor(existingPkg = null) {
+  if (!data.permissions?.food_packages && signedInUser?.role !== "admin") {
+    return toast("You do not have permission to create or edit food packages. Ask an administrator to grant Food Packages access.");
+  }
+  const initialItems = existingPkg?.items?.length
+    ? existingPkg.items.map(item => ({ name: item.name || "", qty: Number(item.qty || 1), unit: item.unit || "portion" }))
+    : [
+        { name: "Plain Rice", qty: 1, unit: "plate" },
+        { name: "Chicken Curry", qty: 1, unit: "pcs" },
+        { name: "Mixed Vegetables", qty: 1, unit: "bowl" }
+      ];
+  const portionOptions = ["1:1", "1:2", "Full", "Half", "Family (1:4)", "Single Box", "Party Pack"];
+  const foodItemSuggestions = [...new Set([
+    ...FOOD_PACKAGE_PRESET_ITEMS.map(([name]) => name),
+    ...(data.products || []).map(p => p.name)
+  ])];
+
+  openModal(existingPkg ? `Edit food package · ${existingPkg.name}` : "Create custom food package", `
+    <p class="form-hint">Build a custom meal package (e.g. Rice + Chicken + Vegetables + Drink). Saved packages automatically appear in Inventory and Sales so cashiers can bill them in one click.</p>
+    <div class="form-row">
+      <label>Package name<input name="name" maxlength="100" required value="${esc(existingPkg?.name || "")}" placeholder="e.g. Rice + Chicken + Vegetables Package"></label>
+      <label>Package code / SKU<input name="code" maxlength="40" value="${esc(existingPkg?.code || "")}" placeholder="Auto (e.g. PKG-05)"></label>
+    </div>
+    <div class="form-row">
+      <label>Portion / Serving size<input name="portion" maxlength="40" value="${esc(existingPkg?.portion || "1:1")}" placeholder="1:1, Full, Family (1:4)"></label>
+      <label>Package note (optional)<input name="notes" maxlength="160" value="${esc(existingPkg?.notes || "")}" placeholder="e.g. Lunch set with salad & dal"></label>
+    </div>
+    <div class="cloth-quick-chips" id="food-pkg-portion-chips">
+      <span class="form-hint">Portion:</span>
+      ${portionOptions.map(p => `<button type="button" class="cloth-chip" data-pkg-portion="${esc(p)}">${esc(p)}</button>`).join("")}
+    </div>
+    <div class="form-row">
+      <label>Package selling price (${esc(currencySymbol())})<input name="price" type="number" min="0" step="0.01" required value="${existingPkg ? Number(existingPkg.price) : ""}"></label>
+      <label>Estimated cost (${esc(currencySymbol())})<input name="cost" type="number" min="0" step="0.01" required value="${existingPkg ? Number(existingPkg.cost) : 0}"></label>
+    </div>
+    <div class="form-row">
+      <label>Prepared / available packages<input name="qty" type="number" min="0" step="1" required value="${existingPkg ? Number(existingPkg.qty) : 25}"></label>
+      <label>Low-stock alert at<input name="min" type="number" min="0" step="1" required value="${existingPkg ? Number(existingPkg.min) : 5}"></label>
+    </div>
+    <fieldset class="cloth-Variant-box" style="margin-top:8px">
+      <legend>Included food items in this package</legend>
+      <div class="cloth-quick-chips" id="food-pkg-preset-chips" style="margin-bottom:8px">
+        <span class="form-hint">Quick add item:</span>
+        ${FOOD_PACKAGE_PRESET_ITEMS.map(([name, qty, unit]) => `<button type="button" class="cloth-chip" data-add-pkg-item="${esc(name)}" data-add-pkg-qty="${qty}" data-add-pkg-unit="${esc(unit)}">＋ ${esc(name)}</button>`).join("")}
+      </div>
+      <datalist id="food-pkg-item-suggestions">
+        ${foodItemSuggestions.map(name => `<option value="${esc(name)}"></option>`).join("")}
+      </datalist>
+      <div id="food-pkg-items-rows" style="display:grid;gap:8px;margin-bottom:8px"></div>
+      <button type="button" class="button secondary" id="add-custom-pkg-item-row">＋ Add another food item</button>
+    </fieldset>
+  `, async form => {
+    const rowEls = [...document.querySelectorAll("#food-pkg-items-rows .food-pkg-item-row")];
+    const items = rowEls.map(row => ({
+      name: (row.querySelector('[data-pkg-field="name"]')?.value || "").trim(),
+      qty: Number(row.querySelector('[data-pkg-field="qty"]')?.value || 1),
+      unit: (row.querySelector('[data-pkg-field="unit"]')?.value || "portion").trim() || "portion"
+    })).filter(item => item.name);
+    if (!items.length) throw new Error("Add at least one food item (e.g. Rice, Chicken, Vegetables) to the package.");
+    const payload = {
+      name: form.get("name").trim(),
+      code: form.get("code").trim(),
+      portion: form.get("portion").trim() || "1:1",
+      notes: form.get("notes").trim(),
+      price: Number(form.get("price")),
+      cost: Number(form.get("cost") || 0),
+      qty: Number(form.get("qty") || 0),
+      min: Number(form.get("min") || 0),
+      items
+    };
+    data = await api(existingPkg ? `/api/restaurant/packages/${existingPkg.id}` : "/api/restaurant/packages", {
+      method: existingPkg ? "PUT" : "POST",
+      body: JSON.stringify(payload)
+    });
+    render();
+    toast(existingPkg ? "Food package updated" : "Custom food package created");
+    setTimeout(() => openFoodPackageManager(), 40);
+  });
+  dialog.classList.add("wide");
+  $("#submit-modal").textContent = existingPkg ? "Save package" : "Create package";
+  dialog.addEventListener("close", () => {
+    dialog.classList.remove("wide");
+    $("#submit-modal").textContent = "Save";
+  }, { once: true });
+
+  const rowsContainer = $("#food-pkg-items-rows");
+  const appendItemRow = (item = { name: "", qty: 1, unit: "portion" }) => {
+    const row = document.createElement("div");
+    row.className = "food-pkg-item-row";
+    row.style.cssText = "display:grid;grid-template-columns:1fr 90px 110px auto;gap:8px;align-items:center";
+    row.innerHTML = `
+      <input type="text" data-pkg-field="name" list="food-pkg-item-suggestions" placeholder="Food item (e.g. Rice, Chicken, Vegetables)" value="${esc(item.name || "")}" required>
+      <input type="number" data-pkg-field="qty" min="0.1" step="any" value="${Number(item.qty || 1)}" title="Quantity" placeholder="Qty">
+      <input type="text" data-pkg-field="unit" value="${esc(item.unit || "portion")}" placeholder="plate, pcs, bowl">
+      <button type="button" class="user-action danger" data-remove-pkg-row title="Remove item">✕</button>
+    `;
+    row.querySelector("[data-remove-pkg-row]").onclick = () => {
+      row.remove();
+    };
+    rowsContainer.appendChild(row);
+    return row;
+  };
+
+  initialItems.forEach(item => appendItemRow(item));
+
+  $("#add-custom-pkg-item-row").onclick = () => {
+    const row = appendItemRow({ name: "", qty: 1, unit: "portion" });
+    row.querySelector('[data-pkg-field="name"]')?.focus();
+  };
+
+  $("#food-pkg-portion-chips").onclick = event => {
+    const chip = event.target.closest("[data-pkg-portion]");
+    if (!chip) return;
+    const input = $("#modal-fields [name=portion]");
+    if (input) input.value = chip.dataset.pkgPortion;
+  };
+
+  $("#food-pkg-preset-chips").onclick = event => {
+    const chip = event.target.closest("[data-add-pkg-item]");
+    if (!chip) return;
+    const itemName = chip.dataset.addPkgItem;
+    const itemQty = Number(chip.dataset.addPkgQty || 1);
+    const itemUnit = chip.dataset.addPkgUnit || "portion";
+    const existingRow = [...rowsContainer.querySelectorAll(".food-pkg-item-row")].find(r => {
+      const val = (r.querySelector('[data-pkg-field="name"]')?.value || "").trim().toLowerCase();
+      return val === itemName.toLowerCase();
+    });
+    if (existingRow) {
+      const qtyInput = existingRow.querySelector('[data-pkg-field="qty"]');
+      if (qtyInput) qtyInput.value = Number(qtyInput.value || 1) + 1;
+      return;
+    }
+    const emptyRow = [...rowsContainer.querySelectorAll(".food-pkg-item-row")].find(r => !(r.querySelector('[data-pkg-field="name"]')?.value || "").trim());
+    if (emptyRow) {
+      emptyRow.querySelector('[data-pkg-field="name"]').value = itemName;
+      emptyRow.querySelector('[data-pkg-field="qty"]').value = itemQty;
+      emptyRow.querySelector('[data-pkg-field="unit"]').value = itemUnit;
+      return;
+    }
+    appendItemRow({ name: itemName, qty: itemQty, unit: itemUnit });
+  };
+}
+
+async function openFoodPackageTeamAccessModal() {
+  if (!(myCaps().team || myCaps().admins)) {
+    return toast("Only administrators with team access can change staff permissions.");
+  }
+  const users = await api("/api/users");
+  const staffAndAdmins = users.filter(u => !u.owner);
+  const rows = staffAndAdmins.map(u => {
+    const hasAccess = Boolean(u.permissions?.food_packages || u.role === "admin");
+    return `<tr>
+      <td><b>${esc(u.username)}</b></td>
+      <td>${u.role === "admin" ? "Administrator" : "Staff"}</td>
+      <td>${hasAccess ? `<span class="status">Can create & edit packages</span>` : `<span class="status out">View & sell only</span>`}</td>
+      <td>${u.manageable
+        ? `<button type="button" class="user-action" data-toggle-pkg-user="${u.id}" data-user-perms='${esc(JSON.stringify(u.permissions || {}))}' data-next-access="${u.permissions?.food_packages ? "0" : "1"}">${u.permissions?.food_packages ? "Revoke create access" : "Grant create access"}</button>`
+        : `<small>${u.role === "admin" ? "Admin (built-in)" : "This is you"}</small>`}</td>
+    </tr>`;
+  }).join("");
+
+  openModal("Team access · Custom food packages", `
+    <p class="form-hint">Grant or revoke permission for team members to create, edit, and delete custom food packages. You can also manage all permissions under <b>Team access</b> in the left sidebar.</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>TEAM MEMBER</th><th>ROLE</th><th>FOOD PACKAGES ACCESS</th><th>ACTION</th></tr></thead>
+        <tbody id="pkg-team-access-tbody">${rows || `<tr><td colspan="4" class="empty">No additional team members yet. Add staff from Team access in the sidebar.</td></tr>`}</tbody>
+      </table>
+    </div>
+    <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center">
+      <button type="button" class="button secondary" id="back-to-food-packages">← Back to Food packages</button>
+      <button type="button" class="button secondary" id="open-full-team-screen">Open Team access screen →</button>
+    </div>
+  `, async () => false);
+  dialog.classList.add("wide");
+  $("#submit-modal").classList.add("hidden");
+  dialog.addEventListener("close", () => {
+    dialog.classList.remove("wide");
+    $("#submit-modal").classList.remove("hidden");
+  }, { once: true });
+
+  $("#back-to-food-packages").onclick = () => openFoodPackageManager();
+  $("#open-full-team-screen").onclick = () => {
+    closeModal();
+    location.hash = "#users";
+  };
+  $("#pkg-team-access-tbody").onclick = async event => {
+    const btn = event.target.closest("[data-toggle-pkg-user]");
+    if (!btn) return;
+    const userId = Number(btn.dataset.togglePkgUser);
+    const currentPerms = JSON.parse(btn.dataset.userPerms || "{}");
+    const nextAccess = btn.dataset.nextAccess === "1";
+    btn.disabled = true;
+    try {
+      await api(`/api/users/${userId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ permissions: { ...currentPerms, food_packages: nextAccess } })
+      });
+      await loadUsers();
+      toast(nextAccess ? "Granted food package creation access" : "Revoked food package creation access");
+      openFoodPackageTeamAccessModal();
+    } catch (error) {
+      btn.disabled = false;
+      toast(error.message);
+    }
+  };
+}
+
+function openFoodPackageManager() {
+  if (data.shopType !== "restaurant") {
+    return toast("Food packages are available when the shop type is set to Food & restaurant.");
+  }
+  const canManagePackages = Boolean(data.permissions?.food_packages || signedInUser?.role === "admin");
+  const canManageTeam = Boolean(myCaps().team || myCaps().admins);
+  const packages = data.foodPackages || [];
+
+  const rows = packages.map(pkg => {
+    const itemChips = (pkg.items || []).map(item => {
+      const qtyText = Number(item.qty || 1) !== 1 ? `${item.qty} ${item.unit || "pcs"}` : (item.unit || "portion");
+      return `<span class="cloth-size-badge" style="margin:2px 4px 2px 0;display:inline-block">${esc(item.name)} <small>(${esc(qtyText)})</small></span>`;
+    }).join("");
+    return `<tr>
+      <td><b>🍱 ${esc(pkg.name)}</b><br><small class="form-hint">${esc(pkg.code || "")}${pkg.notes ? ` · ${esc(pkg.notes)}` : ""}</small></td>
+      <td style="white-space:normal;min-width:240px">${itemChips || esc(pkg.itemsSummary || "—")}</td>
+      <td><span class="cloth-color-badge">${esc(pkg.portion || "1:1")}</span></td>
+      <td><b>${money(pkg.price)}</b>${canManagePackages ? `<br><small class="form-hint">Cost: ${money(pkg.cost)}</small>` : ""}</td>
+      <td><b>${esc(fmtQty(pkg.qty, "package"))}</b></td>
+      <td>
+        ${data.permissions?.sales ? `<button type="button" class="user-action" data-pkg-action="sell" data-id="${pkg.id}">＋ Bill / Sell</button>` : ""}
+        ${canManagePackages ? `<button type="button" class="user-action" data-pkg-action="edit" data-id="${pkg.id}">Edit</button><button type="button" class="user-action danger" data-pkg-action="delete" data-id="${pkg.id}">Delete</button>` : ""}
+      </td>
+    </tr>`;
+  }).join("");
+
+  openModal("Food & restaurant · Custom food packages", `
+    <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px">
+      <p class="form-hint" style="margin:0">Create custom meal packages (like Rice + Chicken + Vegetables, Platter sets, or Family combos).${canManagePackages ? " You have permission to create and edit custom packages." : " Ask an administrator if you need access to create or edit packages."}</p>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
+        ${canManageTeam ? `<button type="button" class="button secondary" id="pkg-team-access-btn">Team create access</button>` : ""}
+        ${canManagePackages ? `<button type="button" class="button secondary" id="seed-starter-packages-btn">Load starter packages</button><button type="button" class="button primary" id="create-custom-package-btn">＋ Create custom package</button>` : ""}
+      </div>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>PACKAGE</th>
+            <th>INCLUDED ITEMS (RICE, CHICKEN, VEGETABLES, ETC.)</th>
+            <th>PORTION</th>
+            <th>PRICE</th>
+            <th>AVAILABLE</th>
+            <th>ACTION</th>
+          </tr>
+        </thead>
+        <tbody id="food-packages-tbody">${rows}</tbody>
+      </table>
+      <div class="empty ${packages.length ? "hidden" : ""}" id="food-packages-empty">No food packages yet. Click "Create custom package" or "Load starter packages" to begin.</div>
+    </div>
+  `, async () => false);
+  dialog.classList.add("wide");
+  $("#submit-modal").classList.add("hidden");
+  dialog.addEventListener("close", () => {
+    dialog.classList.remove("wide");
+    $("#submit-modal").classList.remove("hidden");
+  }, { once: true });
+
+  if ($("#create-custom-package-btn")) {
+    $("#create-custom-package-btn").onclick = () => openFoodPackageEditor(null);
+  }
+  if ($("#seed-starter-packages-btn")) {
+    $("#seed-starter-packages-btn").onclick = async () => {
+      try {
+        const res = await api("/api/restaurant/packages/seed", { method: "POST", body: "{}" });
+        const { added, ...nextState } = res;
+        data = nextState;
+        render();
+        toast(added ? `Added ${added} starter food package(s)` : "All starter food packages are already present");
+        openFoodPackageManager();
+      } catch (error) {
+        toast(error.message);
+      }
+    };
+  }
+  if ($("#pkg-team-access-btn")) {
+    $("#pkg-team-access-btn").onclick = () => openFoodPackageTeamAccessModal();
+  }
+  $("#food-packages-tbody").onclick = async event => {
+    const btn = event.target.closest("[data-pkg-action]");
+    if (!btn) return;
+    const pkgId = Number(btn.dataset.id);
+    const pkg = (data.foodPackages || []).find(item => item.id === pkgId);
+    if (!pkg) return;
+    if (btn.dataset.pkgAction === "edit") {
+      openFoodPackageEditor(pkg);
+      return;
+    }
+    if (btn.dataset.pkgAction === "delete") {
+      if (!confirm(`Delete custom package "${pkg.name}"?`)) return;
+      try {
+        data = await api(`/api/restaurant/packages/${pkg.id}`, { method: "DELETE" });
+        render();
+        toast("Food package deleted");
+        openFoodPackageManager();
+      } catch (error) {
+        toast(error.message);
+      }
+      return;
+    }
+    if (btn.dataset.pkgAction === "sell") {
+      const linkedProduct = data.products.find(p => p.id === pkg.productId) || data.products.find(p => p.name === pkg.name);
+      if (!linkedProduct || productSellableQty(linkedProduct) <= 0) {
+        return toast("This package has 0 available stock. Edit the package to increase prepared quantity.");
+      }
+      openBillEditor(null, linkedProduct);
+    }
+  };
+}
+
 const renderBeforeSupplierTools = render;
 render = function () {
   renderBeforeSupplierTools();
@@ -3916,6 +4278,9 @@ $("#pharmacy-batches-button").onclick = openPharmacyBatchManager;
 $("#pharmacy-medex-button") && ($("#pharmacy-medex-button").onclick = () => openPharmacyMedicineLookup(""));
 $("#pharmacy-medex-inventory-button") && ($("#pharmacy-medex-inventory-button").onclick = () => openPharmacyMedicineLookup($("#search")?.value || ""));
 $("#pharmacy-medex-sales-button") && ($("#pharmacy-medex-sales-button").onclick = () => openPharmacyMedicineLookup(""));
+$("#restaurant-packages-button") && ($("#restaurant-packages-button").onclick = () => openFoodPackageManager());
+$("#restaurant-packages-inventory-button") && ($("#restaurant-packages-inventory-button").onclick = () => openFoodPackageManager());
+$("#restaurant-packages-sales-button") && ($("#restaurant-packages-sales-button").onclick = () => openFoodPackageManager());
 // ---- Installable app (PWA) and the "connect a phone" page ----
 let installPrompt = null;
 function setupInstallButton() {

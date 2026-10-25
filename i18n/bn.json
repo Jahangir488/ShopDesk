@@ -873,7 +873,27 @@
     "Spice / Preparation": "মসলা / প্রস্তুতির ধরন",
     "Kitchen section / Counter": "কিচেন সেকশন / কাউন্টার",
     "Track menu items by portion size (Full, Half, 1:1) and preparation type with daily prepared quantity or stock.": "পোরশন সাইজ (ফুল, হাফ, ১:১) ও প্রস্তুতির ধরন অনুযায়ী মেনু আইটেম এবং দৈনিক তৈরি খাবার বা স্টক হিসাব রাখুন।",
-    "Food & restaurant Excel template: includes Portion / Serving (e.g. Full, Half, 1:1), Food Type (e.g. Chicken, Beef, Vegetable), Spice / Prep, and Kitchen Section. Keep Product ID unchanged for existing menu items; leave it blank to add a new item.": "খাবার ও রেস্টুরেন্ট Excel টেমপ্লেট: পোরশন/পরিবেশন মাপ (যেমন Full, Half, 1:1), খাবারের ধরন (যেমন Chicken, Beef, Vegetable), মসলা/প্রস্তুতি এবং কিচেন সেকশন অন্তর্ভুক্ত। পুরোনো মেনু আইটেমের Product ID অপরিবর্তিত রাখুন; নতুন আইটেম যোগ করতে খালি রাখুন।"
+    "Food & restaurant Excel template: includes Portion / Serving (e.g. Full, Half, 1:1), Food Type (e.g. Chicken, Beef, Vegetable), Spice / Prep, and Kitchen Section. Keep Product ID unchanged for existing menu items; leave it blank to add a new item.": "খাবার ও রেস্টুরেন্ট Excel টেমপ্লেট: পোরশন/পরিবেশন মাপ (যেমন Full, Half, 1:1), খাবারের ধরন (যেমন Chicken, Beef, Vegetable), মসলা/প্রস্তুতি এবং কিচেন সেকশন অন্তর্ভুক্ত। পুরোনো মেনু আইটেমের Product ID অপরিবর্তিত রাখুন; নতুন আইটেম যোগ করতে খালি রাখুন।",
+    "Food packages": "ফুড প্যাকেজ",
+    "Create and manage custom food packages (Food & restaurant)": "কাস্টম ফুড প্যাকেজ তৈরি ও পরিচালনা (খাবার ও রেস্টুরেন্ট)",
+    "create food packages": "ফুড প্যাকেজ তৈরি",
+    "Food & restaurant · Custom food packages": "খাবার ও রেস্টুরেন্ট · কাস্টম ফুড প্যাকেজ",
+    "Create custom food package": "কাস্টম ফুড প্যাকেজ তৈরি করুন",
+    "＋ Create custom package": "＋ কাস্টম প্যাকেজ তৈরি করুন",
+    "Load starter packages": "স্টার্টার প্যাকেজ লোড করুন",
+    "Team create access": "টিম মেম্বার অ্যাক্সেস",
+    "Team access · Custom food packages": "টিম অ্যাক্সেস · কাস্টম ফুড প্যাকেজ",
+    "Can create & edit packages": "প্যাকেজ তৈরি ও সম্পাদনা করতে পারবেন",
+    "View & sell only": "শুধু দেখা ও বিক্রি",
+    "Grant create access": "তৈরির অ্যাক্সেস দিন",
+    "Revoke create access": "তৈরির অ্যাক্সেস বাতিল করুন",
+    "Included food items in this package": "এই প্যাকেজে অন্তর্ভুক্ত খাবারের তালিকা",
+    "＋ Add another food item": "＋ আরও একটি খাবার যোগ করুন",
+    "Package name": "প্যাকেজের নাম",
+    "Package code / SKU": "প্যাকেজ কোড / SKU",
+    "Save package": "প্যাকেজ সংরক্ষণ করুন",
+    "Create package": "প্যাকেজ তৈরি করুন",
+    "＋ Bill / Sell": "＋ বিল / বিক্রি"
   },
   "patterns": [
     {

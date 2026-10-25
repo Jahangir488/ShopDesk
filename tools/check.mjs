@@ -82,11 +82,11 @@ try {
   for (const forbidden of ["/api/license", "licenseStatus", "verifyLicense", "signLicense", "licensedFeatureEnabled", "shopTypeLocked"]) {
     if (server.includes(forbidden) || app.includes(forbidden)) fail(`licensing token still present: ${forbidden}`);
   }
-  for (const token of ["medicine_batches", "medicine_batch_sales", "pharmacyAvailableQty", "allocatePharmacyBatchStock", "quarantinePharmacyReturn", "/api/pharmacy/medex"]) {
-    if (!server.includes(token)) fail(`server is missing Pharmacy safeguard: ${token}`);
+  for (const token of ["medicine_batches", "medicine_batch_sales", "pharmacyAvailableQty", "allocatePharmacyBatchStock", "quarantinePharmacyReturn", "/api/pharmacy/medex", "/api/restaurant/packages", "can_food_packages"]) {
+    if (!server.includes(token)) fail(`server is missing Pharmacy/Restaurant safeguard: ${token}`);
   }
-  for (const token of ["openPharmacyBatchManager", "openPharmacyMedicineLookup", "mountMedexLookupBox", "bulkInventoryTemplateConfig", "pharmacy-inventory-template.csv", "restaurant-inventory-template.csv", "Food & restaurant", "purchase-batch", "genericName", "expiryDate", "productSellableQty"]) {
-    if (!app.includes(token)) fail(`Pharmacy interface is missing ${token}`);
+  for (const token of ["openPharmacyBatchManager", "openPharmacyMedicineLookup", "mountMedexLookupBox", "bulkInventoryTemplateConfig", "pharmacy-inventory-template.csv", "restaurant-inventory-template.csv", "Food & restaurant", "openFoodPackageManager", "openFoodPackageEditor", "purchase-batch", "genericName", "expiryDate", "productSellableQty"]) {
+    if (!app.includes(token)) fail(`Pharmacy/Restaurant interface is missing ${token}`);
   }
   if (buildMedexSearchUrl("Napa 500") !== "https://medex.com.bd/search?search=Napa+500") fail("MedEx search URL builder failed");
   if (normalizeMedexUrl("https://evil.example.com/brands/1") !== "") fail("MedEx URL validation accepted non-MedEx host");
