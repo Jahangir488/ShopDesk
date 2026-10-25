@@ -893,7 +893,14 @@
     "Package code / SKU": "প্যাকেজ কোড / SKU",
     "Save package": "প্যাকেজ সংরক্ষণ করুন",
     "Create package": "প্যাকেজ তৈরি করুন",
-    "＋ Bill / Sell": "＋ বিল / বিক্রি"
+    "＋ Bill / Sell": "＋ বিল / বিক্রি",
+    "PHARMACY DESK": "ফার্মেসি ডেস্ক",
+    "RESTAURANT DESK": "রেস্টুরেন্ট ডেস্ক",
+    "FASHION BOUTIQUE": "ফ্যাশন ও পোশাক",
+    "MOBILE & REPAIRS": "মোবাইল ও সার্ভিস",
+    "HARDWARE & TOOLS": "হার্ডওয়্যার ও টুলস",
+    "GROCERY & MART": "মুদি ও সুপারশপ",
+    "GENERAL RETAIL": "সাধারণ খুচরা দোকান"
   },
   "patterns": [
     {

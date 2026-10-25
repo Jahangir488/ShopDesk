@@ -1513,7 +1513,42 @@ document.querySelector("#online-orders-table")?.addEventListener("click", async 
   }
 });
 
+const SHOP_TYPE_THEMES = {
+  pharmacy: { icon: "💊", subtitle: "PHARMACY DESK", badge: "Pharmacy" },
+  restaurant: { icon: "🍽️", subtitle: "RESTAURANT DESK", badge: "Food & restaurant" },
+  clothing: { icon: "👗", subtitle: "FASHION BOUTIQUE", badge: "Clothing" },
+  mobile: { icon: "📱", subtitle: "MOBILE & REPAIRS", badge: "Mobile phone sales & service" },
+  hardware: { icon: "🛠️", subtitle: "HARDWARE & TOOLS", badge: "Hardware" },
+  grocery: { icon: "🛒", subtitle: "GROCERY & MART", badge: "Grocery" },
+  general: { icon: "🏪", subtitle: "GENERAL RETAIL", badge: "General retail" }
+};
+
+function applyShopTypeTheme(shopType) {
+  const type = SHOP_TYPE_THEMES[shopType] ? shopType : "general";
+  const theme = SHOP_TYPE_THEMES[type];
+  document.body.dataset.shopType = type;
+  const brandSmall = document.querySelector(".brand small");
+  if (brandSmall) brandSmall.textContent = `${theme.icon} ${t(theme.subtitle)}`;
+  const brandIcon = document.querySelector(".brand-icon");
+  if (brandIcon) brandIcon.innerHTML = `<span class="brand-type-emoji" aria-hidden="true">${theme.icon}</span>`;
+  const topbarLeft = document.querySelector(".topbar > div:first-child");
+  if (topbarLeft) {
+    let pill = $("#topbar-shop-type-badge");
+    if (!pill) {
+      pill = document.createElement("button");
+      pill.type = "button";
+      pill.id = "topbar-shop-type-badge";
+      pill.className = "shop-type-pill";
+      pill.title = t("Shop settings");
+      pill.onclick = () => $("#edit-workspace")?.click();
+      topbarLeft.appendChild(pill);
+    }
+    pill.innerHTML = `<span aria-hidden="true">${theme.icon}</span> <span>${esc(t(theme.badge))}</span>`;
+  }
+}
+
 function render() {
+  applyShopTypeTheme(data.shopType || "general");
   const permissions = data.permissions || {};
   const canManageSalesRecords = signedInUser?.permissions?.records && permissions.sales;
   const canManageExpenseRecords = signedInUser?.permissions?.records && permissions.expenses;
@@ -1867,6 +1902,11 @@ $("#edit-workspace").onclick = () => {
     render();
     toast("Shop details saved");
   });
+  const shopTypeSelect = document.querySelector('#modal-fields select[name="shopType"]');
+  if (shopTypeSelect) {
+    shopTypeSelect.onchange = event => applyShopTypeTheme(event.target.value);
+    dialog.addEventListener("close", () => applyShopTypeTheme(data.shopType || "general"), { once: true });
+  }
   $("#settings-update-row")?.remove();
   $("#modal-fields")?.insertAdjacentHTML("beforeend", `<p class="settings-update-row" id="settings-update-row"><button type="button" class="button secondary" id="check-updates">${esc(t("Check for updates"))}</button> <span class="form-hint" id="update-status" role="status"></span></p>`);
   const updateButton = $("#check-updates");
