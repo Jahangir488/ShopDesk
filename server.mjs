@@ -416,6 +416,7 @@ const profileCategories = {
   grocery: ["Produce", "Dairy", "Bakery", "Pantry", "Beverages", "Household", "Other"],
   clothing: ["Men's Wear", "Women's Wear", "Kids & Babywear", "Panjabi & Traditional", "Shirts & T-Shirts", "Pants & Jeans", "Sarees & Kurtis", "Fabrics & Unstitched", "Footwear", "Accessories", "Other"],
   pharmacy: ["Medicines", "First aid", "Personal care", "Medical supplies", "Other"],
+  restaurant: ["Starters & Snacks", "Rice & Biryani", "Main Course", "Fast Food & Burgers", "Kebab & Grill", "Desserts & Sweets", "Beverages & Drinks", "Combo Meals", "Raw Ingredients", "Other"],
   general: ["General merchandise", "Accessories", "Services", "Other"]
 };
 const addProfileCategories = type => { for (const name of profileCategories[type] || profileCategories.general) seedCategory(name); };
@@ -723,7 +724,17 @@ function warrantyExpiry(date, months) {
   return value.toISOString().slice(0, 10);
 }
 function productLabel(product) {
-  const details = [["Brand", product.brand], ["Color", product.color], ["Size", product.size], ["Material", product.material]].filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`);
+  const shopType = currentShopType();
+  const pairs = shopType === "restaurant"
+    ? [["Portion", product.size], ["Type", product.material], ["Prep", product.color], ["Kitchen", product.brand]]
+    : shopType === "mobile"
+      ? [["Brand", product.brand], ["Color", product.color], ["Storage", product.size]]
+      : shopType === "hardware"
+        ? [["Brand", product.brand], ["Spec", product.size]]
+        : shopType === "grocery"
+          ? [["Brand", product.brand], ["Pack", product.size]]
+          : [["Brand", product.brand], ["Color", product.color], ["Size", product.size], ["Material", product.material]];
+  const details = pairs.filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`);
   return details.length ? `${product.name} (${details.join(" · ")})` : product.name;
 }
 function saveBill(body, user, editId = 0) {
@@ -1398,7 +1409,7 @@ async function handleApi(request, response, url) {
   if (route === "/api/settings" && method === "PUT") {
     if (!can(user, "settings")) return json(response, 403, { error: "Shop settings access is required." });
     const body = await readJson(request);
-    const validTypes = ["hardware", "grocery", "clothing", "pharmacy", "mobile", "general"];
+    const validTypes = ["hardware", "grocery", "clothing", "pharmacy", "mobile", "restaurant", "general"];
     const validCurrencies = ["BDT", "USD", "EUR", "GBP", "INR", "PKR", "NPR", "LKR", "AUD", "CAD"];
     const validLocales = ["en-BD", "bn-BD", "en-US", "en-GB", "en-IN", "en-PK", "en-NP", "en-LK", "en-AU", "en-CA"];
     const methods = Array.isArray(body.paymentMethods) ? [...new Set(body.paymentMethods.map(value => String(value).trim()).filter(Boolean))] : [];

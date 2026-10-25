@@ -454,7 +454,16 @@ function renderDashboardTrend() {
   $("#dashboard-trend").classList.toggle("trend-no-access", !hasAccess);
 }
 function productLabel(product) {
-  const details = [["Brand", product.brand], ["Color", product.color], ["Size", product.size], ["Material", product.material]].filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`);
+  const pairs = data.shopType === "restaurant"
+    ? [["Portion", product.size], ["Type", product.material], ["Prep", product.color], ["Kitchen", product.brand]]
+    : data.shopType === "mobile"
+      ? [["Brand", product.brand], ["Color", product.color], ["Storage", product.size]]
+      : data.shopType === "hardware"
+        ? [["Brand", product.brand], ["Spec", product.size]]
+        : data.shopType === "grocery"
+          ? [["Brand", product.brand], ["Pack", product.size]]
+          : [["Brand", product.brand], ["Color", product.color], ["Size", product.size], ["Material", product.material]];
+  const details = pairs.filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`);
   return details.length ? `${product.name} (${details.join(" · ")})` : product.name;
 }
 // Shared product picker used by New bill, Record sale and Online orders.
@@ -598,8 +607,8 @@ function renderInventoryProducts() {
   const products = data.products.filter(item => [item.name, item.sku, item.barcode, item.unit, item.category, item.brand, item.color, item.size, item.material, item.generic_name, item.strength, item.dosage_form, item.manufacturer].some(value => String(value || "").toLocaleLowerCase().includes(query)));
   const canEditItems = signedInUser?.permissions?.records && data.permissions?.inventory;
   const canDeleteItems = canEditItems;
-  const sizeFieldLabel = data.shopType === "mobile" ? "Storage" : data.shopType === "hardware" ? "Spec" : data.shopType === "grocery" ? "Pack" : "Size";
-  $("#products-table").innerHTML = products.map(item => { const details = (data.shopType === "pharmacy" ? [["Generic",item.generic_name],["Strength",item.strength],["Form",item.dosage_form],["Maker",item.manufacturer]] : [["Brand", item.brand], ["Color", item.color], [sizeFieldLabel, item.size], ["Material", item.material]]).filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`).join(" · "); const medexAction = data.shopType === "pharmacy" ? `<button class="user-action" type="button" data-action="medex-product" data-id="${item.id}" data-name="${esc(item.name)}">MedEx info</button>` : ""; return `<tr><td class="product-cell">${esc(item.icon || "📦")} &nbsp;${esc(item.name)}${details ? `<small class="form-hint">${esc(details)}</small>` : ""}</td><td>${esc(item.category || "Other")}</td><td class="sku">${esc(item.sku)}</td><td class="sku">${esc(item.barcode || "—")}</td><td>${esc(item.unit || "piece")}</td><td>${money(item.price)}</td><td class="qty">${data.shopType === "pharmacy" ? `${productSellableQty(item)} sellable / ${Number(item.qty||0)} total` : `${item.qty} ${esc(item.unit || "piece")}`}</td><td class="stock-value" title="${item.qty} × ${money(item.price)} per unit"><b>${money(Number(item.qty) * Number(item.price))}</b></td><td><span class="status ${productSellableQty(item) === 0 ? "out" : productSellableQty(item) <= item.min ? "low" : ""}">${productSellableQty(item) === 0 ? (data.shopType === "pharmacy" && Number(item.qty)>0 ? "No safe-to-sell stock" : "Out of stock") : productSellableQty(item) <= item.min ? "Low stock" : "In stock"}</span></td><td>${medexAction}${canEditItems ? `<button class="user-action" data-action="rename-product" data-id="${item.id}" data-name="${esc(item.name)}" data-unit="${esc(item.unit || "piece")}" data-category="${esc(item.category || "Other")}">Edit item</button>` : ""}${canDeleteItems ? `<button class="user-action danger" data-action="delete-product" data-id="${item.id}" data-name="${esc(productLabel(item))}" data-qty="${item.qty}" data-unit="${esc(item.unit || "piece")}">Delete</button>` : ""}</td></tr>`; }).join("");
+  const sizeFieldLabel = data.shopType === "restaurant" ? "Portion" : data.shopType === "mobile" ? "Storage" : data.shopType === "hardware" ? "Spec" : data.shopType === "grocery" ? "Pack" : "Size";
+  $("#products-table").innerHTML = products.map(item => { const details = (data.shopType === "pharmacy" ? [["Generic",item.generic_name],["Strength",item.strength],["Form",item.dosage_form],["Maker",item.manufacturer]] : data.shopType === "restaurant" ? [["Portion",item.size],["Type",item.material],["Prep",item.color],["Kitchen",item.brand]] : [["Brand", item.brand], ["Color", item.color], [sizeFieldLabel, item.size], ["Material", item.material]]).filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`).join(" · "); const medexAction = data.shopType === "pharmacy" ? `<button class="user-action" type="button" data-action="medex-product" data-id="${item.id}" data-name="${esc(item.name)}">MedEx info</button>` : ""; return `<tr><td class="product-cell">${esc(item.icon || "📦")} &nbsp;${esc(item.name)}${details ? `<small class="form-hint">${esc(details)}</small>` : ""}</td><td>${esc(item.category || "Other")}</td><td class="sku">${esc(item.sku)}</td><td class="sku">${esc(item.barcode || "—")}</td><td>${esc(item.unit || "piece")}</td><td>${money(item.price)}</td><td class="qty">${data.shopType === "pharmacy" ? `${productSellableQty(item)} sellable / ${Number(item.qty||0)} total` : `${item.qty} ${esc(item.unit || "piece")}`}</td><td class="stock-value" title="${item.qty} × ${money(item.price)} per unit"><b>${money(Number(item.qty) * Number(item.price))}</b></td><td><span class="status ${productSellableQty(item) === 0 ? "out" : productSellableQty(item) <= item.min ? "low" : ""}">${productSellableQty(item) === 0 ? (data.shopType === "pharmacy" && Number(item.qty)>0 ? "No safe-to-sell stock" : "Out of stock") : productSellableQty(item) <= item.min ? "Low stock" : "In stock"}</span></td><td>${medexAction}${canEditItems ? `<button class="user-action" data-action="rename-product" data-id="${item.id}" data-name="${esc(item.name)}" data-unit="${esc(item.unit || "piece")}" data-category="${esc(item.category || "Other")}">Edit item</button>` : ""}${canDeleteItems ? `<button class="user-action danger" data-action="delete-product" data-id="${item.id}" data-name="${esc(productLabel(item))}" data-qty="${item.qty}" data-unit="${esc(item.unit || "piece")}">Delete</button>` : ""}</td></tr>`; }).join("");
   $("#products-empty").textContent = data.products.length ? "No inventory items match your search." : "No products yet. Add your first item to get started.";
   $("#products-empty").classList.toggle("hidden", products.length > 0);
   const cost = products.reduce((sum, item) => sum + Number(item.cost || 0) * Number(item.qty || 0), 0);
@@ -710,9 +719,34 @@ $("#search").addEventListener("input", renderInventoryProducts);
 const clothSizes = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "28", "30", "32", "34", "36", "38", "40", "Free Size"];
 const clothColors = ["Black", "White", "Navy Blue", "Maroon", "Olive Green", "Sky Blue", "Pink", "Grey", "Mustard", "Beige"];
 const clothMaterials = ["100% Cotton", "Linen", "Denim", "Silk", "Georgette", "Twill", "Polyester", "Rayon"];
+const foodPortions = ["Full", "Half", "Quarter", "Single (1:1)", "Couple (1:2)", "Family (1:4)", "Regular", "Large", "Small", "Piece", "Plate"];
+const foodTypes = ["Chicken", "Beef", "Mutton", "Fish", "Vegetable", "Egg", "Dairy", "Sweet"];
+const foodPreps = ["Regular", "Spicy", "Mild", "Extra Crispy", "Hot", "Cold", "Parcel"];
 
 function clothingFormFields(product = {}) {
   if (data.shopType === "pharmacy") return "";
+  if (data.shopType === "restaurant") {
+    return `<div class="clothing-presets">
+      <div class="form-row">
+        <label>Portion / Serving size<input name="size" maxlength="60" value="${esc(product.size || "")}" placeholder="e.g. Full, Half, 1:1, Family"></label>
+        <label>Food type / Ingredient<input name="material" maxlength="60" value="${esc(product.material || "")}" placeholder="e.g. Chicken, Beef, Vegetable"></label>
+      </div>
+      <div class="quick-chips" data-target="size">
+        ${foodPortions.map(s => `<button type="button" class="quick-chip" data-val="${esc(s)}">${esc(s)}</button>`).join("")}
+      </div>
+      <div class="quick-chips" data-target="material">
+        ${foodTypes.map(m => `<button type="button" class="quick-chip" data-val="${esc(m)}">${esc(m)}</button>`).join("")}
+      </div>
+      <div class="form-row">
+        <label>Spice / Preparation<input name="color" maxlength="60" value="${esc(product.color || "")}" placeholder="e.g. Regular, Spicy, Hot, Cold"></label>
+        <label>Kitchen section / Counter<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="e.g. Main Kitchen, Grill, Beverage"></label>
+      </div>
+      <div class="quick-chips" data-target="color">
+        ${foodPreps.map(c => `<button type="button" class="quick-chip" data-val="${esc(c)}">${esc(c)}</button>`).join("")}
+      </div>
+      <small class="form-hint">Track menu items by portion size (Full, Half, 1:1) and preparation type with daily prepared quantity or stock.</small>
+    </div>`;
+  }
   if (data.shopType === "mobile") {
     return `<div class="form-row">
       <label>Brand<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="e.g. Samsung, Apple, Xiaomi"></label>
@@ -1641,6 +1675,14 @@ function bulkInventoryTemplateConfig(shopType = data.shopType) {
       }
     };
   }
+  if (shopType === "restaurant") {
+    return {
+      filename: "restaurant-inventory-template.csv",
+      headers: [...bulkInventoryCoreHeaders, "Portion / Serving", "Food Type", "Spice / Prep", "Kitchen Section"],
+      help: "Food & restaurant Excel template: includes Portion / Serving (e.g. Full, Half, 1:1), Food Type (e.g. Chicken, Beef, Vegetable), Spice / Prep, and Kitchen Section. Keep Product ID unchanged for existing menu items; leave it blank to add a new item.",
+      toRow: item => [...baseRow(item), item.size || "", item.material || "", item.color || "", item.brand || ""]
+    };
+  }
   if (shopType === "clothing") {
     return {
       filename: "clothing-inventory-template.csv",
@@ -1814,7 +1856,7 @@ $("#edit-workspace").onclick = () => {
     return;
   }
   const select = (name, values, current, disabled = false) => `<select name="${name}" ${disabled ? "disabled" : ""}>${values.map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join("")}</select>`;
-  openModal("Shop settings", `<label>Shop name<input name="shopName" value="${esc(data.shopName)}" required></label><label>Workspace / location<input name="workspace" value="${esc(data.workspace)}" required></label><h3>Business contact details for printed orders</h3><div class="form-row"><label>Contact number<input name="contactNumber" maxlength="60" value="${esc(data.contactNumber || "")}"></label><label>WhatsApp number<input name="whatsappNumber" maxlength="60" value="${esc(data.whatsappNumber || "")}"></label></div><div class="form-row"><label>Email address<input name="email" type="email" maxlength="254" value="${esc(data.email || "")}"></label><label>Website<input name="website" maxlength="250" value="${esc(data.website || "")}" placeholder="www.example.com"></label></div><label>Facebook page<input name="facebookPage" maxlength="250" value="${esc(data.facebookPage || "")}" placeholder="Facebook page URL"></label><label>Contact / return address<input name="contactAddress" maxlength="300" value="${esc(data.contactAddress || "")}" placeholder="Office or shop return address"></label><div class="form-row"><label>Shop type${select("shopType", [["general","General retail"],["hardware","Hardware"],["grocery","Grocery"],["clothing","Clothing"],["pharmacy","Pharmacy"],["mobile","Mobile phone sales & service"]], data.shopType)}<small class="form-hint">Adds starter categories for this business without changing existing products.</small></label><label>Currency${select("currencyCode", [["BDT","Bangladeshi taka (BDT)"],["USD","US dollar (USD)"],["EUR","Euro (EUR)"],["GBP","Pound sterling (GBP)"],["INR","Indian rupee (INR)"],["PKR","Pakistani rupee (PKR)"],["NPR","Nepalese rupee (NPR)"],["LKR","Sri Lankan rupee (LKR)"],["AUD","Australian dollar (AUD)"],["CAD","Canadian dollar (CAD)"]], data.currencyCode)}<small class="form-hint">Changing currency changes display only; it does not convert existing amounts.</small></label></div><label>Number and date region${select("locale", [["en-BD","English · Bangladesh"],["bn-BD","বাংলা · বাংলাদেশ"],["en-US","English · United States"],["en-GB","English · United Kingdom"],["en-IN","English · India"],["en-PK","English · Pakistan"],["en-NP","English · Nepal"],["en-LK","English · Sri Lanka"],["en-AU","English · Australia"],["en-CA","English · Canada"]], data.locale)}</label><label>Language<select name="language"><option value="bn" ${data.language === "bn" ? "selected" : ""}>বাংলা</option><option value="en" ${data.language !== "bn" ? "selected" : ""}>English</option></select></label><label class="setting-check"><input type="checkbox" name="banglaDigits" ${data.banglaDigits ? "checked" : ""}> Bangla digits (০১২৩)</label></div><div class="form-row"><label>Tax mode${select("taxMode", [["none","No tax"],["inclusive","Tax included in prices"],["exclusive","Add tax at checkout"]], data.taxMode)}</label><label>Tax rate (%)<input name="taxRate" type="number" min="0" max="100" step="0.01" value="${Number(data.taxRate || 0)}"></label></div><label>Payment methods <small class="form-hint">Separate options with commas. Example: Cash, Card, Mobile pay, Due.</small><input name="paymentMethods" maxlength="400" value="${esc((data.paymentMethods || []).join(", "))}" required></label><label class="setting-check"><input type="checkbox" name="requireCustomer" ${data.requireCustomer ? "checked" : ""}> Require a customer name on every bill</label><label class="setting-check"><input type="checkbox" name="allowDiscounts" ${data.allowDiscounts ? "checked" : ""}> Allow bill discounts</label>`, async form => {
+  openModal("Shop settings", `<label>Shop name<input name="shopName" value="${esc(data.shopName)}" required></label><label>Workspace / location<input name="workspace" value="${esc(data.workspace)}" required></label><h3>Business contact details for printed orders</h3><div class="form-row"><label>Contact number<input name="contactNumber" maxlength="60" value="${esc(data.contactNumber || "")}"></label><label>WhatsApp number<input name="whatsappNumber" maxlength="60" value="${esc(data.whatsappNumber || "")}"></label></div><div class="form-row"><label>Email address<input name="email" type="email" maxlength="254" value="${esc(data.email || "")}"></label><label>Website<input name="website" maxlength="250" value="${esc(data.website || "")}" placeholder="www.example.com"></label></div><label>Facebook page<input name="facebookPage" maxlength="250" value="${esc(data.facebookPage || "")}" placeholder="Facebook page URL"></label><label>Contact / return address<input name="contactAddress" maxlength="300" value="${esc(data.contactAddress || "")}" placeholder="Office or shop return address"></label><div class="form-row"><label>Shop type${select("shopType", [["general","General retail"],["hardware","Hardware"],["grocery","Grocery"],["clothing","Clothing"],["pharmacy","Pharmacy"],["mobile","Mobile phone sales & service"],["restaurant","Food & restaurant"]], data.shopType)}<small class="form-hint">Adds starter categories for this business without changing existing products.</small></label><label>Currency${select("currencyCode", [["BDT","Bangladeshi taka (BDT)"],["USD","US dollar (USD)"],["EUR","Euro (EUR)"],["GBP","Pound sterling (GBP)"],["INR","Indian rupee (INR)"],["PKR","Pakistani rupee (PKR)"],["NPR","Nepalese rupee (NPR)"],["LKR","Sri Lankan rupee (LKR)"],["AUD","Australian dollar (AUD)"],["CAD","Canadian dollar (CAD)"]], data.currencyCode)}<small class="form-hint">Changing currency changes display only; it does not convert existing amounts.</small></label></div><label>Number and date region${select("locale", [["en-BD","English · Bangladesh"],["bn-BD","বাংলা · বাংলাদেশ"],["en-US","English · United States"],["en-GB","English · United Kingdom"],["en-IN","English · India"],["en-PK","English · Pakistan"],["en-NP","English · Nepal"],["en-LK","English · Sri Lanka"],["en-AU","English · Australia"],["en-CA","English · Canada"]], data.locale)}</label><label>Language<select name="language"><option value="bn" ${data.language === "bn" ? "selected" : ""}>বাংলা</option><option value="en" ${data.language !== "bn" ? "selected" : ""}>English</option></select></label><label class="setting-check"><input type="checkbox" name="banglaDigits" ${data.banglaDigits ? "checked" : ""}> Bangla digits (০১২৩)</label></div><div class="form-row"><label>Tax mode${select("taxMode", [["none","No tax"],["inclusive","Tax included in prices"],["exclusive","Add tax at checkout"]], data.taxMode)}</label><label>Tax rate (%)<input name="taxRate" type="number" min="0" max="100" step="0.01" value="${Number(data.taxRate || 0)}"></label></div><label>Payment methods <small class="form-hint">Separate options with commas. Example: Cash, Card, Mobile pay, Due.</small><input name="paymentMethods" maxlength="400" value="${esc((data.paymentMethods || []).join(", "))}" required></label><label class="setting-check"><input type="checkbox" name="requireCustomer" ${data.requireCustomer ? "checked" : ""}> Require a customer name on every bill</label><label class="setting-check"><input type="checkbox" name="allowDiscounts" ${data.allowDiscounts ? "checked" : ""}> Allow bill discounts</label>`, async form => {
     const previousLanguage = data.language, previousDigits = data.banglaDigits;
     data = await api("/api/settings", { method: "PUT", body: JSON.stringify({ shopName: form.get("shopName").trim(), workspace: form.get("workspace").trim(), contactNumber: form.get("contactNumber").trim(), website: form.get("website").trim(), email: form.get("email").trim(), facebookPage: form.get("facebookPage").trim(), whatsappNumber: form.get("whatsappNumber").trim(), contactAddress: form.get("contactAddress").trim(), shopType: form.get("shopType") || data.shopType, currencyCode: form.get("currencyCode"), locale: form.get("locale"), taxMode: form.get("taxMode"), taxRate: Number(form.get("taxRate")), paymentMethods: String(form.get("paymentMethods")).split(",").map(value => value.trim()).filter(Boolean), requireCustomer: form.get("requireCustomer") === "on", allowDiscounts: form.get("allowDiscounts") === "on", language: form.get("language"), banglaDigits: form.get("banglaDigits") === "on" }) });
     if (data.language !== previousLanguage || data.banglaDigits !== previousDigits) { location.reload(); return; }
@@ -2413,10 +2455,10 @@ $("#bulk-inventory-file").onchange = async event => {
       const unit = getCol(values, "unit") ?? "";
       const category = getCol(values, "category") ?? "";
       const barcode = getCol(values, "barcode");
-      const brand = getCol(values, "brand");
-      const color = getCol(values, "color");
-      const size = getCol(values, "size", "storage / variant", "size / spec", "pack / weight");
-      const material = getCol(values, "material");
+      const brand = getCol(values, "brand", "kitchen section");
+      const color = getCol(values, "color", "spice / prep");
+      const size = getCol(values, "size", "portion / serving", "storage / variant", "size / spec", "pack / weight");
+      const material = getCol(values, "material", "food type");
       const pack_name = getCol(values, "smaller unit", "pack name");
       const packSizeRaw = getCol(values, "units per pack", "pack size");
       const pack_size = packSizeRaw === null ? null : packSizeRaw === "" ? 0 : Number(packSizeRaw);

@@ -857,7 +857,23 @@
     "Mobile shop Excel template: includes Brand, Color, and Storage / Variant (e.g. 8GB/128GB) for phones and accessories. Keep Product ID unchanged for existing items; leave it blank to add a new item.": "মোবাইল শপ Excel টেমপ্লেট: ব্র্যান্ড, রঙ ও স্টোরেজ/ভ্যারিয়েন্ট (যেমন 8GB/128GB) অন্তর্ভুক্ত। পুরোনো পণ্যের Product ID অপরিবর্তিত রাখুন; নতুন পণ্য যোগ করতে খালি রাখুন।",
     "Hardware Excel template: includes Brand, Size / Spec (e.g. 10mm, 1 inch), and optional Smaller Unit / Units per Pack (e.g. unit = coil, smaller unit = meter, 305 per coil).": "হার্ডওয়্যার Excel টেমপ্লেট: ব্র্যান্ড, সাইজ/স্পেসিফিকেশন (যেমন 10mm, 1 inch) এবং ঐচ্ছিক ছোট একক / প্রতি প্যাকে পরিমাণ অন্তর্ভুক্ত।",
     "Grocery Excel template: includes Brand, Pack / Weight (e.g. 500g, 1L), and optional Smaller Unit / Units per Pack (e.g. unit = sack, smaller unit = kg, 50 per sack).": "মুদি দোকানের Excel টেমপ্লেট: ব্র্যান্ড, প্যাক/ওজন (যেমন 500g, 1L) এবং ঐচ্ছিক ছোট একক / প্রতি প্যাকে পরিমাণ অন্তর্ভুক্ত।",
-    "General retail Excel template: includes Product ID, Name, SKU, Prices, Quantity, Unit, Category, Barcode, Brand, and optional Smaller Unit / Units per Pack.": "সাধারণ দোকানের Excel টেমপ্লেট: Product ID, নাম, SKU, দাম, পরিমাণ, একক, ক্যাটাগরি, বারকোড, ব্র্যান্ড এবং ঐচ্ছিক ছোট একক / প্রতি প্যাকে পরিমাণ অন্তর্ভুক্ত।"
+    "General retail Excel template: includes Product ID, Name, SKU, Prices, Quantity, Unit, Category, Barcode, Brand, and optional Smaller Unit / Units per Pack.": "সাধারণ দোকানের Excel টেমপ্লেট: Product ID, নাম, SKU, দাম, পরিমাণ, একক, ক্যাটাগরি, বারকোড, ব্র্যান্ড এবং ঐচ্ছিক ছোট একক / প্রতি প্যাকে পরিমাণ অন্তর্ভুক্ত।",
+    "Food & restaurant": "খাবার ও রেস্টুরেন্ট",
+    "Starters & Snacks": "স্টার্টার ও স্ন্যাকস",
+    "Rice & Biryani": "রাইস ও বিরিয়ানি",
+    "Main Course": "মেইন কোর্স",
+    "Fast Food & Burgers": "ফাস্ট ফুড ও বার্গার",
+    "Kebab & Grill": "কাবাব ও গ্রিল",
+    "Desserts & Sweets": "ডেজার্ট ও মিষ্টি",
+    "Beverages & Drinks": "পানীয় ও ড্রিংকস",
+    "Combo Meals": "কম্বো মিল",
+    "Raw Ingredients": "কাঁচামাল ও উপকরণ",
+    "Portion / Serving size": "পরিবেশন মাপ / পোরশন",
+    "Food type / Ingredient": "খাবারের ধরন / উপকরণ",
+    "Spice / Preparation": "মসলা / প্রস্তুতির ধরন",
+    "Kitchen section / Counter": "কিচেন সেকশন / কাউন্টার",
+    "Track menu items by portion size (Full, Half, 1:1) and preparation type with daily prepared quantity or stock.": "পোরশন সাইজ (ফুল, হাফ, ১:১) ও প্রস্তুতির ধরন অনুযায়ী মেনু আইটেম এবং দৈনিক তৈরি খাবার বা স্টক হিসাব রাখুন।",
+    "Food & restaurant Excel template: includes Portion / Serving (e.g. Full, Half, 1:1), Food Type (e.g. Chicken, Beef, Vegetable), Spice / Prep, and Kitchen Section. Keep Product ID unchanged for existing menu items; leave it blank to add a new item.": "খাবার ও রেস্টুরেন্ট Excel টেমপ্লেট: পোরশন/পরিবেশন মাপ (যেমন Full, Half, 1:1), খাবারের ধরন (যেমন Chicken, Beef, Vegetable), মসলা/প্রস্তুতি এবং কিচেন সেকশন অন্তর্ভুক্ত। পুরোনো মেনু আইটেমের Product ID অপরিবর্তিত রাখুন; নতুন আইটেম যোগ করতে খালি রাখুন।"
   },
   "patterns": [
     {
