@@ -189,10 +189,31 @@ try {
   for (const [key, value] of Object.entries(expected)) if (summary[key] !== value) fail(`${key}: expected ${value}, got ${summary[key]}`);
   const salesExpected = { grossSales: 650, returnedValue: 100, netSales: 550, profitBeforeReturns: 350, returnedProfit: 50, profitAfterReturns: 300 };
   for (const [key, value] of Object.entries(salesExpected)) if (Math.abs(summary.sales[key] - value) > 0.000001) fail(`online ${key}: expected ${value}, got ${summary.sales[key]}`);
-  for (const id of ["dashboard-online-sales", "online-today-orders", "online-gross-sales", "online-returned-value", "online-net-sales", "online-profit-after-returns", "online-active-cod", "online-dashboard-status", "dashboard-online-orders-list"]) {
+  for (const id of ["dashboard-online-sales", "online-today-orders", "online-gross-sales", "online-returned-value", "online-net-sales", "online-profit-after-returns", "online-active-cod", "online-dashboard-status", "online-orders-show-all", "online-orders-list-meta", "dashboard-online-orders-list"]) {
     if (!html.includes(`id="${id}"`)) fail(`online dashboard element is missing: ${id}`);
   }
-  ok("online orders, linked sales, returns, profit, statuses, and active COD are summarized separately");
+  const filterStart = app.indexOf("const ONLINE_DASHBOARD_STATUS_GROUPS = [");
+  const filterEnd = app.indexOf("\nfunction renderOnlineDashboard", filterStart);
+  if (filterStart < 0 || filterEnd < 0) throw new Error("online dashboard status filter is missing");
+  const filterSource = app.slice(filterStart, filterEnd);
+  const filterOrders = new Function("orders", "statusFilter", `${filterSource}\nreturn onlineDashboardOrdersForStatus(orders, statusFilter);`);
+  const filterFixture = [...orders,
+    { id: 6, order_status: "Confirmed" },
+    { id: 7, order_status: "Processing" }
+  ];
+  const filteredIds = status => filterOrders(filterFixture, status).map(order => order.id);
+  const filterExpected = { "": [1, 2, 3, 4, 5, 6, 7], pending: [3], processing: [6, 7], shipped: [2], delivered: [1], returned: [4], cancelled: [5] };
+  for (const [status, expectedIds] of Object.entries(filterExpected)) {
+    if (JSON.stringify(filteredIds(status)) !== JSON.stringify(expectedIds)) fail(`online status filter ${status || "all"} returned ${filteredIds(status)}`);
+  }
+  for (const token of ["data-online-status-filter", "data-online-show-all", "aria-pressed", "dashboardOnlineStatusFilter !== nextFilter"]) {
+    if (!app.includes(token)) fail(`online dashboard status controls are missing ${token}`);
+  }
+  const css = readFileSync(join(root, "styles.css"), "utf8");
+  const listRule = css.match(/\.dashboard-online-orders-list\s*\{([^}]+)\}/)?.[1] || "";
+  if (!listRule.includes("max-height:") || !listRule.includes("overflow-y: auto")) fail("dashboard online orders must have a bounded, vertically scrollable list");
+  if (app.includes("const recent = orders.slice(0, 5)")) fail("dashboard online orders must not discard orders beyond the first five");
+  ok("online orders, linked sales, returns, profit, statuses, active COD, clickable filters, and scrolling are covered");
 } catch (error) { fail("Online sales dashboard: " + error.message); }
 
 console.log("Install files");

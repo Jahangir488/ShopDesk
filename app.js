@@ -1575,6 +1575,20 @@ function applyShopTypeTheme(shopType) {
   if (brandIcon) brandIcon.innerHTML = `<span class="brand-type-emoji" aria-hidden="true">${theme.icon}</span>`;
 }
 
+const ONLINE_DASHBOARD_STATUS_GROUPS = [
+  { key: "pending", label: "Pending", statuses: ["Pending"], className: "pending", countKey: "pendingCount" },
+  { key: "processing", label: "Confirmed / Processing", statuses: ["Confirmed", "Processing"], className: "processing", countKey: "processingCount" },
+  { key: "shipped", label: "Shipped", statuses: ["Shipped"], className: "shipped", countKey: "shippedCount" },
+  { key: "delivered", label: "Delivered", statuses: ["Delivered"], className: "delivered", countKey: "deliveredCount" },
+  { key: "returned", label: "Returned", statuses: ["Returned"], className: "returned", countKey: "returnedCount" },
+  { key: "cancelled", label: "Cancelled", statuses: ["Cancelled"], className: "cancelled", countKey: "cancelledCount" }
+];
+let dashboardOnlineStatusFilter = "";
+function onlineDashboardOrdersForStatus(orders, statusFilter) {
+  const group = ONLINE_DASHBOARD_STATUS_GROUPS.find(item => item.key === statusFilter);
+  return group ? (orders || []).filter(order => group.statuses.includes(order.order_status)) : (orders || []);
+}
+
 function renderOnlineDashboard(todayKey, permissions) {
   const panel = $("#dashboard-online-sales");
   if (!panel) return;
@@ -1591,22 +1605,31 @@ function renderOnlineDashboard(todayKey, permissions) {
   $("#online-profit-breakdown").textContent = permissions.sales ? `Before returns ${money(summary.sales.profitBeforeReturns)} · Reversed ${money(summary.sales.returnedProfit)}` : "Sales access required";
   $("#online-active-cod").textContent = money(summary.activeCod);
   $("#online-active-count").textContent = `${localizeDigits(summary.activeOrderCount)} active orders`;
-  const statuses = [
-    ["Pending", summary.pendingCount, "pending"],
-    ["Confirmed / Processing", summary.processingCount, "processing"],
-    ["Shipped", summary.shippedCount, "shipped"],
-    ["Delivered", summary.deliveredCount, "delivered"],
-    ["Returned", summary.returnedCount, "returned"],
-    ["Cancelled", summary.cancelledCount, "cancelled"]
-  ];
-  $("#online-dashboard-status").innerHTML = statuses.map(([label, count, className]) => `<div class="online-dashboard-status-item"><span class="status ${className}">${label}</span><b>${localizeDigits(count)}</b></div>`).join("");
-  const recent = orders.slice(0, 5);
-  $("#dashboard-online-orders-list").innerHTML = recent.length ? recent.map(order => {
+  $("#online-dashboard-status").innerHTML = ONLINE_DASHBOARD_STATUS_GROUPS.map(group => {
+    const active = dashboardOnlineStatusFilter === group.key;
+    return `<button type="button" class="online-dashboard-status-item${active ? " active" : ""}" data-online-status-filter="${group.key}" aria-pressed="${active}" title="${esc(t("Filter orders by status"))}"><span class="status ${group.className}">${esc(t(group.label))}</span><b>${localizeDigits(summary[group.countKey])}</b></button>`;
+  }).join("");
+  const activeGroup = ONLINE_DASHBOARD_STATUS_GROUPS.find(group => group.key === dashboardOnlineStatusFilter);
+  const visibleOrders = onlineDashboardOrdersForStatus(orders, dashboardOnlineStatusFilter);
+  $("#online-orders-filter-label").textContent = activeGroup ? `· ${t(activeGroup.label)}` : "";
+  $("#online-orders-show-all").classList.toggle("hidden", !activeGroup);
+  $("#online-orders-list-meta").textContent = `${localizeDigits(visibleOrders.length)} / ${localizeDigits(orders.length)} ${t("orders shown")}`;
+  $("#dashboard-online-orders-list").innerHTML = visibleOrders.length ? visibleOrders.map(order => {
     const items = (order.lines || []).map(line => `${esc(line.name)} × ${localizeDigits(line.qty)} ${esc(line.unit || "piece")} · ${money(line.lineTotal ?? Number(line.qty || 0) * Number(line.price || 0))}`).join("<br>");
     const returnedValue = (data.onlineOrderReturns || []).filter(row => Number(row.online_order_id) === Number(order.id)).reduce((sum, row) => sum + Number(row.total || 0), 0);
     return `<article class="online-dashboard-order"><div class="online-dashboard-order-main"><div class="online-dashboard-order-title"><b>${esc(order.order_no)}</b><span>${dateLabel(order.date)}</span></div><strong>${esc(order.customer_name)}</strong><small>📞 ${esc(order.customer_phone)}</small><small>📍 ${esc(order.shipping_address)}${order.city_area ? ` (${esc(order.city_area)})` : ""}</small><small class="online-dashboard-order-items">${items || "No items"}</small>${order.notes ? `<small>Note: ${esc(order.notes)}</small>` : ""}</div><div class="online-dashboard-order-courier"><b>${esc(order.courier || "Not assigned")}</b>${order.tracking_id ? `<small>Tracking: ${esc(order.tracking_id)}</small>` : "<small>No tracking ID</small>"}</div><div class="online-dashboard-order-payment"><b>${money(order.total)}</b><small>${esc(order.payment_method)} · ${esc(order.payment_status)}</small><small>Advance ${money(order.advance_paid)} · COD ${money(order.due_cod)}</small>${Number(order.delivery_charge || 0) > 0 || Number(order.discount || 0) > 0 ? `<small>Delivery ${money(order.delivery_charge)} · Discount ${money(order.discount)}</small>` : ""}${returnedValue > 0 ? `<small class="online-dashboard-order-returned"><span>Returned</span> ${money(returnedValue)}</small>` : ""}</div><span class="status ${order.order_status.toLowerCase()}">${esc(order.order_status)}</span></article>`;
-  }).join("") : '<div class="empty">No online orders yet. Your latest online orders will appear here.</div>';
+  }).join("") : activeGroup ? '<div class="empty">No orders match this status.</div>' : '<div class="empty">No online orders yet. Your latest online orders will appear here.</div>';
 }
+
+$("#dashboard-online-sales")?.addEventListener("click", event => {
+  const showAll = event.target.closest("[data-online-show-all]");
+  const statusButton = event.target.closest("[data-online-status-filter]");
+  if (!showAll && !statusButton) return;
+  const nextFilter = showAll ? "" : statusButton.dataset.onlineStatusFilter;
+  dashboardOnlineStatusFilter = !showAll && dashboardOnlineStatusFilter !== nextFilter ? nextFilter : "";
+  renderOnlineDashboard(dateKey(new Date()), data.permissions || {});
+  $("#dashboard-online-orders-list").scrollTop = 0;
+});
 
 function render() {
   applyShopTypeTheme(data.shopType || "general");
