@@ -11,7 +11,7 @@
  *
  * Writes <out-dir>/manifest.json and <out-dir>/manifest.json.sig. Publish both
  * next to the zip and point SHOP_UPDATE_MANIFEST_URL at manifest.json.
- * Never publish vendor/license-private-key.pem.
+ * Never publish vendor/release-private-key.pem.
  */
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";

@@ -233,8 +233,8 @@ try {
 }
 $robocopy = Start-Process -FilePath "robocopy.exe" -ArgumentList @(
   "`"$SourceDir`"", "`"$AppDir`"", "/E", "/R:2", "/W:2",
-  "/XD", "data", "vendor", "node_modules", ".git", "backups", "releases", "licences", "private", "ShopDesk-Licence-Kit",
-  "/XF", "*.sqlite3", "*.sqlite3-shm", "*.sqlite3-wal", "server.log", "licences.csv", "*.pem", '"3 - Build Licence Kit.bat"',
+  "/XD", "data", "vendor", "node_modules", "tools", ".git", "backups", "releases",
+  "/XF", "*.sqlite3", "*.sqlite3-shm", "*.sqlite3-wal", "server.log", "*.pem",
   "/NFL", "/NDL", "/NJH", "/NJS", "/NP"
 ) -Wait -PassThru -NoNewWindow
 if ($robocopy.ExitCode -ge 8) { Fail "Could not copy the Shop Desk files (robocopy exit $($robocopy.ExitCode))." }

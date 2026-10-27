@@ -5,7 +5,7 @@ Small shop inventory, sales, expenses, and reports with a separate SQLite databa
 ## Install for a shop
 
 See [INSTALL.md](INSTALL.md) for Windows, Linux and Docker installation, automatic start,
-Google Drive backups, licence keys, HTTPS and updates.
+Google Drive backups, HTTPS and updates.
 
 - **Windows:** double-click **`1 - Install Shop Desk.bat`** in the Shop Desk folder. It asks for administrator permission and for the install folder (press Enter for `C:\ShopDesk`), then starts Shop Desk at boot, opens the private-network firewall, creates desktop shortcuts and opens the browser. To remove it later, double-click **`2 - Uninstall Shop Desk.bat`**.
 - **Linux:** `sudo ./install/linux/install-shopdesk.sh` installs a systemd service with data in `/var/lib/shopdesk`.
@@ -23,17 +23,9 @@ on every screen when the last success is more than 48 hours old.
 **Test connection** verifies the Google session without uploading anything.
 Read [INSTALL.md §6](INSTALL.md#6-google-drive-offsite-backups) to create the OAuth client.
 
-## Licence and trial
+## Pharmacy profile
 
-New installations start with a **30-day trial** (existing databases also get 30 days).
-During the last 7 days a banner reminds you to activate. After expiry the API switches to read-only:
-new bills and other changes are blocked, while viewing data, reports, exports, local
-backups and offsite backups keep working. Enter the Ed25519-signed key in
-**Settings → Licence & plan**. The installation ID shown there must match the key.
-Vendor key generation and issuing are documented in [INSTALL.md §7](INSTALL.md#7-licence-keys-and-trial).
-A portable **USB licence kit** (`npm run licence:kit` → `releases/ShopDesk-Licence-Kit`) lets you
-make a key at the shop PC and unplug without leaving the private key behind — build it with
-**`3 - Build Licence Kit.bat`** and read [LICENSING.md](LICENSING.md).
+Open **Shop settings** and choose **Pharmacy** to track medicine batches, expiry dates, eligible stock, earliest-expiry-first allocation, supplier receipts, alerts for expired/near-expiry stock, and quarantine customer returns. Existing product quantities are preserved during Pharmacy conversion; old quantities start with unknown expiry and must be verified before sale.
 
 ## Bangla interface and receipts
 
