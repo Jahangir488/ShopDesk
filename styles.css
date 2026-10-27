@@ -73,7 +73,7 @@ th::first-letter,.nav-caption::first-letter,.eyebrow::first-letter,.report-total
 .metric-icon{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;font-size:16px;background:#eef0f2;color:var(--steel)}
 .green{background:var(--ok-bg);color:var(--ok)}.violet{background:#fff3c9;color:#8a6500}.orange{background:#fdebdc;color:#b4561d}.blue{background:#e7edf2;color:#46627a}
 .metric strong{display:block;font:700 clamp(24px,2.25vw,31px)/1.1 var(--display);margin:8px 0 3px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
-.metric small{font-size:14px;color:var(--muted)}.neutral{color:#b6bec5;font-size:10px}.warning{color:var(--warn);font-weight:700}
+.metric small{font-size:14px;color:var(--muted)}.metric .metric-breakdown{display:block;margin-top:5px;font-size:12px;font-weight:650;color:var(--steel)}.neutral{color:#b6bec5;font-size:10px}.warning{color:var(--warn);font-weight:700}
 
 /* panels */
 .grid-main{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:stretch;gap:12px;margin-bottom:12px}
@@ -85,7 +85,7 @@ th::first-letter,.nav-caption::first-letter,.eyebrow::first-letter,.report-total
 .report-filters{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap}
 .report-filters label{font-size:13px;color:var(--steel);font-weight:600}
 .report-filters input,.sales-panel>.panel-heading input{display:block;width:150px;min-height:40px;margin-top:4px;padding:8px 10px;border:1px solid #cfd5da;border-radius:8px;color:var(--ink);background:#fff}
-.report-totals{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-top:16px;padding:13px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.report-totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:16px;padding:13px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 .report-totals small{display:block;color:var(--muted);font-size:13px;font-weight:600}
 .report-totals b{display:block;margin-top:2px;font:700 22px var(--display);font-variant-numeric:tabular-nums}
 .chart-summary{display:flex;align-items:center;gap:8px;margin-top:18px;font-size:14px;color:var(--muted)}
@@ -135,13 +135,16 @@ th::first-letter,.nav-caption::first-letter,.eyebrow::first-letter,.report-total
 .inventory-scroll td .user-action, .expenses-scroll td .user-action { display: inline-block; box-sizing: border-box; margin: 3px 4px 3px 0; padding: 4px 8px; border: 1px solid #d5dde5; border-radius: 6px; background: #fff; color: var(--ink); font-size: 11px; line-height: 1.2; min-height: 28px; white-space: normal; text-align: center; text-decoration: none; overflow-wrap: anywhere; }
 .inventory-scroll td .user-action:hover, .expenses-scroll td .user-action:hover { background: #f2f6fa; border-color: #93a4b4; }
 .inventory-scroll td .user-action.danger, .expenses-scroll td .user-action.danger { color: var(--bad); border-color: #f2c7cc; background: #fffafa; }
+.dashboard-returns-summary { display: grid; grid-template-columns: repeat(auto-fit,minmax(140px,1fr)); gap: 10px; margin: 14px 0 6px; padding: 12px 14px; border: 1px solid #efc7c7; border-radius: 10px; background: #fff7f5; }
+.dashboard-returns-summary small { display: block; color: var(--muted); font-size: 12px; font-weight: 650; }
+.dashboard-returns-summary b { display: block; margin-top: 3px; color: var(--bad); font: 750 23px var(--display); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .dashboard-returns-list { display: grid; }
 .dashboard-return-row { display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: center; gap: 16px; padding: 11px 2px; border-bottom: 1px solid var(--line); }
 .dashboard-return-row:last-child { border-bottom: 0; }
 .dashboard-return-product { min-width: 0; font-weight: 650; overflow-wrap: anywhere; }
 .dashboard-return-meta { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; font-weight: 400; }
 .dashboard-return-qty, .dashboard-return-amount { white-space: nowrap; color: var(--steel); font-size: 13px; }
-.dashboard-return-amount { color: var(--ink); font-weight: 700; }
+.dashboard-return-amount { color: var(--bad); font-weight: 750; }
 .dashboard-returns-empty { padding: 16px 0; color: var(--muted); font-size: 13px; }
 @media(max-width:680px) {
   .dashboard-return-row { grid-template-columns: minmax(0,1fr) auto; gap: 4px 12px; }

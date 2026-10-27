@@ -403,23 +403,44 @@ function reportRange() {
   }
   return { start, end, buckets, monthly, caption: start > end ? "Invalid date range" : start + " to " + end };
 }
+function summarizeSales(sales) {
+  return (sales || []).reduce((summary, item) => {
+    const grossSales = Number(item.original_total ?? item.total ?? 0);
+    const netSales = Number(item.total || 0);
+    const grossCost = Number(item.original_cost ?? item.cost ?? 0);
+    const netCost = Number(item.cost || 0);
+    const grossTax = Number(item.original_tax_amount ?? item.tax_amount ?? 0);
+    const netTax = Number(item.tax_amount || 0);
+    summary.grossSales += grossSales;
+    summary.returnedValue += Math.max(0, grossSales - netSales);
+    summary.netSales += netSales;
+    summary.grossCost += grossCost;
+    summary.netCost += netCost;
+    summary.profitBeforeReturns += grossSales - grossCost;
+    summary.returnedProfit += Math.max(0, grossSales - netSales) - Math.max(0, grossCost - netCost);
+    summary.profitAfterReturns += netSales - netCost;
+    summary.returnedTax += Math.max(0, grossTax - netTax);
+    summary.netTax += netTax;
+    return summary;
+  }, { grossSales: 0, returnedValue: 0, netSales: 0, grossCost: 0, netCost: 0, profitBeforeReturns: 0, returnedProfit: 0, profitAfterReturns: 0, returnedTax: 0, netTax: 0 });
+}
 function renderReport() {
   const permissions = data.permissions || {};
   const range = reportRange();
   const sales = data.sales.filter(item => item.date >= range.start && item.date <= range.end);
   const expenses = data.expenses.filter(item => item.date >= range.start && item.date <= range.end);
-  const gross = sales.reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const profit = sales.reduce((sum, item) => sum + Number(item.total || 0) - Number(item.cost || 0), 0);
-  const tax = sales.reduce((sum, item) => sum + Number(item.tax_amount || 0), 0);
+  const summary = summarizeSales(sales);
   const costs = expenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  $("#report-caption").textContent = `${range.caption} · Sales, costs, and estimated profit`;
-  $("#report-sales").textContent = permissions.sales ? money(gross) : "—";
-  $("#report-profit").textContent = permissions.sales ? money(profit) : "—";
-  $("#report-tax").textContent = permissions.sales ? money(tax) : "—";
+  $("#report-caption").textContent = `${range.caption} · Sales, returns, costs, and estimated profit`;
+  $("#report-sales").textContent = permissions.sales ? money(summary.grossSales) : "—";
+  $("#report-returns").textContent = permissions.sales ? money(summary.returnedValue) : "—";
+  $("#report-net-sales").textContent = permissions.sales ? money(summary.netSales) : "—";
+  $("#report-profit").textContent = permissions.sales ? money(summary.profitAfterReturns) : "—";
+  $("#report-tax").textContent = permissions.sales ? money(summary.netTax) : "—";
   $("#report-expenses").textContent = permissions.expenses ? money(costs) : "—";
-  $("#report-net").textContent = permissions.sales && permissions.expenses ? money(profit - costs) : "—";
-  $("#chart-total").textContent = permissions.sales ? money(gross) : "—";
-  $("#chart-label").textContent = `Gross sales · ${range.caption}`;
+  $("#report-net").textContent = permissions.sales && permissions.expenses ? money(summary.profitAfterReturns - costs) : "—";
+  $("#chart-total").textContent = permissions.sales ? money(summary.netSales) : "—";
+  $("#chart-label").textContent = `Net sales after returns · ${range.caption}`;
   const amounts = range.buckets.map(bucket => sales.filter(item => range.monthly ? item.date.startsWith(bucket.key) : item.date === bucket.key).reduce((sum, item) => sum + Number(item.total || 0), 0));
   const max = Math.max(1000, ...amounts);
   $("#chart-max").textContent = money(Math.ceil(max / 4 / 1000) * 1000 || 1000);
@@ -1560,13 +1581,20 @@ function render() {
   $("#workspace-name").textContent = data.workspace || "Set workspace";
   refreshTopbarClock();
   renderDashboardTrend();
-  const dashboardReturns = permissions.sales ? (data.salesReturns || []).slice(0, 5) : [];
+  const allReturns = permissions.sales ? (data.salesReturns || []) : [];
+  const dashboardReturns = allReturns.slice(0, 5);
   $("#dashboard-returns").classList.toggle("hidden", !permissions.sales);
-  $("#dashboard-returns-list").innerHTML = dashboardReturns.length ? dashboardReturns.map(row => `<div class="dashboard-return-row"><div class="dashboard-return-product">${esc(row.product)}<small class="dashboard-return-meta">${dateLabel(row.date)}${row.reason ? ` · ${esc(row.reason)}` : ""}</small></div><span class="dashboard-return-qty">${Number(row.qty)} ${esc(row.unit || "piece")}</span><b class="dashboard-return-amount">${money(row.total)}</b></div>`).join("") : '<div class="dashboard-returns-empty">No product returns have been recorded.</div>';
+  $("#dashboard-returns-total").textContent = money(allReturns.reduce((sum, row) => sum + Number(row.total || 0), 0));
+  $("#dashboard-returns-count").textContent = localizeDigits(allReturns.length);
+  $("#dashboard-refunds-total").textContent = money(allReturns.reduce((sum, row) => sum + Number(row.refund_amount || 0), 0));
+  $("#dashboard-returns-list").innerHTML = dashboardReturns.length ? dashboardReturns.map(row => `<div class="dashboard-return-row"><div class="dashboard-return-product">${esc(row.product)}<small class="dashboard-return-meta">${dateLabel(row.date)}${row.reason ? ` · ${esc(row.reason)}` : ""}</small></div><span class="dashboard-return-qty">${Number(row.qty)} ${esc(row.unit || "piece")}</span><b class="dashboard-return-amount">−${money(row.total)}</b></div>`).join("") : '<div class="dashboard-returns-empty">No product returns have been recorded.</div>';
   const salesToday = data.sales.filter(item => item.date === todayKey);
-  $("#today-sales").textContent = permissions.sales ? money(salesToday.reduce((sum, item) => sum + item.total, 0)) : "—";
+  const todaySummary = summarizeSales(salesToday);
+  $("#today-sales").textContent = permissions.sales ? money(todaySummary.netSales) : "—";
   $("#today-count").textContent = permissions.sales ? `${salesToday.length} transactions` : "No access";
-  $("#today-profit").textContent = permissions.sales ? money(salesToday.reduce((sum, item) => sum + item.total - item.cost, 0)) : "—";
+  $("#today-sales-breakdown").textContent = permissions.sales ? `Gross ${money(todaySummary.grossSales)} · Returns ${money(todaySummary.returnedValue)}` : "No access";
+  $("#today-profit").textContent = permissions.sales ? money(todaySummary.profitAfterReturns) : "—";
+  $("#today-profit-breakdown").textContent = permissions.sales ? `Before returns ${money(todaySummary.profitBeforeReturns)} · Reversed ${money(todaySummary.returnedProfit)}` : "No access";
   const monthlyExpenses = data.expenses.filter(item => item.date.startsWith(month));
   $("#month-expenses").textContent = permissions.expenses ? money(monthlyExpenses.reduce((sum, item) => sum + item.amount, 0)) : "—";
   $("#expense-count").textContent = permissions.expenses ? `${monthlyExpenses.length} recorded this month` : "No access";
@@ -2200,11 +2228,9 @@ $("#download-report").onclick = () => {
   const expenseTotal = expenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const rows = [["SHOP REPORT", range.start + " to " + range.end], [], ["SUMMARY", "AMOUNT"]];
   if (permissions.sales) {
-    const gross = sales.reduce((sum, item) => sum + Number(item.total || 0), 0);
-    const profit = sales.reduce((sum, item) => sum + Number(item.total || 0) - Number(item.cost || 0), 0);
-    const tax = sales.reduce((sum, item) => sum + Number(item.tax_amount || 0), 0);
-    rows.push(["Gross sales (excluding tax)", gross], ["Tax collected", tax], ["Gross profit", profit]);
-    if (permissions.expenses) rows.push(["Expenses", expenseTotal], ["Net profit", profit - expenseTotal]);
+    const summary = summarizeSales(sales);
+    rows.push(["Gross sales (excluding tax)", summary.grossSales], ["Returned value (excluding tax)", summary.returnedValue], ["Net sales after returns (excluding tax)", summary.netSales], ["Tax collected after returns", summary.netTax], ["Profit after returns", summary.profitAfterReturns]);
+    if (permissions.expenses) rows.push(["Expenses", expenseTotal], ["Net profit", summary.profitAfterReturns - expenseTotal]);
     rows.push([], ["SALES", "Date", "Product", "Quantity", "Unit", "Payment", "Sales (ex tax)", "Tax", "Cost", "Profit"]);
     for (const item of sales) rows.push(["", item.date, item.product, item.qty, item.unit || "piece", item.payment, item.total, item.tax_amount || 0, item.cost, Number(item.total || 0) - Number(item.cost || 0)]);
   }
@@ -2229,9 +2255,12 @@ $("#print-report").onclick = () => {
   const rows = [];
   if (permissions.sales) for (const item of sales) rows.push(`<tr><td>${esc(item.date)}</td><td>${esc(item.product)}</td><td>${item.qty} ${esc(item.unit || "piece")}</td><td>${esc(item.payment)}</td><td>${money(item.total)}</td><td>${money(item.tax_amount || 0)}</td><td>${money(Number(item.total || 0) - Number(item.cost || 0))}</td></tr>`);
   if (permissions.expenses) for (const item of expenses) rows.push(`<tr><td>${esc(item.date)}</td><td>${esc(item.category)}${item.note ? ` · ${esc(item.note)}` : ""}</td><td></td><td>Expense</td><td>${money(item.amount)}</td><td></td><td></td></tr>`);
-  const gross = sales.reduce((sum, item) => sum + Number(item.total || 0), 0), tax = sales.reduce((sum, item) => sum + Number(item.tax_amount || 0), 0);
-  const grossProfit = sales.reduce((sum, item) => sum + Number(item.total || 0) - Number(item.cost || 0), 0), spent = expenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  const summary = [["Sales (ex tax)", gross], ["Tax collected", tax], ["Gross profit", grossProfit], ["Expenses", spent], ["Net profit", grossProfit - spent]].filter(([label]) => label !== "Sales (ex tax)" || permissions.sales).filter(([label]) => label !== "Expenses" || permissions.expenses).map(([label, amount]) => `<tr><th>${label}</th><td>${money(amount)}</td></tr>`).join("");
+  const salesSummary = summarizeSales(sales), spent = expenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const summaryRows = [];
+  if (permissions.sales) summaryRows.push(["Gross sales (ex tax)", salesSummary.grossSales], ["Returned value (ex tax)", salesSummary.returnedValue], ["Net sales after returns (ex tax)", salesSummary.netSales], ["Tax collected after returns", salesSummary.netTax], ["Profit after returns", salesSummary.profitAfterReturns]);
+  if (permissions.expenses) summaryRows.push(["Expenses", spent]);
+  if (permissions.sales && permissions.expenses) summaryRows.push(["Net profit", salesSummary.profitAfterReturns - spent]);
+  const summary = summaryRows.map(([label, amount]) => `<tr><th>${label}</th><td>${money(amount)}</td></tr>`).join("");
   printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Shop report</title><style>@page{margin:12mm}body{font:12px system-ui,"Segoe UI",sans-serif;color:#17212b}h1{margin:0}p{color:#66727d}table{border-collapse:collapse;width:100%;margin:14px 0}th,td{border:1px solid #d2d8dc;padding:6px;text-align:left}thead th{background:#eef2f3}.summary{width:auto;min-width:50%}.summary td{text-align:right}.summary th{background:#f5f6f7}</style></head><body><h1>${esc(data.shopName)}</h1><p>${esc(data.workspace)} · Report from ${esc(range.start)} to ${esc(range.end)}</p><table class="summary"><tbody>${summary}</tbody></table><table><thead><tr><th>Date</th><th>Item / category</th><th>Quantity</th><th>Payment</th><th>Amount</th><th>Tax</th><th>Profit</th></tr></thead><tbody>${rows.join("") || `<tr><td colspan="7">No records in this period.</td></tr>`}</tbody></table></body></html>`);
 };
 $("#download-stock-watch").onclick = () => {

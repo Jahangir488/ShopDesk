@@ -138,6 +138,30 @@ try {
   ok("shop-type category filtering and dedicated 80mm restaurant receipt");
 } catch (error) { fail("Restaurant receipt/categories: " + error.message); }
 
+console.log("Returns, net sales, and profit");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8");
+  const html = readFileSync(join(root, "index.html"), "utf8");
+  const start = app.indexOf("function summarizeSales(sales) {");
+  const end = app.indexOf("\nfunction renderReport() {", start);
+  if (start < 0 || end < 0) throw new Error("summarizeSales is missing");
+  const source = app.slice(start, end);
+  const sales = [
+    { original_total: 200, original_cost: 100, total: 0, cost: 0, original_tax_amount: 20, tax_amount: 0 },
+    { original_total: 100, original_cost: 60, total: 50, cost: 30, original_tax_amount: 10, tax_amount: 5 },
+    { original_total: 80, original_cost: 40, total: 80, cost: 40, original_tax_amount: 0, tax_amount: 0 }
+  ];
+  const summary = new Function("sales", `${source}\nreturn summarizeSales(sales);`)(sales);
+  const expected = { grossSales: 380, returnedValue: 250, netSales: 130, profitBeforeReturns: 180, returnedProfit: 120, profitAfterReturns: 60, returnedTax: 25, netTax: 5 };
+  for (const [key, value] of Object.entries(expected)) if (Math.abs(summary[key] - value) > 0.000001) fail(`${key}: expected ${value}, got ${summary[key]}`);
+  const fullReturn = new Function("sales", `${source}\nreturn summarizeSales(sales);`)([sales[0]]);
+  if (fullReturn.netSales !== 0 || fullReturn.netCost !== 0 || fullReturn.profitAfterReturns !== 0) fail("a fully returned item must contribute zero net sales, cost, and profit");
+  for (const id of ["dashboard-returns-total", "dashboard-refunds-total", "today-sales-breakdown", "today-profit-breakdown", "report-returns", "report-net-sales"]) {
+    if (!html.includes(`id="${id}"`)) fail(`return/profit summary element is missing: ${id}`);
+  }
+  ok("returns reduce sales and profit correctly; gross, returns, net sales, and refunded totals are visible");
+} catch (error) { fail("Returns/profit: " + error.message); }
+
 console.log("Install files");
 try {
   const required = [

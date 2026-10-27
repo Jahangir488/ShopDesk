@@ -39,14 +39,22 @@
     "＋ Record a sale": "＋ বিক্রয় লিখুন",
     "Record a sale": "বিক্রয় লিখুন",
     "Today’s sales": "আজকের বিক্রয়",
+    "Today’s net sales": "আজকের নিট বিক্রয়",
     "Estimated profit": "আনুমানিক লাভ",
+    "Profit after returns": "ফেরতের পর লাভ",
     "After cost of goods sold": "পণ্যের ক্রয়মূল্য বাদ দেওয়ার পর",
+    "After cost of goods and returns": "পণ্যের ক্রয়মূল্য ও ফেরত বাদ দেওয়ার পর",
+    "Total returned value": "মোট ফেরতের মূল্য",
+    "All return records": "সব ফেরতের রেকর্ড",
+    "Refunded to customers": "গ্রাহককে ফেরত প্রদান",
     "Monthly expenses": "মাসিক খরচ",
     "Product types": "পণ্যের ধরন",
     "Business activity": "ব্যবসার গতিবিধি",
     "Daily sales and expenses · last 7 days": "দৈনিক বিক্রয় ও খরচ · গত ৭ দিন",
+    "Daily net sales and expenses · last 7 days": "দৈনিক নিট বিক্রয় ও খরচ · গত ৭ দিন",
     "Open reports →": "রিপোর্ট দেখুন →",
     "7-DAY SALES": "৭ দিনের বিক্রয়",
+    "7-DAY NET SALES": "৭ দিনের নিট বিক্রয়",
     "7-DAY EXPENSES": "৭ দিনের খরচ",
     "Stock watch": "স্টক নজরদারি",
     "Products that need attention": "যে পণ্যগুলোর দিকে নজর দরকার",
@@ -70,8 +78,15 @@
     "To": "শেষ",
     "Print report": "রিপোর্ট প্রিন্ট",
     "GROSS SALES": "মোট বিক্রয়",
+    "RETURNED VALUE": "ফেরতের মূল্য",
+    "NET SALES": "নিট বিক্রয়",
     "GROSS PROFIT": "মোট লাভ",
+    "PROFIT AFTER RETURNS": "ফেরতের পর লাভ",
     "TAX COLLECTED": "সংগৃহীত ট্যাক্স",
+    "Tax collected after returns": "ফেরতের পর সংগৃহীত ট্যাক্স",
+    "Gross sales (ex tax)": "মোট বিক্রয় (ট্যাক্স ছাড়া)",
+    "Returned value (ex tax)": "ফেরতের মূল্য (ট্যাক্স ছাড়া)",
+    "Net sales after returns (ex tax)": "ফেরতের পর নিট বিক্রয় (ট্যাক্স ছাড়া)",
     "EXPENSES": "খরচ",
     "NET PROFIT": "নিট লাভ",
     "Sales in selected period": "নির্বাচিত সময়ের বিক্রয়",
@@ -909,6 +924,22 @@
     "GENERAL RETAIL": "সাধারণ খুচরা দোকান"
   },
   "patterns": [
+    {
+      "re": "^Gross (.+) · Returns (.+)$",
+      "bn": "মোট বিক্রয় $1 · ফেরত $2"
+    },
+    {
+      "re": "^Before returns (.+) · Reversed (.+)$",
+      "bn": "ফেরতের আগে লাভ $1 · ফেরতে লাভ কমেছে $2"
+    },
+    {
+      "re": "^Net sales after returns · (.+)$",
+      "bn": "ফেরতের পর নিট বিক্রয় · $1"
+    },
+    {
+      "re": "^(.+) · Sales, returns, costs, and estimated profit$",
+      "bn": "$1 · বিক্রয়, ফেরত, খরচ ও আনুমানিক লাভ"
+    },
     {
       "re": "^Portion: (.+)$",
       "bn": "পোরশন: $1"
