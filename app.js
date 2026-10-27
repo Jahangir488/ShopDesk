@@ -424,6 +424,27 @@ function summarizeSales(sales) {
     return summary;
   }, { grossSales: 0, returnedValue: 0, netSales: 0, grossCost: 0, netCost: 0, profitBeforeReturns: 0, returnedProfit: 0, profitAfterReturns: 0, returnedTax: 0, netTax: 0 });
 }
+function summarizeOnlineDashboard(orders, sales, today) {
+  const allOrders = orders || [];
+  const onlineBillIds = new Set(allOrders.map(order => Number(order.bill_id || 0)).filter(id => id > 0));
+  const onlineSalesToday = (sales || []).filter(sale => sale.date === today && onlineBillIds.has(Number(sale.bill_id || 0)));
+  const todayOrders = allOrders.filter(order => order.date === today);
+  const activeOrders = allOrders.filter(order => ["Pending", "Confirmed", "Processing", "Shipped"].includes(order.order_status));
+  const count = statuses => allOrders.filter(order => statuses.includes(order.order_status)).length;
+  return {
+    todayOrderCount: todayOrders.length,
+    todayOrderValue: todayOrders.reduce((sum, order) => sum + Number(order.total || 0), 0),
+    activeOrderCount: activeOrders.length,
+    activeCod: activeOrders.reduce((sum, order) => sum + Number(order.due_cod || 0), 0),
+    pendingCount: count(["Pending"]),
+    processingCount: count(["Confirmed", "Processing"]),
+    shippedCount: count(["Shipped"]),
+    deliveredCount: count(["Delivered"]),
+    returnedCount: count(["Returned"]),
+    cancelledCount: count(["Cancelled"]),
+    sales: summarizeSales(onlineSalesToday)
+  };
+}
 function renderReport() {
   const permissions = data.permissions || {};
   const range = reportRange();
@@ -1554,6 +1575,39 @@ function applyShopTypeTheme(shopType) {
   if (brandIcon) brandIcon.innerHTML = `<span class="brand-type-emoji" aria-hidden="true">${theme.icon}</span>`;
 }
 
+function renderOnlineDashboard(todayKey, permissions) {
+  const panel = $("#dashboard-online-sales");
+  if (!panel) return;
+  panel.classList.toggle("hidden", !permissions.online_orders);
+  if (!permissions.online_orders) return;
+  const orders = data.onlineOrders || [];
+  const summary = summarizeOnlineDashboard(orders, data.sales || [], todayKey);
+  $("#online-today-orders").textContent = localizeDigits(summary.todayOrderCount);
+  $("#online-today-order-value").textContent = `${money(summary.todayOrderValue)} order value`;
+  $("#online-gross-sales").textContent = permissions.sales ? money(summary.sales.grossSales) : "—";
+  $("#online-returned-value").textContent = permissions.sales ? money(summary.sales.returnedValue) : "—";
+  $("#online-net-sales").textContent = permissions.sales ? money(summary.sales.netSales) : "—";
+  $("#online-profit-after-returns").textContent = permissions.sales ? money(summary.sales.profitAfterReturns) : "—";
+  $("#online-profit-breakdown").textContent = permissions.sales ? `Before returns ${money(summary.sales.profitBeforeReturns)} · Reversed ${money(summary.sales.returnedProfit)}` : "Sales access required";
+  $("#online-active-cod").textContent = money(summary.activeCod);
+  $("#online-active-count").textContent = `${localizeDigits(summary.activeOrderCount)} active orders`;
+  const statuses = [
+    ["Pending", summary.pendingCount, "pending"],
+    ["Confirmed / Processing", summary.processingCount, "processing"],
+    ["Shipped", summary.shippedCount, "shipped"],
+    ["Delivered", summary.deliveredCount, "delivered"],
+    ["Returned", summary.returnedCount, "returned"],
+    ["Cancelled", summary.cancelledCount, "cancelled"]
+  ];
+  $("#online-dashboard-status").innerHTML = statuses.map(([label, count, className]) => `<div class="online-dashboard-status-item"><span class="status ${className}">${label}</span><b>${localizeDigits(count)}</b></div>`).join("");
+  const recent = orders.slice(0, 5);
+  $("#dashboard-online-orders-list").innerHTML = recent.length ? recent.map(order => {
+    const items = (order.lines || []).map(line => `${esc(line.name)} × ${localizeDigits(line.qty)} ${esc(line.unit || "piece")} · ${money(line.lineTotal ?? Number(line.qty || 0) * Number(line.price || 0))}`).join("<br>");
+    const returnedValue = (data.onlineOrderReturns || []).filter(row => Number(row.online_order_id) === Number(order.id)).reduce((sum, row) => sum + Number(row.total || 0), 0);
+    return `<article class="online-dashboard-order"><div class="online-dashboard-order-main"><div class="online-dashboard-order-title"><b>${esc(order.order_no)}</b><span>${dateLabel(order.date)}</span></div><strong>${esc(order.customer_name)}</strong><small>📞 ${esc(order.customer_phone)}</small><small>📍 ${esc(order.shipping_address)}${order.city_area ? ` (${esc(order.city_area)})` : ""}</small><small class="online-dashboard-order-items">${items || "No items"}</small>${order.notes ? `<small>Note: ${esc(order.notes)}</small>` : ""}</div><div class="online-dashboard-order-courier"><b>${esc(order.courier || "Not assigned")}</b>${order.tracking_id ? `<small>Tracking: ${esc(order.tracking_id)}</small>` : "<small>No tracking ID</small>"}</div><div class="online-dashboard-order-payment"><b>${money(order.total)}</b><small>${esc(order.payment_method)} · ${esc(order.payment_status)}</small><small>Advance ${money(order.advance_paid)} · COD ${money(order.due_cod)}</small>${Number(order.delivery_charge || 0) > 0 || Number(order.discount || 0) > 0 ? `<small>Delivery ${money(order.delivery_charge)} · Discount ${money(order.discount)}</small>` : ""}${returnedValue > 0 ? `<small class="online-dashboard-order-returned"><span>Returned</span> ${money(returnedValue)}</small>` : ""}</div><span class="status ${order.order_status.toLowerCase()}">${esc(order.order_status)}</span></article>`;
+  }).join("") : '<div class="empty">No online orders yet. Your latest online orders will appear here.</div>';
+}
+
 function render() {
   applyShopTypeTheme(data.shopType || "general");
   const permissions = data.permissions || {};
@@ -1581,6 +1635,7 @@ function render() {
   $("#workspace-name").textContent = data.workspace || "Set workspace";
   refreshTopbarClock();
   renderDashboardTrend();
+  renderOnlineDashboard(todayKey, permissions);
   const allReturns = permissions.sales ? (data.salesReturns || []) : [];
   const dashboardReturns = allReturns.slice(0, 5);
   $("#dashboard-returns").classList.toggle("hidden", !permissions.sales);

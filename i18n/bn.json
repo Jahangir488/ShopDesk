@@ -47,6 +47,22 @@
     "Total returned value": "মোট ফেরতের মূল্য",
     "All return records": "সব ফেরতের রেকর্ড",
     "Refunded to customers": "গ্রাহককে ফেরত প্রদান",
+    "Online sales & orders": "অনলাইন বিক্রয় ও অর্ডার",
+    "Today’s online sales and returns, plus active orders and COD": "আজকের অনলাইন বিক্রয় ও ফেরত, সক্রিয় অর্ডার এবং COD",
+    "Open online orders →": "অনলাইন অর্ডার দেখুন →",
+    "Today’s online orders": "আজকের অনলাইন অর্ডার",
+    "Gross billed sales": "বিলভুক্ত মোট বিক্রয়",
+    "Linked sales bills": "সংযুক্ত বিক্রয়ের বিল",
+    "Deducted before net sales": "নিট বিক্রয়ের আগে বাদ দেওয়া",
+    "Net online sales": "নিট অনলাইন বিক্রয়",
+    "After product returns": "পণ্য ফেরতের পর",
+    "Active COD to collect": "সক্রিয় অর্ডারের আদায়যোগ্য COD",
+    "Sales access required": "বিক্রয়ের অ্যাক্সেস প্রয়োজন",
+    "Confirmed / Processing": "নিশ্চিত / প্রসেসিং",
+    "Shipped": "শিপড",
+    "Recent online orders": "সাম্প্রতিক অনলাইন অর্ডার",
+    "No tracking ID": "ট্র্যাকিং আইডি নেই",
+    "No online orders yet. Your latest online orders will appear here.": "এখনো অনলাইন অর্ডার নেই। আপনার সাম্প্রতিক অনলাইন অর্ডার এখানে দেখাবে।",
     "Monthly expenses": "মাসিক খরচ",
     "Product types": "পণ্যের ধরন",
     "Business activity": "ব্যবসার গতিবিধি",
@@ -931,6 +947,26 @@
     {
       "re": "^Before returns (.+) · Reversed (.+)$",
       "bn": "ফেরতের আগে লাভ $1 · ফেরতে লাভ কমেছে $2"
+    },
+    {
+      "re": "^(.+) order value$",
+      "bn": "$1 অর্ডারের মূল্য"
+    },
+    {
+      "re": "^(.+) active orders$",
+      "bn": "$1 টি সক্রিয় অর্ডার"
+    },
+    {
+      "re": "^Advance (.+) · COD (.+)$",
+      "bn": "অগ্রিম $1 · COD $2"
+    },
+    {
+      "re": "^Delivery (.+) · Discount (.+)$",
+      "bn": "ডেলিভারি $1 · ছাড় $2"
+    },
+    {
+      "re": "^Tracking: (.+)$",
+      "bn": "ট্র্যাকিং: $1"
     },
     {
       "re": "^Net sales after returns · (.+)$",

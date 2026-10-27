@@ -162,6 +162,39 @@ try {
   ok("returns reduce sales and profit correctly; gross, returns, net sales, and refunded totals are visible");
 } catch (error) { fail("Returns/profit: " + error.message); }
 
+console.log("Online sales dashboard");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8");
+  const html = readFileSync(join(root, "index.html"), "utf8");
+  const start = app.indexOf("function summarizeSales(sales) {");
+  const end = app.indexOf("\nfunction renderReport() {", start);
+  if (start < 0 || end < 0 || !app.includes("function summarizeOnlineDashboard(orders, sales, today)")) throw new Error("online dashboard summary is missing");
+  const source = app.slice(start, end);
+  const today = "2026-10-27", yesterday = "2026-10-26";
+  const orders = [
+    { id: 1, bill_id: 11, date: today, total: 500, due_cod: 100, order_status: "Delivered" },
+    { id: 2, bill_id: 12, date: today, total: 300, due_cod: 300, order_status: "Shipped" },
+    { id: 3, bill_id: null, date: yesterday, total: 200, due_cod: 200, order_status: "Pending" },
+    { id: 4, bill_id: 13, date: yesterday, total: 400, due_cod: 0, order_status: "Returned" },
+    { id: 5, bill_id: null, date: yesterday, total: 150, due_cod: 0, order_status: "Cancelled" }
+  ];
+  const sales = [
+    { bill_id: 11, date: today, original_total: 400, original_cost: 200, total: 300, cost: 150 },
+    { bill_id: 12, date: today, original_total: 250, original_cost: 100, total: 250, cost: 100 },
+    { bill_id: 13, date: yesterday, original_total: 400, original_cost: 200, total: 0, cost: 0 },
+    { bill_id: 99, date: today, original_total: 1000, original_cost: 500, total: 1000, cost: 500 }
+  ];
+  const summary = new Function("orders", "sales", "today", `${source}\nreturn summarizeOnlineDashboard(orders, sales, today);`)(orders, sales, today);
+  const expected = { todayOrderCount: 2, todayOrderValue: 800, activeOrderCount: 2, activeCod: 500, pendingCount: 1, shippedCount: 1, deliveredCount: 1, returnedCount: 1, cancelledCount: 1 };
+  for (const [key, value] of Object.entries(expected)) if (summary[key] !== value) fail(`${key}: expected ${value}, got ${summary[key]}`);
+  const salesExpected = { grossSales: 650, returnedValue: 100, netSales: 550, profitBeforeReturns: 350, returnedProfit: 50, profitAfterReturns: 300 };
+  for (const [key, value] of Object.entries(salesExpected)) if (Math.abs(summary.sales[key] - value) > 0.000001) fail(`online ${key}: expected ${value}, got ${summary.sales[key]}`);
+  for (const id of ["dashboard-online-sales", "online-today-orders", "online-gross-sales", "online-returned-value", "online-net-sales", "online-profit-after-returns", "online-active-cod", "online-dashboard-status", "dashboard-online-orders-list"]) {
+    if (!html.includes(`id="${id}"`)) fail(`online dashboard element is missing: ${id}`);
+  }
+  ok("online orders, linked sales, returns, profit, statuses, and active COD are summarized separately");
+} catch (error) { fail("Online sales dashboard: " + error.message); }
+
 console.log("Install files");
 try {
   const required = [
