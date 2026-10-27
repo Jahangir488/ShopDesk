@@ -1514,13 +1514,13 @@ document.querySelector("#online-orders-table")?.addEventListener("click", async 
 });
 
 const SHOP_TYPE_THEMES = {
-  pharmacy: { icon: "💊", subtitle: "PHARMACY DESK", badge: "Pharmacy" },
-  restaurant: { icon: "🍽️", subtitle: "RESTAURANT DESK", badge: "Food & restaurant" },
-  clothing: { icon: "👗", subtitle: "FASHION BOUTIQUE", badge: "Clothing" },
-  mobile: { icon: "📱", subtitle: "MOBILE & REPAIRS", badge: "Mobile phone sales & service" },
-  hardware: { icon: "🛠️", subtitle: "HARDWARE & TOOLS", badge: "Hardware" },
-  grocery: { icon: "🛒", subtitle: "GROCERY & MART", badge: "Grocery" },
-  general: { icon: "🏪", subtitle: "GENERAL RETAIL", badge: "General retail" }
+  pharmacy: { icon: "💊", subtitle: "PHARMACY DESK" },
+  restaurant: { icon: "🍽️", subtitle: "RESTAURANT DESK" },
+  clothing: { icon: "👗", subtitle: "FASHION BOUTIQUE" },
+  mobile: { icon: "📱", subtitle: "MOBILE & REPAIRS" },
+  hardware: { icon: "🛠️", subtitle: "HARDWARE & TOOLS" },
+  grocery: { icon: "🛒", subtitle: "GROCERY & MART" },
+  general: { icon: "🏪", subtitle: "GENERAL RETAIL" }
 };
 
 function applyShopTypeTheme(shopType) {
@@ -1531,20 +1531,6 @@ function applyShopTypeTheme(shopType) {
   if (brandSmall) brandSmall.textContent = `${theme.icon} ${t(theme.subtitle)}`;
   const brandIcon = document.querySelector(".brand-icon");
   if (brandIcon) brandIcon.innerHTML = `<span class="brand-type-emoji" aria-hidden="true">${theme.icon}</span>`;
-  const topbarLeft = document.querySelector(".topbar > div:first-child");
-  if (topbarLeft) {
-    let pill = $("#topbar-shop-type-badge");
-    if (!pill) {
-      pill = document.createElement("button");
-      pill.type = "button";
-      pill.id = "topbar-shop-type-badge";
-      pill.className = "shop-type-pill";
-      pill.title = t("Shop settings");
-      pill.onclick = () => $("#edit-workspace")?.click();
-      topbarLeft.appendChild(pill);
-    }
-    pill.innerHTML = `<span aria-hidden="true">${theme.icon}</span> <span>${esc(t(theme.badge))}</span>`;
-  }
 }
 
 function render() {

@@ -738,9 +738,6 @@ body[data-shop-type="pharmacy"]{
   --theme-welcome-title:#064e3b;
   --theme-th-bg:#def7ec;
   --theme-th-ink:#065f46;
-  --theme-badge-bg:#d1fae5;
-  --theme-badge-ink:#065f46;
-  --theme-badge-border:#6ee7b7;
   --theme-clock:#059669;
   --theme-chart:#059669;
 }
@@ -774,9 +771,6 @@ body[data-shop-type="restaurant"]{
   --theme-welcome-title:#7c2d12;
   --theme-th-bg:#ffedd5;
   --theme-th-ink:#7c2d12;
-  --theme-badge-bg:#ffedd5;
-  --theme-badge-ink:#9a3412;
-  --theme-badge-border:#fdba74;
   --theme-clock:#ea580c;
   --theme-chart:#ea580c;
 }
@@ -810,9 +804,6 @@ body[data-shop-type="clothing"]{
   --theme-welcome-title:#581c87;
   --theme-th-bg:#fae8ff;
   --theme-th-ink:#6b21a8;
-  --theme-badge-bg:#fce7f3;
-  --theme-badge-ink:#9d174d;
-  --theme-badge-border:#f472b6;
   --theme-clock:#db2777;
   --theme-chart:#9333ea;
 }
@@ -846,9 +837,6 @@ body[data-shop-type="mobile"]{
   --theme-welcome-title:#0c4a6e;
   --theme-th-bg:#e0f2fe;
   --theme-th-ink:#075985;
-  --theme-badge-bg:#e0f2fe;
-  --theme-badge-ink:#0369a1;
-  --theme-badge-border:#7dd3fc;
   --theme-clock:#0284c7;
   --theme-chart:#0284c7;
 }
@@ -882,9 +870,6 @@ body[data-shop-type="hardware"]{
   --theme-welcome-title:#78350f;
   --theme-th-bg:#fef3c7;
   --theme-th-ink:#78350f;
-  --theme-badge-bg:#fef3c7;
-  --theme-badge-ink:#92400e;
-  --theme-badge-border:#fcd34d;
   --theme-clock:#d97706;
   --theme-chart:#d97706;
 }
@@ -918,9 +903,6 @@ body[data-shop-type="grocery"]{
   --theme-welcome-title:#14532d;
   --theme-th-bg:#dcfce7;
   --theme-th-ink:#166534;
-  --theme-badge-bg:#dcfce7;
-  --theme-badge-ink:#166534;
-  --theme-badge-border:#86efac;
   --theme-clock:#15803d;
   --theme-chart:#16a34a;
 }
@@ -954,9 +936,6 @@ body[data-shop-type="general"]{
   --theme-welcome-title:#1e1b4b;
   --theme-th-bg:#e0e7ff;
   --theme-th-ink:#312e81;
-  --theme-badge-bg:#e0e7ff;
-  --theme-badge-ink:#3730a3;
-  --theme-badge-border:#a5b4fc;
   --theme-clock:#4f46e5;
   --theme-chart:#4f46e5;
 }
@@ -1064,25 +1043,6 @@ body[data-shop-type] .chart-dot{
 body[data-shop-type] thead th{
   background:var(--theme-th-bg);
   color:var(--theme-th-ink);
-}
-.shop-type-pill{
-  display:inline-flex;
-  align-items:center;
-  gap:6px;
-  padding:4px 11px;
-  border-radius:999px;
-  background:var(--theme-badge-bg,#eef2ff);
-  color:var(--theme-badge-ink,#3730a3);
-  border:1px solid var(--theme-badge-border,#a5b4fc);
-  font-size:12px;
-  font-weight:700;
-  margin-left:10px;
-  cursor:pointer;
-  transition:transform .14s ease,box-shadow .14s ease;
-}
-.shop-type-pill:hover{
-  transform:translateY(-1px);
-  box-shadow:0 3px 10px #00000012;
 }
 .brand-type-emoji{
   font-size:21px;
