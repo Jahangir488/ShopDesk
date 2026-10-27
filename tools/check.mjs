@@ -109,6 +109,35 @@ try {
   ok(`licensing removed, shop types unlocked, Pharmacy batch flows and MedEx catalog (${catalogStats.totalMedicines} medicines) intact`);
 } catch (error) { fail("Pharmacy workflow: " + error.message); }
 
+console.log("Restaurant receipt and shop-type categories");
+try {
+  const server = readFileSync(join(root, "server.mjs"), "utf8");
+  const app = readFileSync(join(root, "app.js"), "utf8");
+  if (!server.includes("SELECT id,name FROM categories WHERE shop_type=?")) fail("state must only return categories for the active shop type");
+  if (!server.includes("INSERT INTO categories(name,shop_type) VALUES(?,?)")) fail("custom categories must be assigned to the active shop type");
+  const start = app.indexOf("function restaurantBillHtml(bill) {");
+  const end = app.indexOf("\nfunction billHtml(bill) {", start);
+  if (start < 0 || end < 0) throw new Error("restaurantBillHtml is missing");
+  const source = app.slice(start, end);
+  const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+  const money = value => `৳${Number(value).toFixed(2)}`;
+  const fmtQty = (qty, unit) => `${qty} ${unit}`;
+  const billNo = id => `B-${String(id).padStart(8, "0")}`;
+  const data = { shopName: "Test Restaurant", workspace: "Dhaka", contactNumber: "01700000000", locale: "en-BD" };
+  const bill = { id: 7, created_at: "2026-10-27 10:00:00", customer: "", phone: "", cashier: "admin", payment: "Cash", payments: [{ method: "Cash", amount: 430 }], paid: 430, due: 0, total: 430, discount: 0, tax_amount: 0, lines: [
+    { name: "Rice + Chicken + Vegetables Package (Portion: 1:1 · Type: Package Counter · Prep: Standard lunch · Kitchen: Plain Rice + Chicken Curry + Mixed Vegetables)", category: "Combo Meals", brand: "Plain Rice + Chicken Curry + Mixed Vegetables", color: "Standard lunch", size: "1:1", unit: "package", qty: 2, price: 180 },
+    { name: "Chicken Fry (Portion: Full · Type: Chicken · Prep: Spicy)", category: "Main Course", material: "Chicken", color: "Spicy", size: "Full", unit: "plate", qty: 1, price: 70 }
+  ] };
+  const html = new Function("data", "esc", "money", "fmtQty", "billNo", "bill", `${source}\nreturn restaurantBillHtml(bill);`)(data, esc, money, fmtQty, billNo, bill);
+  for (const token of ["RESTAURANT RECEIPT", "width:72mm", ">Item</th>", ">Qty</th>", ">Rate</th>", ">Amount</th>", "Includes:", "Rice + Chicken + Vegetables Package</b>", "Thank you for dining with us!"]) {
+    if (!html.includes(token)) fail(`restaurant receipt is missing ${token}`);
+  }
+  for (const token of ["Type: Package Counter", "(Portion: 1:1", "Thank you for shopping with us!"]) {
+    if (html.includes(token)) fail(`restaurant receipt contains unwanted generic content: ${token}`);
+  }
+  ok("shop-type category filtering and dedicated 80mm restaurant receipt");
+} catch (error) { fail("Restaurant receipt/categories: " + error.message); }
+
 console.log("Install files");
 try {
   const required = [

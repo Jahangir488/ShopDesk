@@ -894,6 +894,12 @@
     "Save package": "প্যাকেজ সংরক্ষণ করুন",
     "Create package": "প্যাকেজ তৈরি করুন",
     "＋ Bill / Sell": "＋ বিল / বিক্রি",
+    "Rate": "দর",
+    "Restaurant receipt": "রেস্টুরেন্ট রসিদ",
+    "RESTAURANT RECEIPT": "রেস্টুরেন্ট রসিদ",
+    "Thank you for dining with us!": "আমাদের রেস্টুরেন্টে খাওয়ার জন্য ধন্যবাদ!",
+    "Shows only this shop type's categories. Existing products and sales history are kept.": "শুধু এই দোকানের ধরনের ক্যাটাগরি দেখাবে। বিদ্যমান পণ্য ও বিক্রয়ের হিসাব অপরিবর্তিত থাকবে।",
+    "Only categories for this shop type are shown. Deleting a category moves its products to Other.": "শুধু এই দোকানের ধরনের ক্যাটাগরি দেখানো হচ্ছে। কোনো ক্যাটাগরি মুছলে তার পণ্য Other-এ চলে যাবে।",
     "PHARMACY DESK": "ফার্মেসি ডেস্ক",
     "RESTAURANT DESK": "রেস্টুরেন্ট ডেস্ক",
     "FASHION BOUTIQUE": "ফ্যাশন ও পোশাক",
@@ -903,6 +909,26 @@
     "GENERAL RETAIL": "সাধারণ খুচরা দোকান"
   },
   "patterns": [
+    {
+      "re": "^Portion: (.+)$",
+      "bn": "পোরশন: $1"
+    },
+    {
+      "re": "^Includes: (.+)$",
+      "bn": "যা রয়েছে: $1"
+    },
+    {
+      "re": "^Type: (.+)$",
+      "bn": "ধরন: $1"
+    },
+    {
+      "re": "^Prep: (.+)$",
+      "bn": "প্রস্তুতি: $1"
+    },
+    {
+      "re": "^Note: (.+)$",
+      "bn": "নোট: $1"
+    },
     {
       "re": "^Gross sales · (\\d{4}-\\d{2}-\\d{2}) to (\\d{4}-\\d{2}-\\d{2})$",
       "bn": "মোট বিক্রয় · $1 থেকে $2"

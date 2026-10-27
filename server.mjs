@@ -192,8 +192,11 @@ db.exec(`UPDATE sales
   CREATE INDEX IF NOT EXISTS sales_product_id_idx ON sales(product_id);`);
 db.exec(`CREATE TABLE IF NOT EXISTS categories (
   id INTEGER PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE COLLATE NOCASE
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  shop_type TEXT NOT NULL DEFAULT ''
 )`);
+const categoryColumns = new Set(db.prepare("PRAGMA table_info(categories)").all().map(column => column.name));
+if (!categoryColumns.has("shop_type")) db.exec("ALTER TABLE categories ADD COLUMN shop_type TEXT NOT NULL DEFAULT ''");
 db.exec(`CREATE TABLE IF NOT EXISTS customers (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
@@ -427,9 +430,12 @@ db.exec(`CREATE TABLE IF NOT EXISTS online_orders (
 CREATE INDEX IF NOT EXISTS online_orders_status_date_idx ON online_orders(order_status, date DESC);
 CREATE INDEX IF NOT EXISTS online_orders_phone_idx ON online_orders(customer_phone);`);
 db.exec("INSERT INTO bill_payments(bill_id,date,amount,method) SELECT id,date,total,payment FROM bills WHERE payment<>'Due' AND total>0 AND id NOT IN (SELECT bill_id FROM bill_payments)");
-const seedCategory = name => db.prepare("INSERT OR IGNORE INTO categories(name) VALUES(?)").run(name);
+const seedCategory = (name, shopType) => {
+  db.prepare("INSERT OR IGNORE INTO categories(name,shop_type) VALUES(?,?)").run(name, shopType);
+  db.prepare("UPDATE categories SET shop_type=? WHERE name=? COLLATE NOCASE").run(shopType, name);
+};
 for (const name of ["General merchandise", "Accessories", "Services", "Other"]) {
-  seedCategory(name);
+  seedCategory(name, "general");
 }
 const profileCategories = {
   hardware: ["Hand tools", "Power tools", "Electrical", "Plumbing", "Building materials", "Safety", "Other"],
@@ -440,7 +446,31 @@ const profileCategories = {
   restaurant: ["Starters & Snacks", "Rice & Biryani", "Main Course", "Fast Food & Burgers", "Kebab & Grill", "Desserts & Sweets", "Beverages & Drinks", "Combo Meals", "Raw Ingredients", "Other"],
   general: ["General merchandise", "Accessories", "Services", "Other"]
 };
-const addProfileCategories = type => { for (const name of profileCategories[type] || profileCategories.general) seedCategory(name); };
+const addProfileCategories = type => { for (const name of profileCategories[type] || profileCategories.general) seedCategory(name, type); };
+function ensureCategoryShopTypes() {
+  db.exec(`CREATE TABLE IF NOT EXISTS categories (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    shop_type TEXT NOT NULL DEFAULT ''
+  )`);
+  const columns = new Set(db.prepare("PRAGMA table_info(categories)").all().map(column => column.name));
+  if (!columns.has("shop_type")) db.exec("ALTER TABLE categories ADD COLUMN shop_type TEXT NOT NULL DEFAULT ''");
+  const configuredType = db.prepare("SELECT shop_type FROM settings WHERE id=1").get()?.shop_type || "general";
+  const activeType = profileCategories[configuredType] ? configuredType : "general";
+  const activeNames = new Set(profileCategories[activeType].map(name => name.toLocaleLowerCase()));
+  const knownOwners = new Map();
+  for (const [type, names] of Object.entries(profileCategories)) {
+    for (const name of names) if (!knownOwners.has(name.toLocaleLowerCase())) knownOwners.set(name.toLocaleLowerCase(), type);
+  }
+  for (const category of db.prepare("SELECT id,name,shop_type FROM categories").all()) {
+    if (profileCategories[category.shop_type]) continue;
+    const key = category.name.toLocaleLowerCase();
+    const owner = activeNames.has(key) ? activeType : (knownOwners.get(key) || activeType);
+    db.prepare("UPDATE categories SET shop_type=? WHERE id=?").run(owner, category.id);
+  }
+  addProfileCategories(activeType);
+}
+ensureCategoryShopTypes();
 function upgradeRestoredDatabase() {
   const ensure = (table, name, definition) => {
     const columns = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(column => column.name));
@@ -554,6 +584,7 @@ function upgradeRestoredDatabase() {
   // A backup from an older Shop Desk version may not contain Pharmacy tables.
   // Recreate compatible empty tables and preserve its existing product data.
   ensurePharmacyDetails();
+  ensureCategoryShopTypes();
 }
 
 const mime = {
@@ -664,7 +695,7 @@ function formatPackageItemsSummary(items) {
 function syncFoodPackageProduct(pkgId) {
   const pkg = db.prepare("SELECT * FROM food_packages WHERE id=?").get(Number(pkgId));
   if (!pkg) return null;
-  seedCategory("Combo Meals");
+  seedCategory("Combo Meals", "restaurant");
   let items = [];
   try { items = JSON.parse(pkg.items || "[]"); } catch { items = []; }
   const summary = formatPackageItemsSummary(items) || "Custom Food Package";
@@ -1255,7 +1286,7 @@ function stateFor(user) {
     allowDiscounts: settings ? Boolean(settings.allow_discounts) : true,
     paymentMethods: String(settings?.payment_methods || "Cash,bKash,Nagad,Card,Due").split(",").map(value => value.trim()).filter(Boolean),
     permissions: publicUser(user).permissions,
-    categories: db.prepare("SELECT id,name FROM categories ORDER BY CASE WHEN name='Other' THEN 1 ELSE 0 END, name COLLATE NOCASE").all(),
+    categories: db.prepare("SELECT id,name FROM categories WHERE shop_type=? ORDER BY CASE WHEN name='Other' THEN 1 ELSE 0 END, name COLLATE NOCASE").all(settings?.shop_type || "general"),
     products: (inventory || supplierEditPermission
       ? db.prepare(`SELECT p.*,md.generic_name,md.strength,md.dosage_form,md.manufacturer FROM products p LEFT JOIN medicine_details md ON md.product_id=p.id ORDER BY p.name`).all()
       : (salesPermission || onlineOrdersPermission)
@@ -1840,7 +1871,7 @@ async function handleApi(request, response, url) {
     const name = typeof body.name === "string" ? body.name.trim() : "";
     if (!name || name.length > 80) return json(response, 400, { error: "Category name must be 1 to 80 characters." });
     try {
-      db.prepare("INSERT INTO categories(name) VALUES(?)").run(name);
+      db.prepare("INSERT INTO categories(name,shop_type) VALUES(?,?)").run(name, currentShopType());
     } catch (error) {
       if (String(error.message).includes("UNIQUE")) return json(response, 409, { error: "That category already exists." });
       throw error;
@@ -1852,7 +1883,7 @@ async function handleApi(request, response, url) {
     if (!canManageCategories(user)) return json(response, 403, { error: "Edit-record and inventory access are required to manage categories." });
     const body = await readJson(request);
     const id = Number(categoryMatch[1]);
-    const category = db.prepare("SELECT name FROM categories WHERE id=?").get(id);
+    const category = db.prepare("SELECT name FROM categories WHERE id=? AND shop_type=?").get(id, currentShopType());
     const name = typeof body.name === "string" ? body.name.trim() : "";
     if (!category) return json(response, 404, { error: "Category not found." });
     if (category.name.toLowerCase() === "other") return json(response, 400, { error: "The Other category cannot be renamed." });
@@ -1872,7 +1903,7 @@ async function handleApi(request, response, url) {
   if (categoryMatch && method === "DELETE") {
     if (!canManageCategories(user)) return json(response, 403, { error: "Edit-record and inventory access are required to manage categories." });
     const id = Number(categoryMatch[1]);
-    const category = db.prepare("SELECT name FROM categories WHERE id=?").get(id);
+    const category = db.prepare("SELECT name FROM categories WHERE id=? AND shop_type=?").get(id, currentShopType());
     if (!category) return json(response, 404, { error: "Category not found." });
     if (category.name.toLowerCase() === "other") return json(response, 400, { error: "The Other category cannot be deleted." });
     db.exec("BEGIN IMMEDIATE");
@@ -2067,7 +2098,7 @@ async function handleApi(request, response, url) {
     }
     db.exec("BEGIN IMMEDIATE");
     try {
-      for (const category of new Set(rows.map(item => item.category))) seedCategory(category);
+      for (const category of new Set(rows.map(item => item.category))) seedCategory(category, currentShopType());
       for (const item of rows) {
         if (item.id === null) {
           const created = db.prepare("INSERT INTO products(name,sku,price,cost,qty,min,icon,unit,category,barcode,brand,color,size,material,pack_name,pack_size) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
@@ -3308,7 +3339,7 @@ async function handleApi(request, response, url) {
         ON CONFLICT(id) DO UPDATE SET shop_name=excluded.shop_name,workspace=excluded.workspace,shop_type=excluded.shop_type,
         currency_code=excluded.currency_code,locale=excluded.locale,tax_rate=excluded.tax_rate,tax_mode=excluded.tax_mode,
         require_customer=excluded.require_customer,allow_discounts=excluded.allow_discounts,payment_methods=excluded.payment_methods,contact_number=excluded.contact_number,website=excluded.website,email=excluded.email,facebook_page=excluded.facebook_page,whatsapp_number=excluded.whatsapp_number,contact_address=excluded.contact_address`).run();
-      for (const name of profileCategories.general) seedCategory(name);
+      addProfileCategories("general");
       db.exec("COMMIT");
       return json(response, 200, { ok: true, backup: backupName });
     } catch (error) {
