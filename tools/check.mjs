@@ -164,6 +164,36 @@ try {
   ok("new-medicine blank defaults, generated LEGACY batches, existing-stock validation, and unknown-expiry sale hold present");
 } catch (error) { fail("Pharmacy catalog import: " + error.message); }
 
+console.log("Large inventory rendering and completion feedback");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8");
+  const server = readFileSync(join(root, "server.mjs"), "utf8");
+  const html = readFileSync(join(root, "index.html"), "utf8");
+  if (!server.includes("pharmacyAvailability.get(Number(product.id))") || !server.includes("GROUP BY product_id")) fail("Pharmacy availability must use one grouped query");
+  if (server.includes("available_to_sell: pharmacyAvailableQty(product.id)")) fail("state still runs one Pharmacy availability query per product");
+  if (!app.includes("toast(`Download complete: ${filename}`, 4000)")) fail("generated downloads need a completion message");
+  if (!app.includes("toast(`Upload complete:")) fail("bulk inventory uploads need a completion message");
+  if (!html.includes('id="inventory-pagination"')) fail("inventory pagination markup is missing");
+  const start = app.indexOf("function renderInventoryProducts() {");
+  const end = app.indexOf("\nconst repairStatuses", start);
+  if (start < 0 || end < 0) throw new Error("renderInventoryProducts is missing");
+  const element = (value = "") => ({ value, innerHTML: "", textContent: "", classList: { toggle() {} } });
+  const elements = { "#search": element(), "#products-table": element(), "#products-empty": element(), "#inventory-pagination": element(), "#inventory-summary": element() };
+  const products = Array.from({ length: 22000 }, (_, index) => ({ id: index + 1, name: `Product ${index + 1}`, sku: `SKU-${index + 1}`, barcode: "", unit: "piece", category: "Bulk", brand: "", color: "", size: "", material: "", price: 10, cost: 5, qty: 2, min: 1, icon: "📦" }));
+  const data = { products, shopType: "general", permissions: {} };
+  const api = new Function("$", "data", "signedInUser", "esc", "money", "productSellableQty", `const INVENTORY_PAGE_SIZE = 250; let inventoryPage = 1;\n${app.slice(start, end)}\nreturn { render: renderInventoryProducts, setPage: value => { inventoryPage = value; } };`)(
+    selector => elements[selector], data, { permissions: {} }, String, value => `৳${Number(value)}`, product => Number(product.qty || 0)
+  );
+  api.render();
+  const renderedRows = (elements["#products-table"].innerHTML.match(/<tr>/g) || []).length;
+  if (renderedRows !== 250) fail(`large inventory rendered ${renderedRows} rows instead of 250`);
+  if (!elements["#inventory-pagination"].innerHTML.includes("Page 1 of 88")) fail("large inventory page count is incorrect");
+  if (!elements["#inventory-summary"].innerHTML.includes("22000 products")) fail("inventory summary no longer covers all products");
+  api.setPage(2); api.render();
+  if (!elements["#inventory-pagination"].innerHTML.includes("Showing 251–500 of 22000")) fail("inventory second page did not render the correct range");
+  ok("22,000 products render 250 rows per page; grouped Pharmacy availability and upload/download completion messages present");
+} catch (error) { fail("large inventory rendering: " + error.message); }
+
 console.log("Restaurant receipt and shop-type categories");
 try {
   const server = readFileSync(join(root, "server.mjs"), "utf8");

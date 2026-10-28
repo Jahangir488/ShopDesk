@@ -330,6 +330,9 @@ form input:focus,form select:focus{border-color:var(--ink);box-shadow:0 0 0 3px 
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important}}
 
 /* Persistent totals below inventory and sales lists */
+.inventory-pagination{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;margin:-8px 0 16px;color:var(--muted);font-size:13px;text-align:center}
+.inventory-pagination .button{min-height:36px;padding:7px 12px}
+.inventory-pagination span{min-width:min(100%,260px)}
 .list-summary{margin:0 -18px;padding:14px 18px 16px;border-top:1px solid var(--line);background:#f7f8f9}
 .list-summary-heading{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:10px}
 .list-summary-heading b{font:700 15px/1.2 var(--display);color:var(--ink)}

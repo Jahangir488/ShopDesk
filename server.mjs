@@ -1257,6 +1257,12 @@ function stateFor(user) {
   const supplierEditPermission = can(user, "supplier_purchases");
   const foodPackagesPermission = can(user, "food_packages");
   if (settings?.shop_type === "restaurant") seedStarterFoodPackages(false);
+  const pharmacyAvailability = settings?.shop_type === "pharmacy"
+    ? new Map(db.prepare(`SELECT product_id,SUM(MAX(0,quantity_remaining-quantity_quarantined)) AS qty
+        FROM medicine_batches
+        WHERE expiry_date<>'' AND expiry_date>=? AND quantity_remaining>quantity_quarantined
+        GROUP BY product_id`).all(today()).map(row => [Number(row.product_id), Number(row.qty || 0)]))
+    : null;
   return {
     shopName: settings?.shop_name || "Bolts & Boards",
     workspace: settings?.workspace || "Uttara, Dhaka",
@@ -1293,7 +1299,7 @@ function stateFor(user) {
         ? db.prepare(`SELECT p.id,p.name,p.sku,p.barcode,p.price,p.cost,p.qty,p.min,p.icon,p.unit,p.pack_name,p.pack_size,p.category,p.brand,p.color,p.size,p.material,
             md.generic_name,md.strength,md.dosage_form,md.manufacturer
           FROM products p LEFT JOIN medicine_details md ON md.product_id=p.id ORDER BY p.name`).all()
-        : []).map(product => settings?.shop_type === "pharmacy" ? { ...product, available_to_sell: pharmacyAvailableQty(product.id) } : product),
+        : []).map(product => pharmacyAvailability ? { ...product, available_to_sell: pharmacyAvailability.get(Number(product.id)) || 0 } : product),
     dues: salesPermission ? duesSummary() : null,
     sales: salesPermission ? db.prepare(`SELECT s.*,
       b.customer AS bill_customer, b.phone AS bill_phone, b.total AS bill_total,

@@ -228,12 +228,12 @@ async function updateState(path, body, method = "POST") {
   data = await api(path, { method, body: JSON.stringify(body) });
   render();
 }
-function toast(message) {
+function toast(message, duration = 3000) {
   const element = $("#toast");
   element.textContent = tt(message);
   element.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => element.classList.remove("show"), 3000);
+  toastTimer = setTimeout(() => element.classList.remove("show"), duration);
 }
 function showAuth() {
   signedInUser = null;
@@ -644,15 +644,28 @@ document.addEventListener("click", event => {
     field.querySelector("input")?.setAttribute("aria-expanded", "false");
   });
 });
+const INVENTORY_PAGE_SIZE = 250;
+let inventoryPage = 1;
 function renderInventoryProducts() {
   const query = $("#search").value.trim().toLocaleLowerCase();
   const products = data.products.filter(item => [item.name, item.sku, item.barcode, item.unit, item.category, item.brand, item.color, item.size, item.material, item.generic_name, item.strength, item.dosage_form, item.manufacturer].some(value => String(value || "").toLocaleLowerCase().includes(query)));
+  const pageCount = Math.max(1, Math.ceil(products.length / INVENTORY_PAGE_SIZE));
+  inventoryPage = Math.min(Math.max(1, inventoryPage), pageCount);
+  const pageStart = (inventoryPage - 1) * INVENTORY_PAGE_SIZE;
+  const visibleProducts = products.slice(pageStart, pageStart + INVENTORY_PAGE_SIZE);
   const canEditItems = signedInUser?.permissions?.records && data.permissions?.inventory;
   const canDeleteItems = canEditItems;
   const sizeFieldLabel = data.shopType === "restaurant" ? "Portion" : data.shopType === "mobile" ? "Storage" : data.shopType === "hardware" ? "Spec" : data.shopType === "grocery" ? "Pack" : "Size";
-  $("#products-table").innerHTML = products.map(item => { const details = (data.shopType === "pharmacy" ? [["Generic",item.generic_name],["Strength",item.strength],["Form",item.dosage_form],["Maker",item.manufacturer]] : data.shopType === "restaurant" ? [["Portion",item.size],["Type",item.material],["Prep",item.color],["Kitchen",item.brand]] : [["Brand", item.brand], ["Color", item.color], [sizeFieldLabel, item.size], ["Material", item.material]]).filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`).join(" · "); const medexAction = data.shopType === "pharmacy" ? `<button class="user-action" type="button" data-action="medex-product" data-id="${item.id}" data-name="${esc(item.name)}">MedEx info</button>` : ""; return `<tr><td class="product-cell">${esc(item.icon || "📦")} &nbsp;${esc(item.name)}${details ? `<small class="form-hint">${esc(details)}</small>` : ""}</td><td>${esc(item.category || "Other")}</td><td class="sku">${esc(item.sku)}</td><td class="sku">${esc(item.barcode || "—")}</td><td>${esc(item.unit || "piece")}</td><td>${money(item.price)}</td><td class="qty">${data.shopType === "pharmacy" ? `${productSellableQty(item)} sellable / ${Number(item.qty||0)} total` : `${item.qty} ${esc(item.unit || "piece")}`}</td><td class="stock-value" title="${item.qty} × ${money(item.price)} per unit"><b>${money(Number(item.qty) * Number(item.price))}</b></td><td><span class="status ${productSellableQty(item) === 0 ? "out" : productSellableQty(item) <= item.min ? "low" : ""}">${productSellableQty(item) === 0 ? (data.shopType === "pharmacy" && Number(item.qty)>0 ? "No safe-to-sell stock" : "Out of stock") : productSellableQty(item) <= item.min ? "Low stock" : "In stock"}</span></td><td>${medexAction}${canEditItems ? `<button class="user-action" data-action="rename-product" data-id="${item.id}" data-name="${esc(item.name)}" data-unit="${esc(item.unit || "piece")}" data-category="${esc(item.category || "Other")}">Edit item</button>` : ""}${canDeleteItems ? `<button class="user-action danger" data-action="delete-product" data-id="${item.id}" data-name="${esc(productLabel(item))}" data-qty="${item.qty}" data-unit="${esc(item.unit || "piece")}">Delete</button>` : ""}</td></tr>`; }).join("");
+  $("#products-table").innerHTML = visibleProducts.map(item => { const details = (data.shopType === "pharmacy" ? [["Generic",item.generic_name],["Strength",item.strength],["Form",item.dosage_form],["Maker",item.manufacturer]] : data.shopType === "restaurant" ? [["Portion",item.size],["Type",item.material],["Prep",item.color],["Kitchen",item.brand]] : [["Brand", item.brand], ["Color", item.color], [sizeFieldLabel, item.size], ["Material", item.material]]).filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`).join(" · "); const medexAction = data.shopType === "pharmacy" ? `<button class="user-action" type="button" data-action="medex-product" data-id="${item.id}" data-name="${esc(item.name)}">MedEx info</button>` : ""; return `<tr><td class="product-cell">${esc(item.icon || "📦")} &nbsp;${esc(item.name)}${details ? `<small class="form-hint">${esc(details)}</small>` : ""}</td><td>${esc(item.category || "Other")}</td><td class="sku">${esc(item.sku)}</td><td class="sku">${esc(item.barcode || "—")}</td><td>${esc(item.unit || "piece")}</td><td>${money(item.price)}</td><td class="qty">${data.shopType === "pharmacy" ? `${productSellableQty(item)} sellable / ${Number(item.qty||0)} total` : `${item.qty} ${esc(item.unit || "piece")}`}</td><td class="stock-value" title="${item.qty} × ${money(item.price)} per unit"><b>${money(Number(item.qty) * Number(item.price))}</b></td><td><span class="status ${productSellableQty(item) === 0 ? "out" : productSellableQty(item) <= item.min ? "low" : ""}">${productSellableQty(item) === 0 ? (data.shopType === "pharmacy" && Number(item.qty)>0 ? "No safe-to-sell stock" : "Out of stock") : productSellableQty(item) <= item.min ? "Low stock" : "In stock"}</span></td><td>${medexAction}${canEditItems ? `<button class="user-action" data-action="rename-product" data-id="${item.id}" data-name="${esc(item.name)}" data-unit="${esc(item.unit || "piece")}" data-category="${esc(item.category || "Other")}">Edit item</button>` : ""}${canDeleteItems ? `<button class="user-action danger" data-action="delete-product" data-id="${item.id}" data-name="${esc(productLabel(item))}" data-qty="${item.qty}" data-unit="${esc(item.unit || "piece")}">Delete</button>` : ""}</td></tr>`; }).join("");
   $("#products-empty").textContent = data.products.length ? "No inventory items match your search." : "No products yet. Add your first item to get started.";
   $("#products-empty").classList.toggle("hidden", products.length > 0);
+  const pagination = $("#inventory-pagination");
+  if (pagination) {
+    const showingStart = products.length ? pageStart + 1 : 0;
+    const showingEnd = pageStart + visibleProducts.length;
+    pagination.classList.toggle("hidden", pageCount <= 1);
+    pagination.innerHTML = pageCount <= 1 ? "" : `<button class="button secondary" type="button" data-inventory-page="${inventoryPage - 1}" ${inventoryPage === 1 ? "disabled" : ""}>← Previous</button><span>Page ${inventoryPage} of ${pageCount} · Showing ${showingStart}–${showingEnd} of ${products.length}</span><button class="button secondary" type="button" data-inventory-page="${inventoryPage + 1}" ${inventoryPage === pageCount ? "disabled" : ""}>Next →</button>`;
+  }
   const cost = products.reduce((sum, item) => sum + Number(item.cost || 0) * Number(item.qty || 0), 0);
   const retail = products.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.qty || 0), 0);
   const low = products.filter(item => Number(item.qty || 0) <= Number(item.min || 0)).length;
@@ -756,7 +769,13 @@ document.querySelector("#repairs-table")?.addEventListener("click", async event 
     if (remove) remove.closest("[data-part-row]").remove();
   };
 });
-$("#search").addEventListener("input", renderInventoryProducts);
+$("#inventory-pagination").onclick = event => {
+  const button = event.target.closest("button[data-inventory-page]");
+  if (!button || button.disabled) return;
+  inventoryPage = Number(button.dataset.inventoryPage) || 1;
+  renderInventoryProducts();
+};
+$("#search").addEventListener("input", () => { inventoryPage = 1; renderInventoryProducts(); });
 
 const clothSizes = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "28", "30", "32", "34", "36", "38", "40", "Free Size"];
 const clothColors = ["Black", "White", "Navy Blue", "Maroon", "Olive Green", "Sky Blue", "Pink", "Grey", "Mustard", "Beige"];
@@ -1401,7 +1420,6 @@ function downloadOnlineOrdersExcel() {
   }
   const csv = "﻿" + rows.map(row => row.map(val => csvCell(val)).join(",")).join("\r\n");
   downloadFile(`online-orders-${dateKey(new Date())}.csv`, csv);
-  toast("Online orders downloaded");
 }
 
 document.querySelector("#online-order-search")?.addEventListener("input", renderOnlineOrders);
@@ -1866,6 +1884,7 @@ function downloadFile(filename, content, type = "text/csv;charset=utf-8") {
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 30000);
+  toast(`Download complete: ${filename}`, 4000);
 }
 function parseCsv(text) {
   const rows = [];
@@ -2319,7 +2338,6 @@ $("#download-report").onclick = () => {
     return '"' + cell.split('"').join('""') + '"';
   }).join(",")).join("\r\n");
   downloadFile(`shop-report-${range.start}-to-${range.end}.csv`, csv);
-  toast("Excel-compatible report downloaded");
 };
 $("#print-report").onclick = () => {
   const permissions = data.permissions || {}, range = reportRange();
@@ -2352,7 +2370,6 @@ $("#download-stock-watch").onclick = () => {
     return '"' + cell.split('"').join('""') + '"';
   }).join(",")).join("\r\n");
   downloadFile(`stock-watch-${dateKey(new Date())}.csv`, csv);
-  toast("Stock watch downloaded");
 };
 // ---- Team access: owner, administrators and staff, each with powers that can be given or taken away ----
 const CAP_LABELS = [["inventory", "View and add inventory"], ["sales", "View and record sales and bills"], ["expenses", "View and add expenses"], ["food_packages", "Create and manage custom food packages (Food & restaurant)"], ["online_orders", "Manage online orders"], ["delete_online_orders", "Delete online orders"], ["server_load", "View server load in the top bar"],
@@ -2555,7 +2572,6 @@ $("#download-inventory-template").onclick = () => {
   const rows = [config.headers, ...data.products.map(item => config.toRow(item))];
   const csv = "\uFEFF" + rows.map(row => row.map(csvCell).join(",")).join("\r\n");
   downloadFile(config.filename, csv);
-  toast(`Excel template downloaded (${config.filename})`);
 };
 $("#bulk-inventory-file").onchange = async event => {
   const file = event.target.files?.[0];
@@ -2629,8 +2645,9 @@ $("#bulk-inventory-file").onchange = async event => {
     }
     if (!confirm(summary)) return;
     data = await api("/api/inventory/bulk", { method: "POST", body: JSON.stringify({ rows }) });
+    inventoryPage = 1;
+    toast(`Upload complete: ${additions} added, ${updates} updated${legacyStockCount ? `; ${legacyStockCount} legacy stock row(s) need expiry verification before sale` : ""}`, legacyStockCount ? 7000 : 4000);
     render();
-    toast(`Inventory updated: ${updates} updated, ${additions} added${legacyStockCount ? `; ${legacyStockCount} legacy stock row(s) need expiry verification before sale` : ""}`);
   } catch (error) {
     toast(error.message);
   } finally {
@@ -3073,7 +3090,6 @@ $("#inv-download").onclick = () => {
   const rows = [["Product", "SKU", "Category", "Brand", "Color", "Size", "Material", "Unit", "Quantity", "Minimum", "Selling price", ...(hasCost ? ["Purchase cost", "Stock value (cost)"] : [])],
     ...items.map(p => [p.name, p.sku, p.category || "Other", p.brand || "", p.color || "", p.size || "", p.material || "", p.unit || "piece", p.qty, p.min, p.price, ...(hasCost ? [p.cost, p.cost * p.qty] : [])])];
   downloadFile(`inventory-${today10()}.csv`, "\uFEFF" + rows.map(r => r.map(csvCell).join(",")).join("\r\n"));
-  toast(`${items.length} products downloaded`);
 };
 $("#inv-print").onclick = () => {
   const items = inventoryRows(), hasCost = items.some(p => p.cost !== undefined);

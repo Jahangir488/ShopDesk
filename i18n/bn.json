@@ -30,6 +30,8 @@
     "Edit": "সম্পাদনা",
     "Back": "ফিরে যান",
     "Next": "পরবর্তী",
+    "← Previous": "← আগের",
+    "Next →": "পরবর্তী →",
     "Search": "খুঁজুন",
     "Print": "প্রিন্ট",
     "Download": "ডাউনলোড",
@@ -965,6 +967,22 @@
     "GENERAL RETAIL": "সাধারণ খুচরা দোকান"
   },
   "patterns": [
+    {
+      "re": "^Page (\\d+) of (\\d+) · Showing (\\d+)–(\\d+) of (\\d+)$",
+      "bn": "পৃষ্ঠা $1 / $2 · $5-এর মধ্যে $3–$4 দেখানো হচ্ছে"
+    },
+    {
+      "re": "^Download complete: (.+)$",
+      "bn": "ডাউনলোড সম্পন্ন: $1"
+    },
+    {
+      "re": "^Upload complete: (\\d+) added, (\\d+) updated; (\\d+) legacy stock row\\(s\\) need expiry verification before sale$",
+      "bn": "আপলোড সম্পন্ন: $1 যোগ হয়েছে, $2 হালনাগাদ হয়েছে; বিক্রির আগে $3 লেগ্যাসি স্টক সারির মেয়াদ যাচাই প্রয়োজন"
+    },
+    {
+      "re": "^Upload complete: (\\d+) added, (\\d+) updated$",
+      "bn": "আপলোড সম্পন্ন: $1 যোগ হয়েছে, $2 হালনাগাদ হয়েছে"
+    },
     {
       "re": "^Gross (.+) · Returns (.+)$",
       "bn": "মোট বিক্রয় $1 · ফেরত $2"
