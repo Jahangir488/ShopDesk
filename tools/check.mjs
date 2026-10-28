@@ -164,6 +164,23 @@ try {
   ok("new-medicine blank defaults, generated LEGACY batches, existing-stock validation, and unknown-expiry sale hold present");
 } catch (error) { fail("Pharmacy catalog import: " + error.message); }
 
+console.log("Pharmacy Online Sales batch safety");
+try {
+  const server = readFileSync(join(root, "server.mjs"), "utf8");
+  if (server.includes("!pharmacyMode() && (user.id === ownerId()") || server.includes("Online-order stock handling is not enabled for Pharmacy yet")) fail("Pharmacy Online Orders permission is disabled");
+  if (server.includes("Online-order returns are unavailable for Pharmacy")) fail("Pharmacy online returns are still disabled");
+  for (const token of [
+    "function deductOnlineOrderStock(",
+    "function restoreOnlineOrderStock(",
+    "function moveOnlineOrderAllocationsToSale(",
+    "allocatePharmacyBatchStock(product.id, Number(line.qty), onlineOrderAllocationId(order.id, lineIndex))",
+    "quarantinePharmacyReturn(linkedSale?.id || onlineOrderAllocationId(id, lineIndex)",
+    "releasePharmacyBatchStock(allocationId, quantity, product, actor",
+    "Use the Online Orders return action so returned medicines are quarantined"
+  ]) if (!server.includes(token)) fail(`Pharmacy online-order batch safeguard is missing: ${token}`);
+  ok("Pharmacy Online Orders stay enabled with FEFO allocation, bill transfer, cancellation release, and quarantined returns");
+} catch (error) { fail("Pharmacy Online Sales: " + error.message); }
+
 console.log("Large inventory rendering and completion feedback");
 try {
   const app = readFileSync(join(root, "app.js"), "utf8");

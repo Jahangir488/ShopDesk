@@ -873,14 +873,99 @@ function allocatePharmacyBatchStock(productId, quantity, saleId) {
   if (remaining > 0.000001) throw httpError(409,"Available unexpired medicine stock changed. Refresh the bill and try again.");
 }
 
-function quarantinePharmacyReturn(saleId, quantity, returnId, product, actor) {
+function onlineOrderAllocationId(orderId, lineIndex) {
+  // Temporary allocation keys are negative and line-specific; real Sales IDs are positive.
+  return -(Number(orderId) * 100 + Number(lineIndex) + 1);
+}
+
+function pharmacyAllocationReturnedQty(saleId, batchId, onlineOrderId = null, orderLineIndex = null) {
+  return Number(db.prepare(`SELECT COALESCE(SUM(mbr.quantity),0) AS qty
+    FROM medicine_batch_returns mbr JOIN sales_returns sr ON sr.id=mbr.return_id
+    WHERE mbr.batch_id=? AND (sr.sale_id=? OR (sr.online_order_id=? AND sr.order_line_index=?))`)
+    .get(Number(batchId), Number(saleId), onlineOrderId === null ? -1 : Number(onlineOrderId), orderLineIndex === null ? -1 : Number(orderLineIndex)).qty || 0);
+}
+
+function releasePharmacyBatchStock(saleId, quantity, product, actor, onlineOrderId = null, orderLineIndex = null) {
   let remaining = Number(quantity);
   const allocations = db.prepare("SELECT batch_id,quantity FROM medicine_batch_sales WHERE sale_id=? ORDER BY batch_id").all(Number(saleId));
   for (const allocation of allocations) {
     if (remaining <= 0.000001) break;
-    const already = Number(db.prepare(`SELECT COALESCE(SUM(mbr.quantity),0) AS qty
-      FROM medicine_batch_returns mbr JOIN sales_returns sr ON sr.id=mbr.return_id
-      WHERE sr.sale_id=? AND mbr.batch_id=?`).get(Number(saleId),Number(allocation.batch_id)).qty || 0);
+    const alreadyReturned = pharmacyAllocationReturnedQty(saleId, allocation.batch_id, onlineOrderId, orderLineIndex);
+    const eligible = Math.max(0, Number(allocation.quantity) - alreadyReturned);
+    const take = Math.min(eligible, remaining);
+    if (take <= 0) continue;
+    db.prepare("UPDATE medicine_batches SET quantity_remaining=quantity_remaining+? WHERE id=?").run(take, allocation.batch_id);
+    remaining = Math.max(0, Number((remaining - take).toFixed(6)));
+  }
+  if (remaining > 0.000001) {
+    // Orders created before Pharmacy mode have no original batch allocation. Keep
+    // restored stock unsellable until its batch and expiry are verified.
+    const batchNumber = `ORDER-RESTORE-${Math.abs(Number(saleId))}`;
+    const existing = db.prepare("SELECT id FROM medicine_batches WHERE product_id=? AND batch_number=? COLLATE NOCASE").get(product.id, batchNumber);
+    if (existing) db.prepare("UPDATE medicine_batches SET quantity_received=quantity_received+?,quantity_remaining=quantity_remaining+? WHERE id=?").run(remaining, remaining, existing.id);
+    else db.prepare(`INSERT INTO medicine_batches
+      (product_id,batch_number,expiry_date,quantity_received,quantity_remaining,quantity_quarantined,unit_cost,received_date,created_by)
+      VALUES(?,?, '',?,?,0,?,?,?)`).run(product.id, batchNumber, remaining, remaining, Number(product.cost || 0), today(), actor || "");
+  }
+}
+
+function onlineOrderAllocationSaleId(order, lineIndex) {
+  if (order.bill_id) {
+    const linkedSale = db.prepare("SELECT id FROM sales WHERE bill_id=? ORDER BY id LIMIT 1 OFFSET ?").get(Number(order.bill_id), Number(lineIndex));
+    if (linkedSale) return Number(linkedSale.id);
+  }
+  return onlineOrderAllocationId(order.id, lineIndex);
+}
+
+function deductOnlineOrderStock(lines, order, actor, note) {
+  const pharmacy = pharmacyMode();
+  for (const [lineIndex, line] of lines.entries()) {
+    const product = db.prepare("SELECT * FROM products WHERE id=?").get(line.productId);
+    if (!product) throw httpError(409, `The inventory item "${line.name}" no longer exists.`);
+    const batchAvailable = pharmacy ? pharmacyAvailableQty(product.id) : Number(product.qty);
+    const available = pharmacy ? Math.min(Number(product.qty), batchAvailable) : Number(product.qty);
+    if (available + 0.000001 < Number(line.qty)) {
+      throw httpError(409, `Not enough ${pharmacy ? "unexpired, non-quarantined " : ""}stock for "${product.name}". Available: ${Math.max(0, available)} ${product.unit || "piece"}, requested: ${line.qty}.`);
+    }
+    const after = Number((Number(product.qty) - Number(line.qty)).toFixed(6));
+    db.prepare("UPDATE products SET qty=? WHERE id=?").run(after, product.id);
+    recordStockMovement(product, "online order", -Number(line.qty), after, actor, order.order_no, note);
+    if (pharmacy) allocatePharmacyBatchStock(product.id, Number(line.qty), onlineOrderAllocationId(order.id, lineIndex));
+  }
+}
+
+function restoreOnlineOrderStock(lines, order, actor, kind, note, restoreQuantities = null) {
+  const pharmacy = pharmacyMode();
+  for (const [lineIndex, line] of lines.entries()) {
+    const quantity = Number(restoreQuantities ? restoreQuantities[lineIndex] || 0 : line.qty || 0);
+    if (quantity <= 0) continue;
+    const product = db.prepare("SELECT * FROM products WHERE id=?").get(line.productId);
+    if (!product) continue;
+    const after = Number((Number(product.qty) + quantity).toFixed(6));
+    db.prepare("UPDATE products SET qty=? WHERE id=?").run(after, product.id);
+    recordStockMovement(product, kind, quantity, after, actor, order.order_no, note);
+    if (pharmacy) {
+      const allocationId = onlineOrderAllocationSaleId(order, lineIndex);
+      releasePharmacyBatchStock(allocationId, quantity, product, actor, Number(order.id), lineIndex);
+      db.prepare("DELETE FROM medicine_batch_sales WHERE sale_id=?").run(allocationId);
+    }
+  }
+}
+
+function moveOnlineOrderAllocationsToSale(orderId, lineIndex, saleId) {
+  if (!pharmacyMode()) return;
+  const temporaryId = onlineOrderAllocationId(orderId, lineIndex);
+  db.prepare(`INSERT INTO medicine_batch_sales(sale_id,batch_id,quantity)
+    SELECT ?,batch_id,quantity FROM medicine_batch_sales WHERE sale_id=?`).run(Number(saleId), temporaryId);
+  db.prepare("DELETE FROM medicine_batch_sales WHERE sale_id=?").run(temporaryId);
+}
+
+function quarantinePharmacyReturn(saleId, quantity, returnId, product, actor, onlineOrderId = null, orderLineIndex = null) {
+  let remaining = Number(quantity);
+  const allocations = db.prepare("SELECT batch_id,quantity FROM medicine_batch_sales WHERE sale_id=? ORDER BY batch_id").all(Number(saleId));
+  for (const allocation of allocations) {
+    if (remaining <= 0.000001) break;
+    const already = pharmacyAllocationReturnedQty(saleId, allocation.batch_id, onlineOrderId, orderLineIndex);
     const eligible = Math.max(0,Number(allocation.quantity)-already);
     const take = Math.min(eligible,remaining);
     if (take <= 0) continue;
@@ -1368,7 +1453,7 @@ const can = (user, permission) => permission === "repair_records"
   : permission === "food_packages"
   ? user.id === ownerId() || user.role === "admin" || Boolean(user.can_food_packages)
   : permission === "online_orders"
-  ? !pharmacyMode() && (user.id === ownerId() || Boolean(user.can_online_orders))
+  ? user.id === ownerId() || Boolean(user.can_online_orders)
   : permission === "delete_online_orders"
   ? user.id === ownerId() || Boolean(user.can_delete_online_orders)
   : permission === "server_load"
@@ -1570,9 +1655,6 @@ async function handleApi(request, response, url) {
   const user = currentUser(request);
   response.on("finish", () => { if (user && method !== "GET" && response.statusCode < 400) logActivity(user, method, route); });
   if (!user) return json(response, 401, { error: "Please sign in." });
-  if (pharmacyMode() && route.startsWith("/api/online-orders") && method !== "GET") {
-    return json(response,403,{error:"Online-order stock handling is not enabled for Pharmacy yet. Use New bill so all dispensed medicines are linked to their batch and expiry date."});
-  }
   if (["/api/profile/email-verification", "/api/profile/email-verification/confirm", "/api/recovery-code"].includes(route) && user.role !== "admin" && user.id !== ownerId()) {
     return json(response, 403, { error: "Only Jahangir and administrators can set up or change account recovery options." });
   }
@@ -2905,8 +2987,9 @@ async function handleApi(request, response, url) {
         if (!product) throw httpError(404, `Product ID #${productId} was not found in inventory.`);
         if (!validQty(qty, product.unit, 0.001) || qty <= 0) throw httpError(400, `Enter a valid quantity for item "${product.name}".`);
         if (!validAmount(price)) throw httpError(400, `Enter a valid price for item "${product.name}".`);
-        if (shouldDeductStock && product.qty < qty) {
-          throw httpError(409, `Not enough stock for "${product.name}" (${[product.brand, product.size, product.color].filter(Boolean).join(" · ")}). Available in stock: ${product.qty} ${product.unit || 'piece'}, Requested: ${qty}.`);
+        const availableStock = pharmacyMode() ? Math.min(Number(product.qty), pharmacyAvailableQty(product.id)) : Number(product.qty);
+        if (shouldDeductStock && availableStock + 0.000001 < qty) {
+          throw httpError(409, `Not enough ${pharmacyMode() ? "unexpired, non-quarantined " : ""}stock for "${product.name}" (${[product.brand, product.size, product.color].filter(Boolean).join(" · ")}). Available: ${Math.max(0, availableStock)} ${product.unit || "piece"}, requested: ${qty}.`);
         }
         const lineTotal = Math.round(qty * price * 100) / 100;
         subtotal += lineTotal;
@@ -2938,14 +3021,7 @@ async function handleApi(request, response, url) {
       const orderNo = "ORD-" + String(nextId).padStart(6, "0");
 
       const stockDeducted = shouldDeductStock ? 1 : 0;
-      if (shouldDeductStock) {
-        for (const line of lines) {
-          const product = db.prepare("SELECT * FROM products WHERE id=?").get(line.productId);
-          const after = Number((product.qty - line.qty).toFixed(6));
-          db.prepare("UPDATE products SET qty=? WHERE id=?").run(after, line.productId);
-          recordStockMovement(product, "online order", -line.qty, after, user.username, orderNo, `Online order placed for ${customerName}`);
-        }
-      }
+      if (shouldDeductStock) deductOnlineOrderStock(lines, { id: nextId, order_no: orderNo }, user.username, `Online order placed for ${customerName}`);
 
       const result = db.prepare(`INSERT INTO online_orders(
         order_no, date, customer_name, customer_phone, shipping_address, city_area, courier, tracking_id,
@@ -2991,6 +3067,7 @@ async function handleApi(request, response, url) {
         discountLeft = Math.round((discountLeft - share) * 100) / 100;
         const saleId = Number(db.prepare("INSERT INTO sales(date,product,qty,total,payment,cost,unit,product_id,bill_id,tax_amount) VALUES(?,?,?,?,?,?,?,?,?,0)")
           .run(order.date, [line.name, line.brand, line.size, line.color, line.material].filter(Boolean).join(" · "), line.qty, gross - share, paid > 0 ? order.payment_method : "Due", Number(line.cost || 0) * Number(line.qty), line.unit || "piece", line.productId || null, billId).lastInsertRowid);
+        moveOnlineOrderAllocationsToSale(id, index, saleId);
         db.prepare("UPDATE sales_returns SET bill_id=?,sale_id=? WHERE online_order_id=? AND order_line_index=? AND bill_id IS NULL")
           .run(billId, saleId, id, index);
       });
@@ -3013,7 +3090,6 @@ async function handleApi(request, response, url) {
       const order = db.prepare("SELECT * FROM online_orders WHERE id=?").get(id);
       if (!order) throw httpError(404, "Online order not found.");
       const recordingLegacyReturnedOrder = order.order_status === "Returned" && !order.stock_deducted;
-      if (pharmacyMode()) throw httpError(403, "Online-order returns are unavailable for Pharmacy until batch-aware returns are supported. Process pharmacy returns through the Sales history workflow.");
       if (order.order_status !== "Delivered" && !recordingLegacyReturnedOrder) throw httpError(409, "Only delivered orders can be returned.");
       if (!order.stock_deducted && !recordingLegacyReturnedOrder) throw httpError(409, "This order has no deducted inventory to return. Confirm and deliver it before recording a return.");
       const lines = JSON.parse(order.lines || "[]"), seen = new Set(), selected = [];
@@ -3057,8 +3133,11 @@ async function handleApi(request, response, url) {
           db.prepare("UPDATE products SET qty=? WHERE id=?").run(after, currentProduct.id);
           recordStockMovement(currentProduct, "online order return", qty, after, user.username, order.order_no, reason, Number(line.cost || currentProduct.cost || 0));
         }
-        db.prepare(`INSERT INTO sales_returns(date,product,qty,total,payment,cost,unit,product_id,reason,sale_id,bill_id,online_order_id,order_line_index,refund_amount,refund_method,actor)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(today(), [line.name,line.brand,line.size,line.color,line.material].filter(Boolean).join(" · "), qty, returnedValue, lineRefund > 0 ? refundMethod : "Credit adjustment", Number(line.cost || 0) * qty, line.unit || product.unit || "piece", product.id, reason, linkedSale?.id || null, order.bill_id || null, id, lineIndex, lineRefund, lineRefund > 0 ? refundMethod : "", user.username);
+        const returnId = Number(db.prepare(`INSERT INTO sales_returns(date,product,qty,total,payment,cost,unit,product_id,reason,sale_id,bill_id,online_order_id,order_line_index,refund_amount,refund_method,actor)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(today(), [line.name,line.brand,line.size,line.color,line.material].filter(Boolean).join(" · "), qty, returnedValue, lineRefund > 0 ? refundMethod : "Credit adjustment", Number(line.cost || 0) * qty, line.unit || product.unit || "piece", product.id, reason, linkedSale?.id || null, order.bill_id || null, id, lineIndex, lineRefund, lineRefund > 0 ? refundMethod : "", user.username).lastInsertRowid);
+        if (pharmacyMode() && order.stock_deducted) {
+          quarantinePharmacyReturn(linkedSale?.id || onlineOrderAllocationId(id, lineIndex), qty, returnId, product, user.username, id, lineIndex);
+        }
       }
       const returnedQty = Number(db.prepare("SELECT COALESCE(SUM(qty),0) qty FROM sales_returns WHERE online_order_id=?").get(id).qty);
       const allQty = lines.reduce((sum, item) => sum + Number(item.qty || 0), 0);
@@ -3081,6 +3160,7 @@ async function handleApi(request, response, url) {
     if (priorReturns && (Array.isArray(body.items) || ["discount", "deliveryCharge", "advancePaid"].some(key => body[key] !== undefined) || (body.orderStatus !== undefined && body.orderStatus !== existing.order_status))) return json(response, 409, { error: "This order has recorded returns. Its items, amounts, and status are locked to preserve the return history." });
     if (existing.bill_id && (Array.isArray(body.items) || ["customerName", "customerPhone", "discount", "deliveryCharge", "advancePaid"].some(key => body[key] !== undefined))) return json(response, 409, { error: "This order already has a linked Sales bill. Its customer, items, and amounts can no longer be edited." });
     if (existing.bill_id && body.orderStatus !== undefined && !["Confirmed", "Processing", "Shipped", "Delivered", "Returned"].includes(String(body.orderStatus))) return json(response, 409, { error: "This order has a linked Sales bill. Cancel or reverse it through its return workflow." });
+    if (pharmacyMode() && existing.stock_deducted && body.orderStatus === "Returned" && existing.order_status !== "Returned") return json(response, 409, { error: "Use the Online Orders return action so returned medicines are quarantined and traced to their original batches." });
 
     db.exec("BEGIN IMMEDIATE");
     try {
@@ -3112,16 +3192,8 @@ async function handleApi(request, response, url) {
 
       if (Array.isArray(body.items)) {
         if (!body.items.length) throw httpError(400, "Order must have at least one product item.");
-        if (existing.stock_deducted) {
-          for (const line of prevLines) {
-            const product = db.prepare("SELECT * FROM products WHERE id=?").get(line.productId);
-            if (product) {
-              const after = Number((product.qty + line.qty).toFixed(6));
-              db.prepare("UPDATE products SET qty=? WHERE id=?").run(after, line.productId);
-              recordStockMovement(product, "online order item edit (restore)", line.qty, after, user.username, existing.order_no, "Stock restored while editing online order items.");
-            }
-          }
-        }
+        if (body.items.length > 50) throw httpError(400, "An order can contain at most 50 items.");
+        if (existing.stock_deducted) restoreOnlineOrderStock(prevLines, existing, user.username, "online order item edit (restore)", "Stock restored while editing online order items.");
         lines = [];
         subtotal = 0;
         for (const item of body.items) {
@@ -3161,40 +3233,17 @@ async function handleApi(request, response, url) {
 
       if (Array.isArray(body.items)) {
         if (targetDeductStock) {
-          for (const line of lines) {
-            const product = db.prepare("SELECT * FROM products WHERE id=?").get(line.productId);
-            if (!product || product.qty < line.qty) {
-              throw httpError(409, `Not enough stock for "${line.name}" (${[line.brand, line.size, line.color].filter(Boolean).join(" · ")}). Available: ${product ? product.qty : 0}, Requested: ${line.qty}.`);
-            }
-            const after = Number((product.qty - line.qty).toFixed(6));
-            db.prepare("UPDATE products SET qty=? WHERE id=?").run(after, line.productId);
-            recordStockMovement(product, "online order", -line.qty, after, user.username, existing.order_no, "Stock updated for order");
-          }
+          deductOnlineOrderStock(lines, existing, user.username, "Stock updated for order");
           stockDeducted = 1;
         } else {
           stockDeducted = 0;
         }
       } else {
         if (!existing.stock_deducted && targetDeductStock) {
-          for (const line of lines) {
-            const product = db.prepare("SELECT * FROM products WHERE id=?").get(line.productId);
-            if (!product || product.qty < line.qty) {
-              throw httpError(409, `Not enough stock for "${line.name}" (${[line.brand, line.size, line.color].filter(Boolean).join(" · ")}). Available: ${product ? product.qty : 0}, Required: ${line.qty}.`);
-            }
-            const after = Number((product.qty - line.qty).toFixed(6));
-            db.prepare("UPDATE products SET qty=? WHERE id=?").run(after, line.productId);
-            recordStockMovement(product, "online order", -line.qty, after, user.username, existing.order_no, `Stock deducted on order ${orderStatus}`);
-          }
+          deductOnlineOrderStock(lines, existing, user.username, `Stock deducted on order ${orderStatus}`);
           stockDeducted = 1;
         } else if (existing.stock_deducted && !targetDeductStock) {
-          for (const line of lines) {
-            const product = db.prepare("SELECT * FROM products WHERE id=?").get(line.productId);
-            if (product) {
-              const after = Number((product.qty + line.qty).toFixed(6));
-              db.prepare("UPDATE products SET qty=? WHERE id=?").run(after, line.productId);
-              recordStockMovement(product, "online order reversal", line.qty, after, user.username, existing.order_no, `Stock restored on order status changed to ${orderStatus}`);
-            }
-          }
+          restoreOnlineOrderStock(lines, existing, user.username, "online order reversal", `Stock restored on order status changed to ${orderStatus}`);
           stockDeducted = 0;
         }
       }
@@ -3230,20 +3279,22 @@ async function handleApi(request, response, url) {
     db.exec("BEGIN IMMEDIATE");
     try {
       if (existing.stock_deducted) {
-        const lines = JSON.parse(existing.lines || "[]");
-        const returnedByProduct = new Map(db.prepare("SELECT product_id,SUM(qty) qty FROM sales_returns WHERE online_order_id=? GROUP BY product_id").all(id).map(row => [Number(row.product_id), Number(row.qty)]));
-        for (const line of lines) {
+        const lines = JSON.parse(existing.lines || "[]"), pharmacy = pharmacyMode();
+        const returnedByProduct = pharmacy ? null : new Map(db.prepare("SELECT product_id,SUM(qty) qty FROM sales_returns WHERE online_order_id=? GROUP BY product_id").all(id).map(row => [Number(row.product_id), Number(row.qty)]));
+        const returnedByLine = pharmacy ? new Map(db.prepare("SELECT order_line_index,SUM(qty) qty FROM sales_returns WHERE online_order_id=? GROUP BY order_line_index").all(id).map(row => [Number(row.order_line_index), Number(row.qty)])) : null;
+        const restoreQuantities = lines.map((line, lineIndex) => {
+          if (pharmacy) return Math.max(0, Number(line.qty || 0) - Number(returnedByLine.get(lineIndex) || 0));
           const alreadyReturned = Math.min(Number(line.qty || 0), returnedByProduct.get(Number(line.productId)) || 0);
           returnedByProduct.set(Number(line.productId), Math.max(0, (returnedByProduct.get(Number(line.productId)) || 0) - alreadyReturned));
-          const restoreQty = Math.max(0, Number(line.qty || 0) - alreadyReturned);
-          if (!restoreQty) continue;
-          const product = db.prepare("SELECT * FROM products WHERE id=?").get(line.productId);
-          if (product) {
-            const after = Number((product.qty + restoreQty).toFixed(6));
-            db.prepare("UPDATE products SET qty=? WHERE id=?").run(after, line.productId);
-            recordStockMovement(product, "online order deletion", restoreQty, after, user.username, existing.order_no, "Stock restored for unreturned items when deleting online order.");
-          }
-        }
+          return Math.max(0, Number(line.qty || 0) - alreadyReturned);
+        });
+        restoreOnlineOrderStock(lines, existing, user.username, "online order deletion", "Stock restored for unreturned items when deleting online order.", restoreQuantities);
+      }
+      if (pharmacyMode()) {
+        const returnIds = db.prepare("SELECT id FROM sales_returns WHERE online_order_id=?").all(id).map(row => Number(row.id));
+        for (const returnId of returnIds) db.prepare("DELETE FROM medicine_batch_returns WHERE return_id=?").run(returnId);
+        const lines = JSON.parse(existing.lines || "[]");
+        for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) db.prepare("DELETE FROM medicine_batch_sales WHERE sale_id=?").run(onlineOrderAllocationId(id, lineIndex));
       }
       db.prepare("DELETE FROM sales_returns WHERE online_order_id=?").run(id);
       db.prepare("DELETE FROM online_orders WHERE id=?").run(id);
