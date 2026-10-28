@@ -1745,18 +1745,19 @@ function render() {
   $("#sales-table").innerHTML = data.sales.map(item => {
     const returned = Number(item.returned_qty || 0) > 0;
     const isRepair = Number(item.service_job_id) > 0;
+    const gross = Number(item.original_total ?? item.total ?? 0);
+    const returnedValue = Math.max(0, gross - Number(item.total || 0));
+    const originalQty = Number(item.original_qty ?? item.qty ?? 0);
+    const unit = item.unit || "piece";
     const returnButton = !isRepair && canReturnSales && item.product_id && Number(item.original_remaining_qty) > 0
       ? `<button type="button" class="user-action" data-sale-action="return" data-id="${item.id}">Return</button>` : "";
     const actions = [
       canManageSalesRecords && !isRepair ? `<button class="user-action" data-sale-action="edit" data-id="${item.id}">Edit</button><button class="user-action danger" data-sale-action="delete" data-id="${item.id}">Delete</button>` : ""
     ].join("");
-    return `<tr><td>${dateLabel(item.date)}</td><td class="product-cell">${esc(item.product)}${returned ? `<small class="form-hint">Returned ${Number(item.returned_qty)} ${esc(item.unit || "piece")}</small>` : ""}${returnButton}</td><td>${item.qty} ${esc(item.unit || "piece")}</td><td>${esc(item.payment)}</td><td><b>${money(item.total)}</b>${Number(item.tax_amount) > 0 ? `<small class="form-hint">+ ${money(item.tax_amount)} tax</small>` : ""}</td>${canManageSalesRecords || canReturnSales ? `<td>${actions || "—"}</td>` : ""}</tr>`;
+    return `<tr><td>${dateLabel(item.date)}</td><td class="product-cell">${esc(item.product)}${returned ? `<small class="form-hint sales-line-return"><span>Returned</span> ${localizeDigits(item.returned_qty)} ${esc(unit)} · ${money(returnedValue)}</small>` : ""}${returnButton}</td><td><b>${localizeDigits(item.qty)} ${esc(unit)}</b>${originalQty > 0 ? `<small class="form-hint"><span>Rate</span> ${money(gross / originalQty)} / ${esc(unit)}</small>` : ""}</td><td><span class="sales-payment-label${/due|credit|unpaid/i.test(item.payment || "") ? " due" : ""}">${esc(item.payment)}</span></td><td><b>${money(item.total)}</b>${returnedValue > 0 ? `<small class="form-hint"><span>Gross sales</span> ${money(gross)}</small><small class="form-hint sales-line-return"><span>Returned value</span> ${money(returnedValue)}</small>` : ""}${Number(item.tax_amount) > 0 ? `<small class="form-hint">+ ${money(item.tax_amount)} tax</small>` : ""}</td>${canManageSalesRecords || canReturnSales ? `<td>${actions || "—"}</td>` : ""}</tr>`;
   }).join("");
   $("#sales-empty").classList.toggle("hidden", data.sales.length > 0);
-  const salesGross = data.sales.reduce((sum, item) => sum + Number(item.original_total ?? item.total ?? 0), 0);
-  const salesNet = data.sales.reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const returnsTotal = Math.max(0, salesGross - salesNet);
-  $("#sales-summary").innerHTML = `<div class="list-summary-heading"><b>Sales totals</b><small>All-time totals across recorded sale lines</small></div><div class="list-summary-cards"><div><small>Sale lines</small><b>${data.sales.length}</b></div><div><small>Gross sales</small><b>${money(salesGross)}</b></div><div><small>Returned value</small><b>${money(returnsTotal)}</b></div><div><small>Net sales after returns</small><b>${money(salesNet)}</b></div></div>`;
+  $("#sales-summary").innerHTML = salesSummaryHtml(data.sales, false);
   $("#expenses-actions-header").classList.toggle("hidden", !canManageExpenseRecords);
   $("#expenses").classList.toggle("expenses-has-actions", canManageExpenseRecords);
   $("#expenses-table").innerHTML = data.expenses.map(item => `<tr><td>${dateLabel(item.date)}</td><td>${esc(item.category)}</td><td>${esc(item.note || "—")}</td><td><b>${money(item.amount)}</b></td>${canManageExpenseRecords ? `<td><button class="user-action" data-expense-action="edit" data-id="${item.id}">Edit</button><button class="user-action danger" data-expense-action="delete" data-id="${item.id}">Delete</button></td>` : ""}</tr>`).join("");
@@ -3026,30 +3027,59 @@ table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5p
 
 // Sales history: search by item, payment, bill no, date range
 $("#sales .table-scroll").insertAdjacentHTML("beforebegin", `<div class="sales-filter"><label class="search">⌕ <input id="sales-search" placeholder="Search item, payment, bill no, amount"></label><label>From <input type="date" id="sales-from"></label><label>To <input type="date" id="sales-to"></label><button class="button secondary" id="sales-clear" type="button">Clear</button><span class="sales-count" id="sales-count"></span><button class="button secondary" id="sales-print" type="button">Print</button></div>`);
-let currentMatchingSales = [];
+function salesSummaryHtml(sales, filtering = false) {
+  const rows = sales || [], summary = summarizeSales(rows);
+  return `<div class="list-summary-heading"><b>${t("Sales totals")}</b><small>${t(filtering ? "Totals for the sales currently shown" : "All-time totals across recorded sale lines")}</small></div><div class="list-summary-cards"><div><small>${t("Sale lines")}</small><b>${localizeDigits(rows.length)}</b></div><div><small>${t("Gross sales")}</small><b>${money(summary.grossSales)}</b></div><div class="sales-summary-returned"><small>${t("Returned value")}</small><b>${money(summary.returnedValue)}</b></div><div><small>${t("Net sales after returns")}</small><b>${money(summary.netSales)}</b></div><div class="sales-summary-profit"><small>${t("Profit after returns")}</small><b>${money(summary.profitAfterReturns)}</b></div></div>`;
+}
+function salesQuickFilterMatches(sale, filter) {
+  const key = String(filter || "");
+  if (!key || key === "all") return true;
+  if (key === "returned") return Number(sale?.returned_qty || 0) > 0;
+  if (key.startsWith("payment:")) return String(sale?.payment || "") === key.slice(8);
+  return true;
+}
+function renderSalesQuickFilters() {
+  const methods = [...new Set([...paymentChoices(), ...data.sales.map(sale => sale.payment)].filter(Boolean))];
+  const filters = [
+    { key: "all", label: "All sales", count: data.sales.length },
+    ...methods.map(method => ({ key: `payment:${method}`, label: method, count: data.sales.filter(sale => sale.payment === method).length })),
+    { key: "returned", label: "With returns", count: data.sales.filter(sale => Number(sale.returned_qty || 0) > 0).length }
+  ];
+  $("#sales-quick-filters").innerHTML = filters.map(filter => {
+    const active = filter.key === "all" ? !salesQuickFilter : salesQuickFilter === filter.key;
+    return `<button type="button" class="online-dashboard-status-item${active ? " active" : ""}" data-sales-quick-filter="${esc(filter.key)}" aria-pressed="${active}"><span>${esc(t(filter.label))}</span><b>${localizeDigits(filter.count)}</b></button>`;
+  }).join("");
+}
+let currentMatchingSales = [], salesQuickFilter = "";
 function filterSales() {
+  renderSalesQuickFilters();
   const q = $("#sales-search").value.trim().toLowerCase(), from = $("#sales-from").value, to = $("#sales-to").value;
   const matchingSales = [];
   [...$("#sales-table").rows].forEach((row, i) => {
     const s = data.sales[i];
     if (!s) return;
     const hay = [s.product, s.payment, s.date, s.total, s.bill_id ? billNo(s.bill_id) : ""].join(" ").toLowerCase();
-    const ok = (!q || hay.includes(q)) && (!from || s.date >= from) && (!to || s.date <= to);
+    const ok = (!q || hay.includes(q)) && (!from || s.date >= from) && (!to || s.date <= to) && salesQuickFilterMatches(s, salesQuickFilter);
     row.classList.toggle("hidden", !ok);
     if (ok) matchingSales.push(s);
   });
   currentMatchingSales = matchingSales;
-  const shown = matchingSales.length, filtering = Boolean(q || from || to);
-  const salesGross = matchingSales.reduce((sum, item) => sum + Number(item.original_total ?? item.total ?? 0), 0);
-  const salesNet = matchingSales.reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const returnsTotal = Math.max(0, salesGross - salesNet);
-  $("#sales-count").textContent = filtering ? `${shown} of ${data.sales.length} sales` : `${shown} sales`;
-  $("#sales-summary").innerHTML = `<div class="list-summary-heading"><b>Sales totals</b><small>${filtering ? "Totals for the sales currently shown" : "All-time totals across recorded sale lines"}</small></div><div class="list-summary-cards"><div><small>Sale lines</small><b>${shown}</b></div><div><small>Gross sales</small><b>${money(salesGross)}</b></div><div><small>Returned value</small><b>${money(returnsTotal)}</b></div><div><small>Net sales after returns</small><b>${money(salesNet)}</b></div></div>`;
-  $("#sales-empty").textContent = filtering && !shown ? "No sales match your search." : "Your recorded sales will appear here.";
+  const shown = matchingSales.length, filtering = Boolean(q || from || to || salesQuickFilter);
+  $("#sales-count").textContent = filtering ? `${localizeDigits(shown)} of ${localizeDigits(data.sales.length)} sales` : `${localizeDigits(shown)} sales`;
+  $("#sales-summary").innerHTML = salesSummaryHtml(matchingSales, filtering);
+  $("#sales-empty").textContent = filtering && !shown ? "No sales match your filters." : "Your recorded sales will appear here.";
   $("#sales-empty").classList.toggle("hidden", !!shown || (!filtering && data.sales.length > 0));
 }
 ["#sales-search", "#sales-from", "#sales-to"].forEach(id => $(id).addEventListener("input", filterSales));
-$("#sales-clear").onclick = () => { $("#sales-search").value = $("#sales-from").value = $("#sales-to").value = ""; filterSales(); };
+$("#sales-quick-filters").addEventListener("click", event => {
+  const button = event.target.closest("[data-sales-quick-filter]");
+  if (!button) return;
+  const key = button.dataset.salesQuickFilter;
+  salesQuickFilter = key === "all" || salesQuickFilter === key ? "" : key;
+  filterSales();
+  $("#sales .sales-scroll").scrollTop = 0;
+});
+$("#sales-clear").onclick = () => { $("#sales-search").value = $("#sales-from").value = $("#sales-to").value = ""; salesQuickFilter = ""; filterSales(); };
 $("#sales-print").onclick = () => {
   if (!currentMatchingSales.length) return toast("No sales to print.");
   const from = $("#sales-from").value, to = $("#sales-to").value;
