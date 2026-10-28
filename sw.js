@@ -2,7 +2,7 @@
    The app works on the shop Wi-Fi; this caches the shell so phones can reopen
    it quickly and shows a helpful page when the server is unreachable.
    API responses are never cached: stock and bills must always be live. */
-const VERSION = "shopdesk-v6";
+const VERSION = "shopdesk-v7";
 const SHELL = [
   "/",
   "/index.html",

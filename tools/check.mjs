@@ -53,6 +53,23 @@ try {
   ok("per-session profile routing, isolated data paths, safe restore, and switcher UI present");
 } catch (error) { fail("shop profile separation: " + error.message); }
 
+console.log("Inventory edits and decimal unit prices");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8");
+  const start = app.indexOf("const money ="), end = app.indexOf("const currencySymbol", start);
+  if (start < 0 || end < 0) throw new Error("currency formatter is missing");
+  const makeMoney = new Function("data", "localizeDigits", `${app.slice(start, end)}\nreturn money;`);
+  const money = makeMoney({ currencyCode: "BDT", locale: "en-BD", banglaDigits: false }, String);
+  const banglaMoney = makeMoney({ currencyCode: "BDT", locale: "bn-BD", banglaDigits: true }, String);
+  if (!money(3.25).includes("3.25") || !money(2.5).includes("2.5")) fail("decimal inventory prices must not be rounded to whole taka");
+  if (money(220).includes(".00")) fail("whole currency amounts should remain compact");
+  if (!banglaMoney(3.25).includes("৩.২৫")) fail("Bangla currency formatting must preserve decimal unit prices");
+  const editStart = app.indexOf("function openMedicineProductForm("), editEnd = app.indexOf('$("#add-product")', editStart);
+  const editFlow = app.slice(editStart, editEnd);
+  if (editStart < 0 || editEnd < 0 || !editFlow.includes("data = result; render();")) fail("medicine edits must refresh inventory from the returned state");
+  ok("medicine edits refresh inventory; ৳2.50 and ৳3.25 stay visible in English and Bangla");
+} catch (error) { fail("inventory edit formatting: " + error.message); }
+
 console.log("Translations");
 try {
   const bn = JSON.parse(readFileSync(join(root, "i18n", "bn.json"), "utf8"));

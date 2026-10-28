@@ -2,8 +2,13 @@ const $ = selector => document.querySelector(selector);
 const money = amount => {
   const value = Number(amount) || 0, currency = data.currencyCode || "BDT";
   const locale = data.banglaDigits ? "bn-BD" : (data.locale || "en-BD");
-  try { return new Intl.NumberFormat(locale, { style: "currency", currency, maximumFractionDigits: 0 }).format(value); }
-  catch { return `${currency} ${localizeDigits(Math.round(value).toLocaleString())}`; }
+  // Pharmacy base-unit prices often include poisha (for example ৳2.50/tablet).
+  // Keep whole amounts compact, but never round an edited decimal price away.
+  try { return new Intl.NumberFormat(locale, { style: "currency", currency, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value); }
+  catch {
+    const rounded = Math.round((value + Number.EPSILON) * 100) / 100;
+    return `${currency} ${localizeDigits(rounded.toLocaleString("en-US", { maximumFractionDigits: 2 }))}`;
+  }
 };
 const currencySymbol = () => {
   try { return new Intl.NumberFormat(data.locale || "en-BD", { style: "currency", currency: data.currencyCode || "BDT", maximumFractionDigits: 0 }).formatToParts(0).find(part => part.type === "currency")?.value || data.currencyCode || "BDT"; }
