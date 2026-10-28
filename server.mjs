@@ -2049,6 +2049,7 @@ async function handleApi(request, response, url) {
     }
     const isPharmacy = pharmacyMode();
     const seenIds = new Set();
+    const missingNumber = value => value === null || value === undefined || (typeof value === "string" && value.trim() === "");
     const rows = body.rows.map((item, index) => {
       if (!item || typeof item !== "object") {
         throw new Error(`Row ${index + 2} is not a valid inventory item.`);
@@ -2068,13 +2069,13 @@ async function handleApi(request, response, url) {
       const manufacturer = item.manufacturer === null || item.manufacturer === undefined ? null : String(item.manufacturer).trim();
       const batchNumber = item.batchNumber === null || item.batchNumber === undefined ? "" : String(item.batchNumber).trim();
       const expiryDate = item.expiryDate === null || item.expiryDate === undefined ? "" : String(item.expiryDate).trim();
-      const price = Number(item.price);
-      const cost = Number(item.cost);
-      const qty = Number(item.qty);
-      const min = Number(item.min);
+      const newPharmacyItem = isPharmacy && id === null;
+      const price = newPharmacyItem && missingNumber(item.price) ? 0 : Number(item.price);
+      const cost = newPharmacyItem && missingNumber(item.cost) ? 0 : Number(item.cost);
+      const qty = newPharmacyItem && missingNumber(item.qty) ? 0 : Number(item.qty);
+      const min = newPharmacyItem && missingNumber(item.min) ? 5 : Number(item.min);
       const hasPack = (packSize || 0) > 0;
-      if (item.price === "" || item.price === null || item.cost === "" || item.cost === null ||
-          item.qty === "" || item.qty === null || item.min === "" || item.min === null ||
+      if ((!newPharmacyItem && [item.price, item.cost, item.qty, item.min].some(missingNumber)) ||
           (id !== null && (!Number.isInteger(id) || id < 1 || seenIds.has(id))) ||
           !name || name.length > 200 || sku.length > 100 || (barcode !== null && barcode.length > 120) || (unit !== null && unit.length > 30) || category.length > 80 ||
           !Number.isFinite(price) || price < 0 || !Number.isFinite(cost) || cost < 0 ||
@@ -2089,8 +2090,13 @@ async function handleApi(request, response, url) {
           !validQty(qty, typeof unit === "string" ? unit : "", 0, hasPack) || !validQty(min, typeof unit === "string" ? unit : "", 0, hasPack)) {
         throw new Error(`Row ${index + 2} has invalid data. Check the name, SKU, prices, quantity, and low-stock alert.`);
       }
-      if (isPharmacy && id === null && qty > 0 && (!validText(batchNumber) || !validDate(expiryDate))) {
-        throw new Error(`Row ${index + 2} (${name}): new Pharmacy medicines with opening stock require a Batch Number and Expiry Date (YYYY-MM-DD).`);
+      if (isPharmacy && id === null && qty > 0) {
+        if (expiryDate && !validDate(expiryDate)) {
+          throw new Error(`Row ${index + 2} (${name}): enter a valid Expiry Date (YYYY-MM-DD), or leave it blank to hold the opening stock for expiry verification.`);
+        }
+        if (expiryDate && !validText(batchNumber)) {
+          throw new Error(`Row ${index + 2} (${name}): a Batch Number is required when an Expiry Date is provided.`);
+        }
       }
       if (id !== null) seenIds.add(id);
       return { id, name, sku, barcode, price, cost, qty, min, unit, category, ...apparel, packName, packSize, genericName, strength, dosageForm, manufacturer, batchNumber, expiryDate, rowNumber: index + 2 };
@@ -2116,9 +2122,11 @@ async function handleApi(request, response, url) {
               .run(productId, item.genericName || "", item.strength || "", item.dosageForm || "", item.manufacturer || "");
           }
           if (isPharmacy && item.qty > 0) {
+            const batchNumber = item.batchNumber || `LEGACY-${productId}`;
             db.prepare(`INSERT INTO medicine_batches(product_id,batch_number,expiry_date,quantity_received,quantity_remaining,quantity_quarantined,unit_cost,received_date,created_by)
-              VALUES(?,?,?,?,?,0,?,?,?)`).run(productId, item.batchNumber, item.expiryDate, item.qty, item.qty, item.cost, today(), user.username);
-            recordStockMovement({ id: productId, name: item.name, unit: item.unit || "piece", cost: item.cost }, "opening stock", item.qty, item.qty, user.username, "Bulk inventory upload", `Batch ${item.batchNumber}; expires ${item.expiryDate}.`);
+              VALUES(?,?,?,?,?,0,?,?,?)`).run(productId, batchNumber, item.expiryDate, item.qty, item.qty, item.cost, today(), user.username);
+            const expiryNote = item.expiryDate ? `expires ${item.expiryDate}` : "expiry verification required before sale";
+            recordStockMovement({ id: productId, name: item.name, unit: item.unit || "piece", cost: item.cost }, "opening stock", item.qty, item.qty, user.username, "Bulk inventory upload", `Batch ${batchNumber}; ${expiryNote}.`);
           } else if (item.qty > 0) {
             recordStockMovement({ id: productId, name: item.name, unit: item.unit || "piece", cost: item.cost }, "opening stock", item.qty, item.qty, user.username, "Bulk inventory upload");
           }

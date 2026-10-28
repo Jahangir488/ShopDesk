@@ -144,6 +144,26 @@ try {
   ok(`${records.length} rows / ${(Buffer.byteLength(csv, "utf8") / 1024).toFixed(0)} KB CSV parsed; Category mapping and shop-type creation safeguards present`);
 } catch (error) { fail("bulk inventory CSV: " + error.message); }
 
+console.log("Pharmacy catalog import defaults and expiry hold");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8");
+  const server = readFileSync(join(root, "server.mjs"), "utf8");
+  for (const token of [
+    "const newPharmacyItem = isPharmacy && id === null;",
+    "const price = newPharmacyItem && missingNumber(item.price) ? 0 : Number(item.price);",
+    "const qty = newPharmacyItem && missingNumber(item.qty) ? 0 : Number(item.qty);",
+    "const min = newPharmacyItem && missingNumber(item.min) ? 5 : Number(item.min);",
+    "if (expiryDate && !validDate(expiryDate))",
+    "const batchNumber = item.batchNumber || `LEGACY-${productId}`;",
+    "expiry verification required before sale"
+  ]) if (!server.includes(token)) fail(`Pharmacy catalog import safeguard is missing: ${token}`);
+  if (!server.includes("WHERE product_id=? AND expiry_date<>'' AND expiry_date>=?")) fail("blank-expiry Pharmacy stock must remain unavailable for sale");
+  if (!server.includes("!validText(item.batchNumber) || !validDate(item.expiryDate)")) fail("existing-medicine stock additions must retain dated-batch validation");
+  if (!app.includes("Blank Selling Price, Cost, and Quantity on new medicines become 0; blank Low Stock Alert becomes 5.")) fail("Pharmacy blank-default confirmation is missing");
+  if (!app.includes("legacyStockCount")) fail("Pharmacy upload must disclose rows held for expiry verification");
+  ok("new-medicine blank defaults, generated LEGACY batches, existing-stock validation, and unknown-expiry sale hold present");
+} catch (error) { fail("Pharmacy catalog import: " + error.message); }
+
 console.log("Restaurant receipt and shop-type categories");
 try {
   const server = readFileSync(join(root, "server.mjs"), "utf8");

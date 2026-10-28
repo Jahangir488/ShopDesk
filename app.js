@@ -1795,7 +1795,7 @@ function bulkInventoryTemplateConfig(shopType = data.shopType) {
     return {
       filename: "pharmacy-inventory-template.csv",
       headers: [...bulkInventoryCoreHeaders, "Generic Name", "Strength", "Dosage Form", "Manufacturer", "Batch Number", "Expiry Date"],
-      help: "Pharmacy Excel template: includes Generic Name, Strength, Dosage Form, Manufacturer, Batch Number, and Expiry Date (YYYY-MM-DD). Keep Product ID unchanged to update medicine details/prices; leave Product ID blank (with Batch Number & Expiry Date) to add new medicines.",
+      help: "Pharmacy Excel template: includes Generic Name, Strength, Dosage Form, Manufacturer, Batch Number, and Expiry Date (YYYY-MM-DD). Keep Product ID unchanged to update medicine details/prices; leave Product ID blank to add new medicines. For new medicines, blank price/cost/quantity become 0 and blank low-stock alert becomes 5. Dated stock needs Batch Number & Expiry Date; blank expiry holds stock for verification and cannot be sold.",
       toRow: item => {
         const batch = batchesByProduct.get(item.id);
         return [...baseRow(item), item.generic_name || "", item.strength || "", item.dosage_form || "", item.manufacturer || "", batch?.batch_number || "", batch?.expiry_date || ""];
@@ -2614,13 +2614,23 @@ $("#bulk-inventory-file").onchange = async event => {
     if (rows.length > BULK_INVENTORY_MAX_ROWS) throw new Error("Upload no more than 25,000 rows at a time.");
     const updates = rows.filter(row => row.id).length;
     const additions = rows.length - updates;
-    const summary = data.shopType === "pharmacy"
-      ? `${updates} existing medicine(s) will be updated and ${additions} new medicine(s) added. New stock requires a Batch Number and Expiry Date. Missing categories will be created automatically. Continue?`
-      : `${updates} existing item(s) will be updated and ${additions} new item(s) added. Quantity replaces the current stock count. Any new categories in the file will be created automatically. Continue?`;
+    let legacyStockCount = 0;
+    let summary;
+    if (data.shopType === "pharmacy") {
+      const newRows = rows.filter(row => !row.id);
+      const hasBlankDefaults = newRows.some(row => ["price", "cost", "qty", "min"].some(key => String(row[key] ?? "").trim() === ""));
+      legacyStockCount = newRows.filter(row => Number(row.qty || 0) > 0 && !String(row.expiryDate ?? "").trim()).length;
+      summary = `${updates} existing medicine(s) will be updated and ${additions} new medicine(s) added. Missing categories will be created automatically.`;
+      if (hasBlankDefaults) summary += " Blank Selling Price, Cost, and Quantity on new medicines become 0; blank Low Stock Alert becomes 5.";
+      if (legacyStockCount) summary += ` ${legacyStockCount} opening-stock row(s) have no expiry date and will be unavailable for sale until verified in Batches & expiry. Missing batch numbers will be generated as LEGACY batch numbers.`;
+      summary += " Continue?";
+    } else {
+      summary = `${updates} existing item(s) will be updated and ${additions} new item(s) added. Quantity replaces the current stock count. Any new categories in the file will be created automatically. Continue?`;
+    }
     if (!confirm(summary)) return;
     data = await api("/api/inventory/bulk", { method: "POST", body: JSON.stringify({ rows }) });
     render();
-    toast(`Inventory updated: ${updates} updated, ${additions} added`);
+    toast(`Inventory updated: ${updates} updated, ${additions} added${legacyStockCount ? `; ${legacyStockCount} legacy stock row(s) need expiry verification before sale` : ""}`);
   } catch (error) {
     toast(error.message);
   } finally {
