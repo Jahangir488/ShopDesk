@@ -1296,10 +1296,17 @@ function stateFor(user) {
         : []).map(product => settings?.shop_type === "pharmacy" ? { ...product, available_to_sell: pharmacyAvailableQty(product.id) } : product),
     dues: salesPermission ? duesSummary() : null,
     sales: salesPermission ? db.prepare(`SELECT s.*,
+      b.customer AS bill_customer, b.phone AS bill_phone, b.total AS bill_total,
+      COALESCE(bp.paid,0) AS bill_paid, COALESCE(br.returned,0) AS bill_returned,
+      EXISTS(SELECT 1 FROM online_orders oo WHERE oo.bill_id=s.bill_id) AS online_order_linked,
       COALESCE(r.qty,0) AS returned_qty,
       COALESCE(r.amount,0) AS returned_amount,
       CASE WHEN s.qty>0 THEN MAX(0,s.qty-COALESCE(r.qty,0)) ELSE s.qty END AS original_remaining_qty
-      FROM sales s LEFT JOIN (
+      FROM sales s
+      LEFT JOIN bills b ON b.id=s.bill_id
+      LEFT JOIN (SELECT bill_id,SUM(amount) paid FROM bill_payments GROUP BY bill_id) bp ON bp.bill_id=b.id
+      LEFT JOIN (SELECT bill_id,SUM(total) returned FROM sales_returns WHERE bill_id IS NOT NULL GROUP BY bill_id) br ON br.bill_id=b.id
+      LEFT JOIN (
         SELECT sale_id,SUM(qty) qty,SUM(total) amount FROM sales_returns WHERE sale_id IS NOT NULL GROUP BY sale_id
       ) r ON r.sale_id=s.id ORDER BY s.id DESC`).all().map(sale => {
         const fraction = sale.qty > 0 ? Math.min(1, Number(sale.returned_qty || 0) / sale.qty) : 0;
@@ -2599,7 +2606,11 @@ async function handleApi(request, response, url) {
   }
   if (route === "/api/bills" && method === "GET") { // GET /api/bills list
     if (!requirePermission(user, "sales")) return json(response, 403, { error: "You do not have sales permission." });
-    const bills = db.prepare("SELECT id FROM bills ORDER BY id DESC LIMIT 2000").all().map(row => billById(row.id));
+    const requestedScope = String(url.searchParams.get("scope") || "all");
+    const scope = ["all", "local", "online"].includes(requestedScope) ? requestedScope : "all";
+    if (scope === "online" && !can(user, "online_orders")) return json(response, 403, { error: "Online-orders access is required to view online bills." });
+    const linkage = scope === "online" ? "WHERE EXISTS(SELECT 1 FROM online_orders oo WHERE oo.bill_id=b.id)" : scope === "local" ? "WHERE NOT EXISTS(SELECT 1 FROM online_orders oo WHERE oo.bill_id=b.id)" : "";
+    const bills = db.prepare(`SELECT b.id FROM bills b ${linkage} ORDER BY b.id DESC LIMIT 2000`).all().map(row => billById(row.id));
     return json(response, 200, { bills });
   }
   const billMatch = route.match(/^\/api\/bills\/(\d+)$/);

@@ -162,6 +162,51 @@ try {
   ok("returns reduce sales and profit correctly; gross, returns, net sales, and refunded totals are visible");
 } catch (error) { fail("Returns/profit: " + error.message); }
 
+console.log("Local Sales bill grouping and online separation");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8");
+  const html = readFileSync(join(root, "index.html"), "utf8");
+  const server = readFileSync(join(root, "server.mjs"), "utf8");
+  const start = app.indexOf("function groupLocalSales(sales) {");
+  const end = app.indexOf("\n// Weighed and measured items", start);
+  if (start < 0 || end < 0) throw new Error("local sales grouping helpers are missing");
+  const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+  const api = new Function("summarizeSales", "billNo", "t", "esc", "money", "localizeDigits", "dateLabel", `${app.slice(start, end)}\nreturn { groupLocalSales, localSaleGroupTotals, localSaleGroupHtml };`)(
+    summarizeSalesForCheck, id => `B-${String(id).padStart(8, "0")}`, value => value, esc, value => `৳${Number(value)}`, String, value => value
+  );
+  function summarizeSalesForCheck(sales) {
+    return (sales || []).reduce((sum, item) => {
+      const gross = Number(item.original_total ?? item.total ?? 0), net = Number(item.total || 0), grossCost = Number(item.original_cost ?? item.cost ?? 0), netCost = Number(item.cost || 0);
+      sum.grossSales += gross; sum.returnedValue += Math.max(0, gross - net); sum.netSales += net; sum.netTax += Number(item.tax_amount || 0);
+      sum.profitAfterReturns += net - netCost; sum.profitBeforeReturns += gross - grossCost;
+      return sum;
+    }, { grossSales: 0, returnedValue: 0, netSales: 0, netTax: 0, profitAfterReturns: 0, profitBeforeReturns: 0 });
+  }
+  const sales = [
+    { id: 4, bill_id: 12, online_order_linked: 1, date: "2026-10-27", product: "Online only", qty: 1, total: 999, payment: "Cash" },
+    { id: 3, bill_id: 11, online_order_linked: 0, date: "2026-10-27", product: "Chicken", original_qty: 2, qty: 1, original_total: 220, total: 170, returned_qty: 1, original_remaining_qty: 1, product_id: 2, unit: "plate", payment: "Partial", bill_customer: "A customer", bill_phone: "01700", bill_total: 400, bill_returned: 50, bill_paid: 200 },
+    { id: 2, bill_id: 11, online_order_linked: 0, date: "2026-10-27", product: "Rice", original_qty: 2, qty: 2, original_total: 180, total: 180, returned_qty: 0, original_remaining_qty: 2, product_id: 1, unit: "plate", payment: "Partial", bill_customer: "A customer", bill_phone: "01700", bill_total: 400, bill_returned: 50, bill_paid: 200 },
+    { id: 1, bill_id: null, online_order_linked: 0, date: "2026-10-26", product: "Direct item", original_qty: 1, qty: 1, original_total: 80, total: 80, returned_qty: 0, unit: "piece", payment: "Due" }
+  ];
+  const groups = api.groupLocalSales(sales);
+  if (groups.length !== 2 || groups[0].billId !== 11 || groups[0].lines.length !== 2 || groups[1].billId !== 0) fail("local sales must group bill lines and exclude online-linked bills");
+  if (groups[0].lines.map(line => line.id).join(",") !== "2,3") fail("items inside a local bill must retain their original order");
+  const totals = api.localSaleGroupTotals(groups[0]);
+  if (totals.net !== 350 || totals.due !== 150 || totals.returned !== 50) fail(`local bill totals are wrong: ${JSON.stringify(totals)}`);
+  const billHtml = api.localSaleGroupHtml(groups[0], true, true);
+  for (const token of ["B-00000011", "A customer", "Rice", "Chicken", "Paid</span> ৳200", "Due</span> ৳150", "data-print-bill", "data-local-bill-action=\"receive\"", "data-sale-action=\"return\""]) {
+    if (!billHtml.includes(token)) fail(`grouped local bill is missing ${token}`);
+  }
+  if ((billHtml.match(/class="local-sale-item"/g) || []).length !== 2 || (billHtml.match(/<tr>/g) || []).length !== 1) fail("a local bill must be one row containing all of its items");
+  if (billHtml.includes("Online only") || billHtml.includes("B-00000012")) fail("online-linked bill leaked into Local Sales");
+  if (!api.localSaleGroupHtml(groups[1], true, true).includes("Direct sale")) fail("unbilled direct local sales must remain visible");
+  for (const token of ["Local Sales", "BILL / SALE", "CUSTOMER", "ITEMS", 'id="online-order-bills">Online bills']) if (!html.includes(token)) fail(`Local Sales markup is missing ${token}`);
+  if (html.includes('id="sales-quick-filters"')) fail("the reverted sales quick-filter UI must not return");
+  for (const token of ["online_order_linked", 'scope === "online"', 'scope === "local"', "NOT EXISTS(SELECT 1 FROM online_orders"]) if (!server.includes(token)) fail(`server-side local/online separation is missing ${token}`);
+  for (const token of ["currentLocalSaleGroups", 'openBills(false, {}, "local")', 'openBills(false, {}, "online")', "filter(row => !Number(row.online_order_id || 0))"]) if (!app.includes(token)) fail(`local sales filtering/printing is missing ${token}`);
+  ok("local bills group all items, direct sales remain, and online bills/returns stay separate");
+} catch (error) { fail("Local Sales: " + error.message); }
+
 console.log("Online sales dashboard");
 try {
   const app = readFileSync(join(root, "app.js"), "utf8");

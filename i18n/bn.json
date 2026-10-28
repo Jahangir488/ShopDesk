@@ -158,6 +158,24 @@
     "No products to print.": "প্রিন্ট করার পণ্য নেই।",
     "Sales history": "বিক্রয়ের ইতিহাস",
     "All recorded transactions": "সব রেকর্ড করা লেনদেন",
+    "Local Sales": "লোকাল বিক্রয়",
+    "Local bills with item details; online-order bills stay in Online Orders": "পণ্যের বিবরণসহ লোকাল বিল; অনলাইন অর্ডারের বিল অনলাইন অর্ডারে থাকবে",
+    "Local sales bills": "লোকাল বিক্রয়ের বিল",
+    "BILL / SALE": "বিল / বিক্রয়",
+    "CUSTOMER": "গ্রাহক",
+    "ITEMS": "পণ্যসমূহ",
+    "Your local sales will appear here.": "আপনার লোকাল বিক্রয় এখানে দেখা যাবে।",
+    "Direct sale": "সরাসরি বিক্রয়",
+    "Local sale lines only; online-order bills stay separate": "শুধু লোকাল বিক্রয়ের সারি; অনলাইন অর্ডারের বিল আলাদা থাকবে",
+    "Totals for the local sales currently shown": "বর্তমানে দেখানো লোকাল বিক্রয়ের মোট",
+    "No local sales match your search.": "আপনার অনুসন্ধানের সঙ্গে কোনো লোকাল বিক্রয় মিলছে না।",
+    "Search bill, customer, item, payment": "বিল, গ্রাহক, পণ্য, পেমেন্ট খুঁজুন",
+    "Local bills": "লোকাল বিল",
+    "Online bills": "অনলাইন বিল",
+    "Online order bills": "অনলাইন অর্ডারের বিল",
+    "Open online-order bills": "অনলাইন অর্ডারের বিল খুলুন",
+    "Manage in Online Orders": "অনলাইন অর্ডারে ব্যবস্থাপনা করুন",
+    "Net": "নিট",
     "New bill": "নতুন বিল",
     "DATE": "তারিখ",
     "ITEM": "পণ্য",
@@ -1121,6 +1139,14 @@
     {
       "re": "^(\\d+) products? in this inventory$",
       "bn": "এই মজুতে $1টি পণ্য"
+    },
+    {
+      "re": "^(\\d+) of (\\d+) local sales$",
+      "bn": "$2টি লোকাল বিক্রয়ের মধ্যে $1টি"
+    },
+    {
+      "re": "^(\\d+) local sales$",
+      "bn": "$1টি লোকাল বিক্রয়"
     },
     {
       "re": "^(\\d+) sales$",

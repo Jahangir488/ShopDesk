@@ -876,7 +876,7 @@ function renderOnlineOrders() {
   const returnCountBadge = $("#online-order-return-count");
   if (returnCountBadge) returnCountBadge.textContent = returnCount ? String(returnCount) : "";
   const billShortcut = $("#online-order-bills");
-  if (billShortcut) { billShortcut.disabled = !data.permissions?.sales; billShortcut.title = data.permissions?.sales ? "Open Sales bills" : "Sales permission is required"; }
+  if (billShortcut) { billShortcut.disabled = !data.permissions?.sales; billShortcut.title = data.permissions?.sales ? "Open online-order bills" : "Sales permission is required"; }
   const orders = invalidRange ? [] : allOrders.filter(order => {
     if ((from && order.date < from) || (to && order.date > to)) return false;
     if (statusFilter && order.order_status !== statusFilter) return false;
@@ -1510,7 +1510,7 @@ function openOnlineOrderCustomers() {
 }
 
 document.querySelector("#online-order-customers")?.addEventListener("click", () => openOnlineOrderCustomers());
-document.querySelector("#online-order-bills")?.addEventListener("click", () => { if (!data.permissions?.sales) return toast("Sales permission is required to view Bills."); openBills(false); });
+document.querySelector("#online-order-bills")?.addEventListener("click", () => { if (!data.permissions?.sales) return toast("Sales permission is required to view Bills."); openBills(false, {}, "online"); });
 document.querySelector("#online-order-returns")?.addEventListener("click", () => openOnlineOrderReturnsHistory());
 document.querySelector("#download-online-orders")?.addEventListener("click", downloadOnlineOrdersExcel);
 document.querySelector("#new-online-order")?.addEventListener("click", () => openOnlineOrderModal(0));
@@ -1740,23 +1740,16 @@ function render() {
   renderRepairJobs();
   renderDevices();
   const canReturnSales = permissions.sales && permissions.inventory;
-  $("#sales-actions-header").classList.toggle("hidden", !canManageSalesRecords && !canReturnSales);
-  $("#sales").classList.toggle("sales-has-actions", canManageSalesRecords || canReturnSales);
-  $("#sales-table").innerHTML = data.sales.map(item => {
-    const returned = Number(item.returned_qty || 0) > 0;
-    const isRepair = Number(item.service_job_id) > 0;
-    const returnButton = !isRepair && canReturnSales && item.product_id && Number(item.original_remaining_qty) > 0
-      ? `<button type="button" class="user-action" data-sale-action="return" data-id="${item.id}">Return</button>` : "";
-    const actions = [
-      canManageSalesRecords && !isRepair ? `<button class="user-action" data-sale-action="edit" data-id="${item.id}">Edit</button><button class="user-action danger" data-sale-action="delete" data-id="${item.id}">Delete</button>` : ""
-    ].join("");
-    return `<tr><td>${dateLabel(item.date)}</td><td class="product-cell">${esc(item.product)}${returned ? `<small class="form-hint">Returned ${Number(item.returned_qty)} ${esc(item.unit || "piece")}</small>` : ""}${returnButton}</td><td>${item.qty} ${esc(item.unit || "piece")}</td><td>${esc(item.payment)}</td><td><b>${money(item.total)}</b>${Number(item.tax_amount) > 0 ? `<small class="form-hint">+ ${money(item.tax_amount)} tax</small>` : ""}</td>${canManageSalesRecords || canReturnSales ? `<td>${actions || "—"}</td>` : ""}</tr>`;
-  }).join("");
-  $("#sales-empty").classList.toggle("hidden", data.sales.length > 0);
-  const salesGross = data.sales.reduce((sum, item) => sum + Number(item.original_total ?? item.total ?? 0), 0);
-  const salesNet = data.sales.reduce((sum, item) => sum + Number(item.total || 0), 0);
+  $("#sales-actions-header").classList.remove("hidden");
+  $("#sales").classList.remove("sales-has-actions");
+  const localSaleGroups = groupLocalSales(data.sales);
+  const localSales = localSaleGroups.flatMap(group => group.lines);
+  $("#sales-table").innerHTML = localSaleGroups.map(group => localSaleGroupHtml(group, canManageSalesRecords, canReturnSales)).join("");
+  $("#sales-empty").classList.toggle("hidden", localSales.length > 0);
+  const salesGross = localSales.reduce((sum, item) => sum + Number(item.original_total ?? item.total ?? 0), 0);
+  const salesNet = localSales.reduce((sum, item) => sum + Number(item.total || 0), 0);
   const returnsTotal = Math.max(0, salesGross - salesNet);
-  $("#sales-summary").innerHTML = `<div class="list-summary-heading"><b>Sales totals</b><small>All-time totals across recorded sale lines</small></div><div class="list-summary-cards"><div><small>Sale lines</small><b>${data.sales.length}</b></div><div><small>Gross sales</small><b>${money(salesGross)}</b></div><div><small>Returned value</small><b>${money(returnsTotal)}</b></div><div><small>Net sales after returns</small><b>${money(salesNet)}</b></div></div>`;
+  $("#sales-summary").innerHTML = `<div class="list-summary-heading"><b>Sales totals</b><small>Local sale lines only; online-order bills stay separate</small></div><div class="list-summary-cards"><div><small>Sale lines</small><b>${localSales.length}</b></div><div><small>Gross sales</small><b>${money(salesGross)}</b></div><div><small>Returned value</small><b>${money(returnsTotal)}</b></div><div><small>Net sales after returns</small><b>${money(salesNet)}</b></div></div>`;
   $("#expenses-actions-header").classList.toggle("hidden", !canManageExpenseRecords);
   $("#expenses").classList.toggle("expenses-has-actions", canManageExpenseRecords);
   $("#expenses-table").innerHTML = data.expenses.map(item => `<tr><td>${dateLabel(item.date)}</td><td>${esc(item.category)}</td><td>${esc(item.note || "—")}</td><td><b>${money(item.amount)}</b></td>${canManageExpenseRecords ? `<td><button class="user-action" data-expense-action="edit" data-id="${item.id}">Edit</button><button class="user-action danger" data-expense-action="delete" data-id="${item.id}">Delete</button></td>` : ""}</tr>`).join("");
@@ -2647,6 +2640,48 @@ setInterval(async () => {
 setInterval(refreshServerLoad, 30000);
 // ---- Billing: several items for one customer, saved as one printable bill ----
 const billNo = id => "B-" + String(id).padStart(8, "0");
+function groupLocalSales(sales) {
+  const groups = new Map();
+  for (const sale of sales || []) {
+    if (Number(sale.online_order_linked)) continue;
+    const billId = Number(sale.bill_id || 0), key = billId ? `bill:${billId}` : `sale:${sale.id}`;
+    if (!groups.has(key)) groups.set(key, { key, billId, date: sale.date, lines: [] });
+    groups.get(key).lines.push(sale);
+  }
+  return [...groups.values()].map(group => ({ ...group, lines: group.lines.slice().sort((a, b) => Number(a.id) - Number(b.id)) }));
+}
+function localSaleGroupTotals(group) {
+  const first = group.lines[0] || {};
+  if (group.billId && first.bill_total !== null && first.bill_total !== undefined) {
+    const gross = Number(first.bill_total || 0), returned = Number(first.bill_returned || 0), net = Math.max(0, gross - returned), paid = Number(first.bill_paid || 0);
+    return { gross, returned, net, paid, due: Math.max(0, net - paid), tax: 0 };
+  }
+  const summary = summarizeSales(group.lines), directDue = /due|unpaid/i.test(first.payment || "") ? summary.netSales : 0;
+  return { gross: summary.grossSales, returned: summary.returnedValue, net: summary.netSales, paid: Math.max(0, summary.netSales - directDue), due: directDue, tax: summary.netTax };
+}
+function localSaleGroupHtml(group, canManageSalesRecords, canReturnSales) {
+  const first = group.lines[0] || {}, totals = localSaleGroupTotals(group), isBill = group.billId > 0;
+  const items = group.lines.map(item => {
+    const originalQty = Number(item.original_qty ?? item.qty ?? 0), gross = Number(item.original_total ?? item.total ?? 0), net = Number(item.total || 0);
+    const returnedQty = Number(item.returned_qty || 0), returnedValue = Math.max(0, gross - net), unit = item.unit || "piece";
+    const isRepair = Number(item.service_job_id) > 0;
+    const returnButton = !isRepair && canReturnSales && item.product_id && Number(item.original_remaining_qty) > 0
+      ? `<button type="button" class="user-action" data-sale-action="return" data-id="${item.id}">Return</button>` : "";
+    return `<div class="local-sale-item"><div><b>${esc(item.product)}</b><small>${localizeDigits(originalQty)} ${esc(unit)} × ${money(originalQty > 0 ? gross / originalQty : 0)} · ${money(gross)}</small>${returnedQty > 0 ? `<small class="local-sale-return"><span>Returned</span> ${localizeDigits(returnedQty)} ${esc(unit)} · ${money(returnedValue)} · <span>Net</span> ${localizeDigits(item.qty)} ${esc(unit)} / ${money(net)}</small>` : ""}</div>${returnButton}</div>`;
+  }).join("");
+  const actions = [];
+  if (isBill) {
+    actions.push(`<button type="button" class="user-action" data-print-bill="${group.billId}">Print</button>`);
+    if (totals.due > 0) actions.push(`<button type="button" class="user-action" data-local-bill-action="receive" data-id="${group.billId}">Receive</button>`);
+    if (canManageSalesRecords && totals.returned <= 0) actions.push(`<button type="button" class="user-action" data-local-bill-action="edit" data-id="${group.billId}">Edit</button><button type="button" class="user-action danger" data-local-bill-action="delete" data-id="${group.billId}">Delete</button>`);
+  } else if (canManageSalesRecords && !Number(first.service_job_id)) {
+    actions.push(`<button type="button" class="user-action" data-sale-action="edit" data-id="${first.id}">Edit</button><button type="button" class="user-action danger" data-sale-action="delete" data-id="${first.id}">Delete</button>`);
+  }
+  const reference = isBill ? billNo(group.billId) : `${t("Direct sale")} #${first.id}`;
+  const customer = first.bill_customer || "—";
+  const payment = `<b>${esc(first.payment || "—")}</b><small class="form-hint"><span>Paid</span> ${money(totals.paid)}</small>${totals.due > 0 ? `<small class="form-hint local-sale-due"><span>Due</span> ${money(totals.due)}</small>` : ""}`;
+  return `<tr><td class="product-cell"><b>${esc(reference)}</b></td><td>${dateLabel(group.date)}</td><td>${esc(customer)}${first.bill_phone ? `<small class="form-hint">${esc(first.bill_phone)}</small>` : ""}</td><td class="local-sale-items">${items || "—"}</td><td>${payment}</td><td class="local-sale-total"><b>${money(totals.net)}</b>${totals.returned > 0 ? `<small class="form-hint local-sale-return"><span>Returned</span> ${money(totals.returned)}</small>` : ""}${!isBill && totals.tax > 0 ? `<small class="form-hint">+ ${money(totals.tax)} tax</small>` : ""}</td><td>${actions.join("") || "—"}</td></tr>`;
+}
 // Weighed and measured items (kg, litre, metre...) can be sold in fractions; kg can be typed in gm, litre in ml, metre in cm.
 const FRACTIONAL = /^(kgs?|kilos?|kilograms?|gm?s?|grams?|l|ltrs?|lit(re|er)s?|ml|m|meters?|metres?|ft|feet|foot|yards?|yd|inch(es)?|cm|mm)$/i;
 const isFractional = unit => FRACTIONAL.test(String(unit || "").trim());
@@ -2690,10 +2725,6 @@ const baseRender = render;
 render = function () {
   baseRender();
   $("#new-bill").classList.toggle("hidden", !data.permissions?.sales);
-  [...$("#sales-table").rows].forEach((row, index) => {
-    const sale = data.sales[index];
-    if (sale?.bill_id && row.cells[1]) row.cells[1].insertAdjacentHTML("beforeend", ` <button type="button" class="user-action" data-print-bill="${sale.bill_id}">${billNo(sale.bill_id)}</button>`);
-  });
 };
 function restaurantBillHtml(bill) {
   const subtotal = bill.lines.reduce((sum, line) => sum + line.qty * line.price, 0);
@@ -2745,6 +2776,24 @@ $("#sales-table").addEventListener("click", async event => {
   const button = event.target.closest("[data-print-bill]");
   if (!button) return;
   try { printBill(await api("/api/bills/" + button.dataset.printBill)); } catch (error) { toast(error.message); }
+});
+$("#sales-table").addEventListener("click", async event => {
+  const button = event.target.closest("[data-local-bill-action]");
+  if (!button) return;
+  const id = Number(button.dataset.id), action = button.dataset.localBillAction;
+  let bill;
+  try { bill = await api(`/api/bills/${id}`); } catch (error) { return toast(error.message); }
+  if (action === "edit") return openBillEditor(bill);
+  if (action === "delete") {
+    if (!confirm(`Delete bill ${billNo(id)} permanently? Its items go back into stock, and its sales and payment records are removed.`)) return;
+    try { data = await api(`/api/bills/${id}`, { method: "DELETE" }); render(); toast(`${billNo(id)} deleted`); } catch (error) { toast(error.message); }
+    return;
+  }
+  if (action !== "receive" || !(bill.due > 0)) return;
+  openModal(`Receive payment · ${billNo(id)}`, `<p>Due now: <b>${money(bill.due)}</b></p><label>Amount received (৳)<input name="amount" type="number" min="0.01" max="${bill.due}" step="any" value="${bill.due}" required></label><label>Method<select name="method">${paymentOptions("Cash", quickPaymentChoices())}</select></label>`, async form => {
+    const { bill: saved, ...state } = await api(`/api/bills/${id}/payments`, { method: "POST", body: JSON.stringify({ amount: Number(form.get("amount")), method: form.get("method") }) });
+    data = state; render(); toast("Payment saved");
+  });
 });
 function openBillEditor(editing, initialProduct = null) {
   const pid = l => l.productId || data.products.find(p => p.name === l.name)?.id;
@@ -3024,29 +3073,31 @@ table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5p
 <table><thead><tr><th>#</th><th>Product</th><th>Brand</th><th>Color</th><th>Size</th><th>Material</th><th>SKU</th><th>Category</th><th class="r">Qty</th><th class="r">Min</th><th class="r">Price</th>${hasCost ? '<th class="r">Cost</th>' : ""}</tr></thead><tbody>${items.map((p, i) => `<tr><td>${i + 1}</td><td>${esc(p.name)}</td><td>${esc(p.brand || "")}</td><td>${esc(p.color || "")}</td><td>${esc(p.size || "")}</td><td>${esc(p.material || "")}</td><td>${esc(p.sku)}</td><td>${esc(p.category || "Other")}</td><td class="r">${p.qty} ${esc(p.unit || "piece")}</td><td class="r">${p.min}</td><td class="r">${money(p.price)}</td>${hasCost ? `<td class="r">${money(p.cost)}</td>` : ""}</tr>`).join("")}</tbody></table></body></html>`);
 };
 
-// Sales history: search by item, payment, bill no, date range
-$("#sales .table-scroll").insertAdjacentHTML("beforebegin", `<div class="sales-filter"><label class="search">⌕ <input id="sales-search" placeholder="Search item, payment, bill no, amount"></label><label>From <input type="date" id="sales-from"></label><label>To <input type="date" id="sales-to"></label><button class="button secondary" id="sales-clear" type="button">Clear</button><span class="sales-count" id="sales-count"></span><button class="button secondary" id="sales-print" type="button">Print</button></div>`);
-let currentMatchingSales = [];
+// Local Sales: search whole bills by customer, item, payment, bill no, or date range.
+$("#sales .table-scroll").insertAdjacentHTML("beforebegin", `<div class="sales-filter"><label class="search">⌕ <input id="sales-search" placeholder="Search bill, customer, item, payment"></label><label>From <input type="date" id="sales-from"></label><label>To <input type="date" id="sales-to"></label><button class="button secondary" id="sales-clear" type="button">Clear</button><span class="sales-count" id="sales-count"></span><button class="button secondary" id="sales-print" type="button">Print</button></div>`);
+let currentMatchingSales = [], currentLocalSaleGroups = [];
 function filterSales() {
   const q = $("#sales-search").value.trim().toLowerCase(), from = $("#sales-from").value, to = $("#sales-to").value;
-  const matchingSales = [];
+  const groups = groupLocalSales(data.sales), matchingGroups = [];
   [...$("#sales-table").rows].forEach((row, i) => {
-    const s = data.sales[i];
-    if (!s) return;
-    const hay = [s.product, s.payment, s.date, s.total, s.bill_id ? billNo(s.bill_id) : ""].join(" ").toLowerCase();
-    const ok = (!q || hay.includes(q)) && (!from || s.date >= from) && (!to || s.date <= to);
+    const group = groups[i];
+    if (!group) return;
+    const first = group.lines[0] || {};
+    const hay = [group.billId ? billNo(group.billId) : `Direct sale ${first.id}`, first.bill_customer, first.bill_phone, group.date, localSaleGroupTotals(group).net, ...group.lines.flatMap(sale => [sale.product, sale.payment, sale.total])].join(" ").toLowerCase();
+    const ok = (!q || hay.includes(q)) && (!from || group.date >= from) && (!to || group.date <= to);
     row.classList.toggle("hidden", !ok);
-    if (ok) matchingSales.push(s);
+    if (ok) matchingGroups.push(group);
   });
-  currentMatchingSales = matchingSales;
-  const shown = matchingSales.length, filtering = Boolean(q || from || to);
-  const salesGross = matchingSales.reduce((sum, item) => sum + Number(item.original_total ?? item.total ?? 0), 0);
-  const salesNet = matchingSales.reduce((sum, item) => sum + Number(item.total || 0), 0);
+  currentLocalSaleGroups = matchingGroups;
+  currentMatchingSales = matchingGroups.flatMap(group => group.lines);
+  const shown = matchingGroups.length, filtering = Boolean(q || from || to);
+  const salesGross = currentMatchingSales.reduce((sum, item) => sum + Number(item.original_total ?? item.total ?? 0), 0);
+  const salesNet = currentMatchingSales.reduce((sum, item) => sum + Number(item.total || 0), 0);
   const returnsTotal = Math.max(0, salesGross - salesNet);
-  $("#sales-count").textContent = filtering ? `${shown} of ${data.sales.length} sales` : `${shown} sales`;
-  $("#sales-summary").innerHTML = `<div class="list-summary-heading"><b>Sales totals</b><small>${filtering ? "Totals for the sales currently shown" : "All-time totals across recorded sale lines"}</small></div><div class="list-summary-cards"><div><small>Sale lines</small><b>${shown}</b></div><div><small>Gross sales</small><b>${money(salesGross)}</b></div><div><small>Returned value</small><b>${money(returnsTotal)}</b></div><div><small>Net sales after returns</small><b>${money(salesNet)}</b></div></div>`;
-  $("#sales-empty").textContent = filtering && !shown ? "No sales match your search." : "Your recorded sales will appear here.";
-  $("#sales-empty").classList.toggle("hidden", !!shown || (!filtering && data.sales.length > 0));
+  $("#sales-count").textContent = filtering ? `${shown} of ${groups.length} local sales` : `${shown} local sales`;
+  $("#sales-summary").innerHTML = `<div class="list-summary-heading"><b>Sales totals</b><small>${filtering ? "Totals for the local sales currently shown" : "Local sale lines only; online-order bills stay separate"}</small></div><div class="list-summary-cards"><div><small>Sale lines</small><b>${currentMatchingSales.length}</b></div><div><small>Gross sales</small><b>${money(salesGross)}</b></div><div><small>Returned value</small><b>${money(returnsTotal)}</b></div><div><small>Net sales after returns</small><b>${money(salesNet)}</b></div></div>`;
+  $("#sales-empty").textContent = filtering && !shown ? "No local sales match your search." : "Your local sales will appear here.";
+  $("#sales-empty").classList.toggle("hidden", !!shown || (!filtering && currentMatchingSales.length > 0));
 }
 ["#sales-search", "#sales-from", "#sales-to"].forEach(id => $(id).addEventListener("input", filterSales));
 $("#sales-clear").onclick = () => { $("#sales-search").value = $("#sales-from").value = $("#sales-to").value = ""; filterSales(); };
@@ -3057,13 +3108,21 @@ $("#sales-print").onclick = () => {
   const salesGross = currentMatchingSales.reduce((sum, item) => sum + Number(item.original_total ?? item.total ?? 0), 0);
   const salesNet = currentMatchingSales.reduce((sum, item) => sum + Number(item.total || 0), 0);
   const returnsTotal = Math.max(0, salesGross - salesNet);
-  printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Sales History</title><style>
+  const printRows = currentLocalSaleGroups.map(group => {
+    const first = group.lines[0] || {}, totals = localSaleGroupTotals(group);
+    const items = group.lines.map(sale => {
+      const originalQty = Number(sale.original_qty ?? sale.qty ?? 0), gross = Number(sale.original_total ?? sale.total ?? 0), returnedQty = Number(sale.returned_qty || 0);
+      return `<b>${esc(sale.product)}</b> · ${originalQty} ${esc(sale.unit || "piece")} × ${money(originalQty > 0 ? gross / originalQty : 0)} = ${money(gross)}${returnedQty > 0 ? `<br><i>Returned ${returnedQty} · Net ${sale.qty} ${esc(sale.unit || "piece")} / ${money(sale.total)}</i>` : ""}`;
+    }).join("<br>");
+    return `<tr><td>${esc(group.date)}</td><td>${group.billId ? billNo(group.billId) : `Direct sale #${first.id}`}</td><td>${esc(first.bill_customer || "-")}${first.bill_phone ? `<br>${esc(first.bill_phone)}` : ""}</td><td>${items}</td><td>${esc(first.payment || "-")}${totals.due > 0 ? `<br>Due ${money(totals.due)}` : ""}</td><td class="r">${money(totals.net)}${totals.returned > 0 ? `<br><small>${money(totals.returned)} returned</small>` : ""}</td></tr>`;
+  }).join("");
+  printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Local Sales</title><style>
 @page{margin:10mm}body{font:12px/1.4 system-ui,"Segoe UI",sans-serif;color:#000}h1{font-size:20px;margin:0}p{margin:2px 0 10px}
-table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5px 7px;text-align:left}th{background:#eee}.r{text-align:right}tr{page-break-inside:avoid}
+table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5px 7px;text-align:left;vertical-align:top}th{background:#eee}.r{text-align:right}tr{page-break-inside:avoid}
 .summary{margin:15px 0;padding:10px;background:#f5f5f5;border:1px solid #ccc}.summary-row{display:flex;justify-content:space-between;margin:3px 0}</style></head><body>
-<h1>${esc(data.shopName)} - Sales History</h1><p>${esc(data.workspace)} · ${new Date().toLocaleString("en-BD")} · ${dateRange}</p>
+<h1>${esc(data.shopName)} - Local Sales</h1><p>${esc(data.workspace)} · ${new Date().toLocaleString("en-BD")} · ${dateRange} · Online-order bills are not included.</p>
 <div class="summary"><div class="summary-row"><span>Sale lines:</span><b>${currentMatchingSales.length}</b></div><div class="summary-row"><span>Gross sales:</span><b>${money(salesGross)}</b></div><div class="summary-row"><span>Returned value:</span><b>${money(returnsTotal)}</b></div><div class="summary-row"><span>Net sales after returns:</span><b>${money(salesNet)}</b></div></div>
-<table><thead><tr><th>Date</th><th>Item</th><th>Qty / Unit</th><th>Payment</th><th>Bill No.</th><th class="r">Total</th></tr></thead><tbody>${currentMatchingSales.map((s) => `<tr><td>${esc(s.date)}</td><td>${esc(s.product)}${s.is_return ? ' <i>(Return)</i>' : ''}</td><td>${s.qty} ${esc(s.unit || "piece")}</td><td>${esc(s.payment)}</td><td>${s.bill_id ? billNo(s.bill_id) : "-"}</td><td class="r">${money(s.total)}</td></tr>`).join("")}</tbody></table></body></html>`);
+<table><thead><tr><th>Date</th><th>Bill / Sale</th><th>Customer</th><th>Items</th><th>Payment</th><th class="r">Total</th></tr></thead><tbody>${printRows}</tbody></table></body></html>`);
 };
 const renderBeforeExtras = render;
 render = function () {
@@ -3151,11 +3210,11 @@ render = function () {
   if (dues) $("#dues-text").textContent = `⚠ Customer dues: ${money(dues.amount)} unpaid across ${dues.count} bill${dues.count === 1 ? "" : "s"}`;
   $("#bills-list").classList.toggle("hidden", !sales);
 };
-$("#customer-history").insertAdjacentHTML("afterend", `<button class="button secondary" id="bills-list" type="button">Bills</button><button class="button secondary" id="returns-list" type="button">Returns</button>`);
-$("#bills-list").onclick = () => openBills(false);
+$("#customer-history").insertAdjacentHTML("afterend", `<button class="button secondary" id="bills-list" type="button">Local bills</button><button class="button secondary" id="returns-list" type="button">Returns</button>`);
+$("#bills-list").onclick = () => openBills(false, {}, "local");
 $("#dues-view").onclick = () => openBills(true);
 $("#returns-list").onclick = () => {
-  const rows = data.salesReturns || [];
+  const rows = (data.salesReturns || []).filter(row => !Number(row.online_order_id || 0));
   openModal("Sales returns", `<div class="returns-search-row"><label class="search">⌕ <input type="search" id="returns-search" placeholder="Search item, bill, reason, staff"></label><button class="button secondary" id="returns-clear-filters" type="button">Clear filters</button></div><div class="returns-date-filters"><label>From<input type="date" id="returns-from"></label><label>To<input type="date" id="returns-to"></label></div><p class="form-hint" id="returns-count"></p><div class="table-scroll bill-cart" style="max-height:430px"><table><thead><tr><th>Date</th><th>Item</th><th>Qty</th><th>Bill</th><th>Return value</th><th>Refund</th><th>Reason / by</th></tr></thead><tbody id="returns-body"></tbody></table></div><div class="empty hidden" id="returns-empty"></div>`, async () => {});
   dialog.classList.add("wide");
   const renderReturns = () => {
@@ -3182,10 +3241,12 @@ $("#returns-list").onclick = () => {
   const submit = $("#submit-modal"); submit.classList.add("hidden");
   dialog.addEventListener("close", () => { dialog.classList.remove("wide"); submit.classList.remove("hidden"); }, { once: true });
 };
-async function openBills(duesOnly, previousFilters = {}) {
+async function openBills(duesOnly, previousFilters = {}, scope = "all") {
+  if (!["all", "local", "online"].includes(scope)) scope = "all";
   let bills;
-  try { bills = (await api("/api/bills")).bills; } catch (error) { return toast(error.message); }
-  openModal("Bills", `<div class="cust-head"><label class="search">⌕ <input id="bill-find" placeholder="Search bill no, customer, phone, item" value="${esc(previousFilters.query || "")}"></label><label><input type="checkbox" id="dues-only" ${duesOnly ? "checked" : ""}> Dues only</label></div><div class="bills-date-filters"><label>From<input type="date" id="bills-from" value="${esc(previousFilters.from || "")}"></label><label>To<input type="date" id="bills-to" value="${esc(previousFilters.to || "")}"></label><button type="button" class="button secondary" id="bills-clear-filters">Clear filters</button></div><p class="form-hint" id="bills-count"></p><div class="table-scroll bill-cart" style="max-height:430px"><table><thead><tr><th>Bill</th><th>Date</th><th>Customer</th><th>Total</th><th>Paid</th><th>Due</th><th></th></tr></thead><tbody id="bills-body"></tbody></table></div><div class="empty hidden" id="bills-empty">No bills found.</div>`, async () => {});
+  try { bills = (await api(`/api/bills?scope=${scope}`)).bills; } catch (error) { return toast(error.message); }
+  const title = scope === "online" ? "Online order bills" : scope === "local" ? "Local sales bills" : "Bills";
+  openModal(title, `<div class="cust-head"><label class="search">⌕ <input id="bill-find" placeholder="Search bill no, customer, phone, item" value="${esc(previousFilters.query || "")}"></label><label><input type="checkbox" id="dues-only" ${duesOnly ? "checked" : ""}> Dues only</label></div><div class="bills-date-filters"><label>From<input type="date" id="bills-from" value="${esc(previousFilters.from || "")}"></label><label>To<input type="date" id="bills-to" value="${esc(previousFilters.to || "")}"></label><button type="button" class="button secondary" id="bills-clear-filters">Clear filters</button></div><p class="form-hint" id="bills-count"></p><div class="table-scroll bill-cart" style="max-height:430px"><table><thead><tr><th>Bill</th><th>Date</th><th>Customer</th><th>Total</th><th>Paid</th><th>Due</th><th></th></tr></thead><tbody id="bills-body"></tbody></table></div><div class="empty hidden" id="bills-empty">No bills found.</div>`, async () => {});
   dialog.classList.add("wide");
   const submit = $("#submit-modal"); submit.classList.add("hidden");
   dialog.addEventListener("close", () => { dialog.classList.remove("wide"); submit.classList.remove("hidden"); }, { once: true });
@@ -3195,7 +3256,7 @@ async function openBills(duesOnly, previousFilters = {}) {
     const invalidRange = Boolean(from && to && from > to);
     const hits = invalidRange ? [] : bills.filter(b => (!dues || b.due > 0) && (!from || b.date >= from) && (!to || b.date <= to) && (!q || `${billNo(b.id)} ${b.customer} ${b.phone} ${b.lines.map(l => l.name).join(" ")}`.toLowerCase().includes(q)));
     const btn = (a, label, cls = "") => `<button type="button" class="user-action ${cls}" data-a="${a}">${label}</button>`;
-    $("#bills-body").innerHTML = hits.map(b => `<tr data-id="${b.id}"><td>${billNo(b.id)}</td><td>${esc(b.date)}</td><td>${esc(b.customer || "-")}${b.phone ? `<br><small>${esc(b.phone)}</small>` : ""}</td><td>${money(b.netTotal ?? b.total)}${b.returned > 0 ? `<small class="form-hint">${money(b.returned)} returned</small>` : ""}</td><td>${money(b.paid)}</td><td>${b.due > 0 ? `<b>${money(b.due)}</b>` : b.customerCredit > 0 ? `<small>Credit ${money(b.customerCredit)}</small>` : "-"}</td><td>${btn("print", "Print")}${b.due > 0 ? btn("pay", "Receive") : ""}${!b.returned ? `${btn("edit", "Edit")}${btn("delete", "Delete", "danger")}` : "Return history"}</td></tr>`).join("");
+    $("#bills-body").innerHTML = hits.map(b => `<tr data-id="${b.id}"><td>${billNo(b.id)}</td><td>${esc(b.date)}</td><td>${esc(b.customer || "-")}${b.phone ? `<br><small>${esc(b.phone)}</small>` : ""}</td><td>${money(b.netTotal ?? b.total)}${b.returned > 0 ? `<small class="form-hint">${money(b.returned)} returned</small>` : ""}</td><td>${money(b.paid)}</td><td>${b.due > 0 ? `<b>${money(b.due)}</b>` : b.customerCredit > 0 ? `<small>Credit ${money(b.customerCredit)}</small>` : "-"}</td><td>${btn("print", "Print")}${b.due > 0 ? btn("pay", "Receive") : ""}${scope === "online" ? "Manage in Online Orders" : !b.returned ? `${btn("edit", "Edit")}${btn("delete", "Delete", "danger")}` : "Return history"}</td></tr>`).join("");
     $("#bills-count").textContent = invalidRange ? "The start date must be before the end date." : `Showing ${hits.length} of ${bills.length} bills`;
     $("#bills-empty").classList.toggle("hidden", hits.length > 0);
     $("#bills-empty").textContent = invalidRange ? "Choose a valid date range." : "No bills match your filters.";
@@ -3211,12 +3272,12 @@ async function openBills(duesOnly, previousFilters = {}) {
     if (button.dataset.a === "edit") return openBillEditor(bill);
     if (button.dataset.a === "delete") {
       if (!confirm(`Delete bill ${billNo(bill.id)} permanently? Its items go back into stock, and its sales and payment records are removed.`)) return;
-      try { data = await api("/api/bills/" + bill.id, { method: "DELETE" }); render(); toast(`${billNo(bill.id)} deleted`); closeModal(); openBills(again, filters); } catch (error) { toast(error.message); }
+      try { data = await api("/api/bills/" + bill.id, { method: "DELETE" }); render(); toast(`${billNo(bill.id)} deleted`); closeModal(); openBills(again, filters, scope); } catch (error) { toast(error.message); }
       return;
     }
     openModal(`Receive payment · ${billNo(bill.id)}`, `<p>Due now: <b>${money(bill.due)}</b></p><label>Amount received (৳)<input name="amount" type="number" min="0.01" max="${bill.due}" step="any" value="${bill.due}" required></label><label>Method<select name="method"><option>Cash</option><option>bKash</option><option>Nagad</option><option>Card</option></select></label>`, async form => {
       const { bill: saved, ...state } = await api(`/api/bills/${bill.id}/payments`, { method: "POST", body: JSON.stringify({ amount: Number(form.get("amount")), method: form.get("method") }) });
-      data = state; render(); toast("Payment saved"); setTimeout(() => openBills(again, filters), 50);
+      data = state; render(); toast("Payment saved"); setTimeout(() => openBills(again, filters, scope), 50);
     });
     submit.classList.remove("hidden");
   };
