@@ -186,29 +186,19 @@ th::first-letter,.nav-caption::first-letter,.eyebrow::first-letter,.report-total
   .dashboard-return-row { grid-template-columns: minmax(0,1fr) auto; gap: 4px 12px; }
   .dashboard-return-product { grid-row: 1 / 3; }
 }
-#sales .sales-history-summary { margin: 14px 0 0; padding: 0; border: 0; background: transparent; }
-#sales .sales-history-summary .list-summary-cards { grid-template-columns: repeat(auto-fit,minmax(135px,1fr)); }
-#sales .sales-summary-returned b { color: var(--bad); }
-#sales .sales-summary-profit b { color: var(--ok); }
-#sales .sales-quick-filters { margin: 4px 0 0; padding: 12px 0; border-top: 0; }
-.sales-quick-filters .online-dashboard-status-item>span { font-size: 12px; font-weight: 650; }
-.sales-payment-label { display: inline-flex; align-items: center; padding: 4px 8px; border: 1px solid var(--line); border-radius: 14px; background: var(--theme-paper,#f8fafc); color: var(--ink); font-size: 12px; font-weight: 650; overflow-wrap: anywhere; }
-.sales-payment-label.due { border-color: #ead29a; background: var(--warn-bg); color: var(--warn); }
-.sales-line-return { color: var(--bad)!important; }
-.sales-scroll { overflow-x: hidden; scrollbar-gutter: stable; }
-.sales-scroll:focus-visible { outline: 2px solid var(--theme-primary,#0284c7); outline-offset: 2px; }
+.sales-scroll { overflow-x: hidden; }
 .sales-scroll table { table-layout: fixed; width: 100%; }
 .sales-scroll th, .sales-scroll td { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .sales-scroll th:nth-child(1), .sales-scroll td:nth-child(1) { width: 13%; }
-.sales-scroll th:nth-child(2), .sales-scroll td:nth-child(2) { width: 44%; }
+.sales-scroll th:nth-child(2), .sales-scroll td:nth-child(2) { width: 48%; }
 .sales-scroll th:nth-child(3), .sales-scroll td:nth-child(3) { width: 12%; }
 .sales-scroll th:nth-child(4), .sales-scroll td:nth-child(4) { width: 13%; }
-.sales-scroll th:nth-child(5), .sales-scroll td:nth-child(5) { width: 18%; }
+.sales-scroll th:nth-child(5), .sales-scroll td:nth-child(5) { width: 14%; }
 #sales.sales-has-actions .sales-scroll th:nth-child(1), #sales.sales-has-actions .sales-scroll td:nth-child(1) { width: 12%; }
-#sales.sales-has-actions .sales-scroll th:nth-child(2), #sales.sales-has-actions .sales-scroll td:nth-child(2) { width: 36%; }
+#sales.sales-has-actions .sales-scroll th:nth-child(2), #sales.sales-has-actions .sales-scroll td:nth-child(2) { width: 40%; }
 #sales.sales-has-actions .sales-scroll th:nth-child(3), #sales.sales-has-actions .sales-scroll td:nth-child(3) { width: 11%; }
 #sales.sales-has-actions .sales-scroll th:nth-child(4), #sales.sales-has-actions .sales-scroll td:nth-child(4) { width: 12%; }
-#sales.sales-has-actions .sales-scroll th:nth-child(5), #sales.sales-has-actions .sales-scroll td:nth-child(5) { width: 19%; }
+#sales.sales-has-actions .sales-scroll th:nth-child(5), #sales.sales-has-actions .sales-scroll td:nth-child(5) { width: 15%; }
 #sales.sales-has-actions .sales-scroll th:nth-child(6), #sales.sales-has-actions .sales-scroll td:nth-child(6) { width: 10%; }
 .sales-scroll td.product-cell { line-height: 1.45; }
 .sales-scroll td.product-cell .user-action, .sales-scroll td:last-child .user-action { display: inline-block; box-sizing: border-box; margin: 3px 4px 3px 0; padding: 4px 8px; border: 1px solid #d5dde5; border-radius: 6px; background: #fff; color: var(--ink); font-size: 11px; line-height: 1.2; min-height: 28px; white-space: normal; text-align: center; text-decoration: none; overflow-wrap: anywhere; }

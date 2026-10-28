@@ -162,37 +162,6 @@ try {
   ok("returns reduce sales and profit correctly; gross, returns, net sales, and refunded totals are visible");
 } catch (error) { fail("Returns/profit: " + error.message); }
 
-console.log("Sales history overview and filters");
-try {
-  const app = readFileSync(join(root, "app.js"), "utf8");
-  const html = readFileSync(join(root, "index.html"), "utf8");
-  const sales = [
-    { id: 1, payment: "Cash", returned_qty: 0, original_total: 200, original_cost: 100, total: 200, cost: 100 },
-    { id: 2, payment: "Due", returned_qty: 1, original_total: 100, original_cost: 60, total: 50, cost: 30 }
-  ];
-  const summarizeStart = app.indexOf("function summarizeSales(sales) {");
-  const summarizeEnd = app.indexOf("\nfunction summarizeOnlineDashboard", summarizeStart);
-  const summaryStart = app.indexOf("function salesSummaryHtml(sales, filtering = false) {");
-  const summaryEnd = app.indexOf("\nfunction salesQuickFilterMatches", summaryStart);
-  const filterStart = app.indexOf("function salesQuickFilterMatches(sale, filter) {");
-  const filterEnd = app.indexOf("\nfunction renderSalesQuickFilters", filterStart);
-  if ([summarizeStart, summarizeEnd, summaryStart, summaryEnd, filterStart, filterEnd].some(index => index < 0)) throw new Error("sales history summary/filter helpers are missing");
-  const summaryHtml = new Function("sales", "t", "localizeDigits", "money", `${app.slice(summarizeStart, summarizeEnd)}\n${app.slice(summaryStart, summaryEnd)}\nreturn salesSummaryHtml(sales, true);`)(sales, value => value, String, value => `৳${value}`);
-  for (const token of ["Sale lines", "Gross sales", "Returned value", "Net sales after returns", "Profit after returns", "<b>2</b>", "<b>৳300</b>", "<b>৳50</b>", "<b>৳250</b>", "<b>৳120</b>"]) {
-    if (!summaryHtml.includes(token)) fail(`sales history summary is missing ${token}`);
-  }
-  const matches = new Function("sale", "filter", `${app.slice(filterStart, filterEnd)}\nreturn salesQuickFilterMatches(sale, filter);`);
-  if (!matches(sales[0], "") || !matches(sales[0], "all") || !matches(sales[0], "payment:Cash") || matches(sales[0], "payment:Due")) fail("sales payment quick filter failed");
-  if (!matches(sales[1], "returned") || matches(sales[0], "returned") || !matches(sales[1], "payment:Due")) fail("sales return quick filter failed");
-  for (const token of ["data-sales-quick-filter", "salesQuickFilterMatches(s, salesQuickFilter)", "salesSummaryHtml(matchingSales, filtering)", "salesQuickFilter = \"\"; filterSales()", "currentMatchingSales.map"]) {
-    if (!app.includes(token)) fail(`sales history filtering/printing is missing ${token}`);
-  }
-  for (const id of ["sales-summary", "sales-quick-filters", "sales-table"]) if (!html.includes(`id="${id}"`)) fail(`sales history element is missing: ${id}`);
-  if (!(html.indexOf('id="sales-summary"') < html.indexOf('id="sales-quick-filters"') && html.indexOf('id="sales-quick-filters"') < html.indexOf('class="table-scroll sales-scroll"'))) fail("sales summary and quick filters must appear above the history list");
-  if (!html.includes('class="table-scroll sales-scroll" tabindex="0"')) fail("sales history list must remain keyboard-scrollable");
-  ok("sales summary, payment/return filters, filtered printing, and detailed scrollable history are covered");
-} catch (error) { fail("Sales history overview: " + error.message); }
-
 console.log("Online sales dashboard");
 try {
   const app = readFileSync(join(root, "app.js"), "utf8");
