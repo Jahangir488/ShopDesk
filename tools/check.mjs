@@ -175,7 +175,7 @@ try {
   if (!app.includes("toast(`Upload complete:")) fail("bulk inventory uploads need a completion message");
   if (!html.includes('id="inventory-pagination"')) fail("inventory pagination markup is missing");
   const start = app.indexOf("function renderInventoryProducts() {");
-  const end = app.indexOf("\nconst repairStatuses", start);
+  const end = app.indexOf("\nconst LARGE_LIST_PAGE_SIZE", start);
   if (start < 0 || end < 0) throw new Error("renderInventoryProducts is missing");
   const element = (value = "") => ({ value, innerHTML: "", textContent: "", classList: { toggle() {} } });
   const elements = { "#search": element(), "#products-table": element(), "#products-empty": element(), "#inventory-pagination": element(), "#inventory-summary": element() };
@@ -191,8 +191,58 @@ try {
   if (!elements["#inventory-summary"].innerHTML.includes("22000 products")) fail("inventory summary no longer covers all products");
   api.setPage(2); api.render();
   if (!elements["#inventory-pagination"].innerHTML.includes("Showing 251–500 of 22000")) fail("inventory second page did not render the correct range");
-  ok("22,000 products render 250 rows per page; grouped Pharmacy availability and upload/download completion messages present");
+  for (const shopType of ["general", "pharmacy", "restaurant", "clothing", "mobile", "hardware", "grocery"]) {
+    data.shopType = shopType; api.setPage(1); api.render();
+    const count = (elements["#products-table"].innerHTML.match(/<tr>/g) || []).length;
+    if (count !== 250) fail(`${shopType} inventory rendered ${count} rows instead of 250`);
+  }
+  ok("22,000 products render 250 rows per page in every shop type; grouped Pharmacy availability and completion messages present");
 } catch (error) { fail("large inventory rendering: " + error.message); }
+
+console.log("Large data lists across all shop modules");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8");
+  const server = readFileSync(join(root, "server.mjs"), "utf8");
+  const html = readFileSync(join(root, "index.html"), "utf8");
+  for (const id of ["sales-pagination", "online-orders-pagination", "repairs-pagination", "devices-pagination", "stock-watch-pagination", "dashboard-online-pagination", "expenses-pagination"]) {
+    if (!html.includes(`id="${id}"`)) fail(`large-list pagination container is missing: ${id}`);
+  }
+  for (const token of [
+    "tbody.innerHTML = page.visible.map(job => {",
+    "body.innerHTML = page.visible.map(device => {",
+    "tbody.innerHTML = page.visible.map(order => {",
+    "const visibleOrders = page.visible;",
+    "page.visible.map(item => `<tr><td class=\"product-cell\"",
+    "$(\"#expenses-table\").innerHTML = page.visible.map(item =>"
+  ]) {
+    if (!app.includes(token)) fail(`large-list renderer is missing: ${token}`);
+  }
+  if (app.includes('$("#sales-table").innerHTML = localSaleGroups.map')) fail("Local Sales still renders every group before filtering");
+  const helperStart = app.indexOf("const LARGE_LIST_PAGE_SIZE = 250;");
+  const helperEnd = app.indexOf("\ndocument.addEventListener", helperStart);
+  const filterStart = app.indexOf("function filterSales() {");
+  const filterEnd = app.indexOf('\n["#sales-search"', filterStart);
+  if (helperStart < 0 || helperEnd < 0 || filterStart < 0 || filterEnd < 0) throw new Error("shared pager or Local Sales renderer is missing");
+  const element = (value = "") => ({ value, innerHTML: "", textContent: "", classList: { toggle() {} } });
+  const elements = Object.fromEntries(["#sales-search", "#sales-from", "#sales-to", "#sales-table", "#sales-count", "#sales-summary", "#sales-empty", "#sales-pagination"].map(selector => [selector, element()]));
+  const groups = Array.from({ length: 22000 }, (_, index) => ({ key: `sale:${index + 1}`, billId: 0, date: "2026-10-28", lines: [{ id: index + 1, product: `Product ${index + 1}`, payment: "Cash", original_total: 10, total: 10 }] }));
+  const localApi = new Function("$", "data", "signedInUser", "groupLocalSales", "localSaleGroupTotals", "localSaleGroupHtml", "billNo", "money", `
+    let currentMatchingSales = [], currentLocalSaleGroups = [];
+    ${app.slice(helperStart, helperEnd)}
+    ${app.slice(filterStart, filterEnd)}
+    return { filterSales, getGroups: () => currentLocalSaleGroups, getSales: () => currentMatchingSales };
+  `)(selector => elements[selector], { sales: groups, permissions: {} }, { permissions: {} }, value => value, () => ({ net: 0 }), () => "<tr>", String, Number);
+  localApi.filterSales();
+  const localRows = (elements["#sales-table"].innerHTML.match(/<tr>/g) || []).length;
+  if (localRows !== 250) fail(`Local Sales rendered ${localRows} rows instead of 250`);
+  if (localApi.getGroups().length !== 22000 || localApi.getSales().length !== 22000) fail("Local Sales totals/printing lost full filtered data");
+  if (!elements["#sales-pagination"].innerHTML.includes("Page 1 of 88")) fail("Local Sales page count is incorrect");
+  const stateStart = server.indexOf("function stateFor(user) {"), stateEnd = server.indexOf("\nconst mobileServiceEnabled", stateStart);
+  const stateSource = server.slice(stateStart, stateEnd);
+  for (const token of ["serviceJobPayments", "serviceJobParts", "WHERE job_id IN (${placeholders})"]) if (!stateSource.includes(token)) fail(`repair grouped query is missing: ${token}`);
+  if (stateSource.includes(".all(job.id)")) fail("repair state still runs payment/parts queries per job");
+  ok("Local Sales, Online Orders, Repairs, Devices, Stock Watch, dashboard orders, and Expenses use bounded rendering; repair queries are grouped");
+} catch (error) { fail("all-module large data: " + error.message); }
 
 console.log("Restaurant receipt and shop-type categories");
 try {

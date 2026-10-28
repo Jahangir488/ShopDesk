@@ -680,15 +680,45 @@ function renderInventoryProducts() {
   const totalInStock = [...stockByUnit.values()].map(item => `${Number(item.qty.toFixed(3)).toLocaleString("en-BD")} ${item.label}`).join(" · ") || "0";
   $("#inventory-summary").innerHTML = `<div class="list-summary-heading"><b>Inventory totals</b><small>${products.length} product${products.length === 1 ? "" : "s"}${query ? " matching your search" : " in this inventory"}</small></div><div class="list-summary-cards"><div><small>Total in stock</small><b title="${esc(totalInStock)}">${esc(totalInStock)}</b></div><div><small>Stock at cost</small><b>${money(cost)}</b></div><div><small>Stock at selling price</small><b>${money(retail)}</b></div><div><small>Potential gross profit</small><b>${money(retail - cost)}</b></div><div><small>Low / out of stock</small><b>${low}</b></div></div>`;
 }
+const LARGE_LIST_PAGE_SIZE = 250;
+const largeListPages = { sales: 1, onlineOrders: 1, repairs: 1, devices: 1, stockWatch: 1, dashboardOnline: 1, expenses: 1 };
+function largeListPage(key, items) {
+  const pageCount = Math.max(1, Math.ceil(items.length / LARGE_LIST_PAGE_SIZE));
+  const page = Math.min(Math.max(1, Number(largeListPages[key]) || 1), pageCount);
+  largeListPages[key] = page;
+  const start = (page - 1) * LARGE_LIST_PAGE_SIZE;
+  const visible = items.slice(start, start + LARGE_LIST_PAGE_SIZE);
+  return { page, pageCount, start, visible, showingStart: items.length ? start + 1 : 0, showingEnd: start + visible.length };
+}
+function showLargeListPagination(selector, key, page, total) {
+  const element = $(selector);
+  if (!element) return;
+  element.classList.toggle("hidden", page.pageCount <= 1);
+  element.innerHTML = page.pageCount <= 1 ? "" : `<button class="button secondary" type="button" data-large-list="${key}" data-page="${page.page - 1}" ${page.page === 1 ? "disabled" : ""}>← Previous</button><span>Page ${page.page} of ${page.pageCount} · Showing ${page.showingStart}–${page.showingEnd} of ${total}</span><button class="button secondary" type="button" data-large-list="${key}" data-page="${page.page + 1}" ${page.page === page.pageCount ? "disabled" : ""}>Next →</button>`;
+}
+document.addEventListener("click", event => {
+  const button = event.target.closest("button[data-large-list]");
+  if (!button || button.disabled) return;
+  const key = button.dataset.largeList;
+  largeListPages[key] = Number(button.dataset.page) || 1;
+  if (key === "sales") filterSales();
+  else if (key === "onlineOrders") renderOnlineOrders();
+  else if (key === "repairs") renderRepairJobs();
+  else if (key === "devices") renderDevices();
+  else if (key === "stockWatch") renderStockWatch();
+  else if (key === "dashboardOnline") renderOnlineDashboard(dateKey(new Date()), data.permissions || {});
+  else if (key === "expenses") renderExpenses();
+});
 const repairStatuses = ["Received", "Diagnosing", "Waiting for parts", "In repair", "Ready", "Delivered", "Cancelled"];
 function renderRepairJobs() {
   const query = (document.querySelector("#repair-search")?.value || "").trim().toLocaleLowerCase();
   const status = document.querySelector("#repair-status-filter")?.value || "";
   const jobs = (data.serviceJobs || []).filter(job => (!status || job.status === status) &&
     [job.job_no, job.customer, job.phone, job.brand, job.model, job.device_serial, job.issue].some(value => String(value || "").toLocaleLowerCase().includes(query)));
+  const page = largeListPage("repairs", jobs);
   const tbody = document.querySelector("#repairs-table");
   if (!tbody) return;
-  tbody.innerHTML = jobs.map(job => {
+  tbody.innerHTML = page.visible.map(job => {
     const warranty = Number(job.repair_warranty_days || 0), expiry = job.repair_warranty_expires || "";
     const warrantyText = job.status === "Delivered" && warranty ? `${expiry && expiry >= dateKey(new Date()) ? "Active" : "Expired"} · ${dateLabel(expiry)}` : warranty ? `${warranty} days on delivery` : "—";
     const repairAdmin = signedInUser?.role === "admin";
@@ -697,22 +727,25 @@ function renderRepairJobs() {
     return `<tr><td><b>${esc(job.job_no)}</b></td><td>${dateLabel(job.received_date)}</td><td>${esc(job.customer)}<small class="form-hint">${esc(job.phone)}</small></td><td>${esc([job.brand, job.model].filter(Boolean).join(" "))}<small class="form-hint">${esc(job.device_serial || "No IMEI/serial")}</small></td><td>${esc(job.issue)}</td><td><span class="status ${job.status === "Delivered" ? "" : job.status === "Cancelled" ? "out" : "low"}">${esc(job.status)}</span></td><td>${esc(warrantyText)}</td><td>${money(job.status === "Delivered" ? job.final_charge : job.estimate)}<small class="form-hint">Due ${money(job.due)}</small></td><td>${canEdit ? `<button type="button" class="user-action" data-repair-action="open" data-id="${job.id}">Open</button>` : `<button type="button" class="user-action" disabled title="Only an administrator can reopen a cancelled job. Delivered edits need assigned access.">Locked</button>`}<button type="button" class="user-action" data-repair-action="print" data-id="${job.id}">Print ticket</button>${canDelete ? `<button type="button" class="user-action danger" data-repair-action="delete" data-id="${job.id}">Delete</button>` : ""}</td></tr>`;
   }).join("");
   document.querySelector("#repairs-empty")?.classList.toggle("hidden", jobs.length > 0);
+  showLargeListPagination("#repairs-pagination", "repairs", page, jobs.length);
 }
-document.querySelector("#repair-search")?.addEventListener("input", renderRepairJobs);
-document.querySelector("#repair-status-filter")?.addEventListener("change", renderRepairJobs);
+document.querySelector("#repair-search")?.addEventListener("input", () => { largeListPages.repairs = 1; renderRepairJobs(); });
+document.querySelector("#repair-status-filter")?.addEventListener("change", () => { largeListPages.repairs = 1; renderRepairJobs(); });
 function renderDevices() {
   const query = (document.querySelector("#device-search")?.value || "").trim().toLocaleLowerCase();
   const rows = (data.devices || []).filter(device => [device.serial, device.product_name, device.customer, device.phone].some(value => String(value || "").toLocaleLowerCase().includes(query)));
+  const page = largeListPage("devices", rows);
   const body = document.querySelector("#devices-table");
   if (!body) return;
-  body.innerHTML = rows.map(device => {
+  body.innerHTML = page.visible.map(device => {
     const expired = device.warranty_expires && device.warranty_expires < dateKey(new Date());
     const status = device.status === "Returned" ? "Returned" : !device.warranty_months ? "No warranty" : expired ? "Warranty expired" : "Warranty active";
     return `<tr><td><b>${esc(device.serial)}</b></td><td>${esc(device.product_name)}</td><td>${dateLabel(device.sold_date)}</td><td>${esc(device.customer || "—")}<small class="form-hint">${esc(device.phone || "")}</small></td><td>${device.warranty_expires ? dateLabel(device.warranty_expires) : "—"}</td><td><span class="status ${device.status === "Returned" || expired ? "out" : "low"}">${status}</span></td></tr>`;
   }).join("");
   document.querySelector("#devices-empty")?.classList.toggle("hidden", rows.length > 0);
+  showLargeListPagination("#devices-pagination", "devices", page, rows.length);
 }
-document.querySelector("#device-search")?.addEventListener("input", renderDevices);
+document.querySelector("#device-search")?.addEventListener("input", () => { largeListPages.devices = 1; renderDevices(); });
 function repairPartRow(productId = "", qty = 1, index = 0) {
   const options = data.products.map(product => `<option value="${product.id}" ${Number(product.id) === Number(productId) ? "selected" : ""}>${esc(productLabel(product))} · ${product.qty} ${esc(product.unit || "piece")} · cost ${money(product.cost)}</option>`).join("");
   return `<div class="form-row repair-part-row" data-part-row="${index}"><label>Stock part<select name="partProduct" required><option value="">Choose a part</option>${options}</select></label><label>Qty<input name="partQty" type="number" min="0.001" step="any" value="${Number(qty)}" required></label><button class="user-action danger" type="button" data-remove-part aria-label="Remove part">Remove</button></div>`;
@@ -932,8 +965,15 @@ function renderOnlineOrders() {
   if (!tbody) return;
 
   const canDeleteOnlineOrders = signedInUser?.permissions?.delete_online_orders && data.permissions?.online_orders;
+  const page = largeListPage("onlineOrders", orders);
+  const returnsByOrder = new Map();
+  for (const row of data.onlineOrderReturns || []) {
+    const key = Number(row.online_order_id);
+    if (!returnsByOrder.has(key)) returnsByOrder.set(key, []);
+    returnsByOrder.get(key).push(row);
+  }
 
-  tbody.innerHTML = orders.map(order => {
+  tbody.innerHTML = page.visible.map(order => {
     const lines = order.lines || [];
     const itemsHtml = lines.map(l => {
       const details = [
@@ -951,7 +991,7 @@ function renderOnlineOrders() {
     const paymentInfo = `<b>COD: ${money(order.due_cod)}</b><br><small class="form-hint">${esc(order.payment_method)} (${esc(order.payment_status)})</small>${order.advance_paid > 0 ? `<br><small class="form-hint">Advance: ${money(order.advance_paid)}</small>` : ""}`;
 
     const totalInfo = `<b>${money(order.total)}</b>${order.delivery_charge > 0 ? `<br><small class="form-hint">+ ${money(order.delivery_charge)} deliv.</small>` : ""}${order.discount > 0 ? `<br><small class="form-hint">- ${money(order.discount)} disc.</small>` : ""}`;
-    const orderReturnRows = (data.onlineOrderReturns || []).filter(row => Number(row.online_order_id) === Number(order.id));
+    const orderReturnRows = returnsByOrder.get(Number(order.id)) || [];
     const alreadyReturnedQty = orderReturnRows.reduce((sum, row) => sum + Number(row.qty || 0), 0);
     const orderedQty = (order.lines || []).reduce((sum, line) => sum + Number(line.qty || 0), 0);
     const canRecordReturn = ((order.order_status === "Delivered" && order.stock_deducted) || (order.order_status === "Returned" && !order.stock_deducted && alreadyReturnedQty + 0.000001 < orderedQty)) && data.permissions?.inventory;
@@ -981,6 +1021,7 @@ function renderOnlineOrders() {
 
   $("#online-orders-empty").textContent = invalidRange ? "Choose a valid date range." : allOrders.length ? "No online orders match your search, status, or date filters." : "No online orders yet. Click 'New online order' to record your first parcel or customer shipment.";
   $("#online-orders-empty").classList.toggle("hidden", orders.length > 0);
+  showLargeListPagination("#online-orders-pagination", "onlineOrders", page, orders.length);
 
   const totalRevenue = orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
   const totalCod = orders.reduce((sum, o) => sum + Number(o.due_cod || 0), 0);
@@ -1422,11 +1463,11 @@ function downloadOnlineOrdersExcel() {
   downloadFile(`online-orders-${dateKey(new Date())}.csv`, csv);
 }
 
-document.querySelector("#online-order-search")?.addEventListener("input", renderOnlineOrders);
-document.querySelector("#online-order-status-filter")?.addEventListener("change", renderOnlineOrders);
-document.querySelector("#online-orders-from")?.addEventListener("change", renderOnlineOrders);
-document.querySelector("#online-orders-to")?.addEventListener("change", renderOnlineOrders);
-document.querySelector("#online-orders-clear-dates")?.addEventListener("click", () => { $("#online-orders-from").value = ""; $("#online-orders-to").value = ""; renderOnlineOrders(); });
+document.querySelector("#online-order-search")?.addEventListener("input", () => { largeListPages.onlineOrders = 1; renderOnlineOrders(); });
+document.querySelector("#online-order-status-filter")?.addEventListener("change", () => { largeListPages.onlineOrders = 1; renderOnlineOrders(); });
+document.querySelector("#online-orders-from")?.addEventListener("change", () => { largeListPages.onlineOrders = 1; renderOnlineOrders(); });
+document.querySelector("#online-orders-to")?.addEventListener("change", () => { largeListPages.onlineOrders = 1; renderOnlineOrders(); });
+document.querySelector("#online-orders-clear-dates")?.addEventListener("click", () => { $("#online-orders-from").value = ""; $("#online-orders-to").value = ""; largeListPages.onlineOrders = 1; renderOnlineOrders(); });
 
 function openOnlineOrderReturnModal(order) {
   const recorded = (data.onlineOrderReturns || []).filter(row => Number(row.online_order_id) === Number(order.id));
@@ -1521,7 +1562,7 @@ function openOnlineOrderCustomers() {
     $("#online-customer-body").innerHTML = filtered.map(customer => `<tr data-customer-search="${esc(customer.search)}"><td>${esc(customer.name)}</td><td>${esc(customer.phone || "—")}</td><td>${customer.count}</td><td>${money(customer.total)}</td><td>${customer.latest ? esc(dateLabel(customer.latest)) : "—"}</td></tr>`).join("");
     $("#online-customer-count").textContent = `${filtered.length} customer${filtered.length === 1 ? "" : "s"} · Select a row to filter orders`;
     $("#online-customer-empty").classList.toggle("hidden", filtered.length > 0);
-    $("#online-customer-body").querySelectorAll("tr[data-customer-search]").forEach(row => row.onclick = () => { $("#online-order-search").value = row.dataset.customerSearch; closeModal(); renderOnlineOrders(); });
+    $("#online-customer-body").querySelectorAll("tr[data-customer-search]").forEach(row => row.onclick = () => { $("#online-order-search").value = row.dataset.customerSearch; largeListPages.onlineOrders = 1; closeModal(); renderOnlineOrders(); });
   };
   $("#online-customer-search").oninput = renderCustomers;
   renderCustomers();
@@ -1628,15 +1669,20 @@ function renderOnlineDashboard(todayKey, permissions) {
     return `<button type="button" class="online-dashboard-status-item${active ? " active" : ""}" data-online-status-filter="${group.key}" aria-pressed="${active}" title="${esc(t("Filter orders by status"))}"><span class="status ${group.className}">${esc(t(group.label))}</span><b>${localizeDigits(summary[group.countKey])}</b></button>`;
   }).join("");
   const activeGroup = ONLINE_DASHBOARD_STATUS_GROUPS.find(group => group.key === dashboardOnlineStatusFilter);
-  const visibleOrders = onlineDashboardOrdersForStatus(orders, dashboardOnlineStatusFilter);
+  const filteredOrders = onlineDashboardOrdersForStatus(orders, dashboardOnlineStatusFilter);
+  const page = largeListPage("dashboardOnline", filteredOrders);
+  const visibleOrders = page.visible;
+  const returnTotals = new Map();
+  for (const row of data.onlineOrderReturns || []) returnTotals.set(Number(row.online_order_id), (returnTotals.get(Number(row.online_order_id)) || 0) + Number(row.total || 0));
   $("#online-orders-filter-label").textContent = activeGroup ? `· ${t(activeGroup.label)}` : "";
   $("#online-orders-show-all").classList.toggle("hidden", !activeGroup);
-  $("#online-orders-list-meta").textContent = `${localizeDigits(visibleOrders.length)} / ${localizeDigits(orders.length)} ${t("orders shown")}`;
+  $("#online-orders-list-meta").textContent = `${localizeDigits(filteredOrders.length)} / ${localizeDigits(orders.length)} ${t("orders shown")}`;
   $("#dashboard-online-orders-list").innerHTML = visibleOrders.length ? visibleOrders.map(order => {
     const items = (order.lines || []).map(line => `${esc(line.name)} × ${localizeDigits(line.qty)} ${esc(line.unit || "piece")} · ${money(line.lineTotal ?? Number(line.qty || 0) * Number(line.price || 0))}`).join("<br>");
-    const returnedValue = (data.onlineOrderReturns || []).filter(row => Number(row.online_order_id) === Number(order.id)).reduce((sum, row) => sum + Number(row.total || 0), 0);
+    const returnedValue = returnTotals.get(Number(order.id)) || 0;
     return `<article class="online-dashboard-order"><div class="online-dashboard-order-main"><div class="online-dashboard-order-title"><b>${esc(order.order_no)}</b><span>${dateLabel(order.date)}</span></div><strong>${esc(order.customer_name)}</strong><small>📞 ${esc(order.customer_phone)}</small><small>📍 ${esc(order.shipping_address)}${order.city_area ? ` (${esc(order.city_area)})` : ""}</small><small class="online-dashboard-order-items">${items || "No items"}</small>${order.notes ? `<small>Note: ${esc(order.notes)}</small>` : ""}</div><div class="online-dashboard-order-courier"><b>${esc(order.courier || "Not assigned")}</b>${order.tracking_id ? `<small>Tracking: ${esc(order.tracking_id)}</small>` : "<small>No tracking ID</small>"}</div><div class="online-dashboard-order-payment"><b>${money(order.total)}</b><small>${esc(order.payment_method)} · ${esc(order.payment_status)}</small><small>Advance ${money(order.advance_paid)} · COD ${money(order.due_cod)}</small>${Number(order.delivery_charge || 0) > 0 || Number(order.discount || 0) > 0 ? `<small>Delivery ${money(order.delivery_charge)} · Discount ${money(order.discount)}</small>` : ""}${returnedValue > 0 ? `<small class="online-dashboard-order-returned"><span>Returned</span> ${money(returnedValue)}</small>` : ""}</div><span class="status ${order.order_status.toLowerCase()}">${esc(order.order_status)}</span></article>`;
   }).join("") : activeGroup ? '<div class="empty">No orders match this status.</div>' : '<div class="empty">No online orders yet. Your latest online orders will appear here.</div>';
+  showLargeListPagination("#dashboard-online-pagination", "dashboardOnline", page, filteredOrders.length);
 }
 
 $("#dashboard-online-sales")?.addEventListener("click", event => {
@@ -1645,15 +1691,37 @@ $("#dashboard-online-sales")?.addEventListener("click", event => {
   if (!showAll && !statusButton) return;
   const nextFilter = showAll ? "" : statusButton.dataset.onlineStatusFilter;
   dashboardOnlineStatusFilter = !showAll && dashboardOnlineStatusFilter !== nextFilter ? nextFilter : "";
+  largeListPages.dashboardOnline = 1;
   renderOnlineDashboard(dateKey(new Date()), data.permissions || {});
   $("#dashboard-online-orders-list").scrollTop = 0;
 });
 
+function renderExpenses() {
+  const canManage = signedInUser?.permissions?.records && data.permissions?.expenses;
+  $("#expenses-actions-header").classList.toggle("hidden", !canManage);
+  $("#expenses").classList.toggle("expenses-has-actions", canManage);
+  const expenses = data.expenses || [];
+  const page = largeListPage("expenses", expenses);
+  $("#expenses-table").innerHTML = page.visible.map(item => `<tr><td>${dateLabel(item.date)}</td><td>${esc(item.category)}</td><td>${esc(item.note || "—")}</td><td><b>${money(item.amount)}</b></td>${canManage ? `<td><button class="user-action" data-expense-action="edit" data-id="${item.id}">Edit</button><button class="user-action danger" data-expense-action="delete" data-id="${item.id}">Delete</button></td>` : ""}</tr>`).join("");
+  $("#expenses-empty").classList.toggle("hidden", expenses.length > 0);
+  showLargeListPagination("#expenses-pagination", "expenses", page, expenses.length);
+}
+
+function renderStockWatch() {
+  const permissions = data.permissions || {};
+  const low = data.products.filter(item => item.qty <= item.min);
+  $("#low-count").textContent = permissions.inventory ? `${low.length} low` : "—";
+  $("#stock-watch-count").textContent = low.length ? `${low.length} low` : "";
+  const page = largeListPage("stockWatch", low);
+  $("#stock-watch").innerHTML = low.length
+    ? `<div class="table-scroll stock-watch-scroll"><table><thead><tr><th>PRODUCT</th><th>UNIT</th><th>IN STOCK</th><th>REORDER AT</th><th>STATUS</th></tr></thead><tbody>${page.visible.map(item => `<tr><td class="product-cell" data-label="Product">${esc(item.icon || "📦")} &nbsp;${esc(productLabel(item))}</td><td data-label="Unit">${esc(item.unit || "piece")}</td><td class="qty" data-label="In stock">${item.qty} ${esc(item.unit || "piece")}</td><td data-label="Reorder at">${item.min} ${esc(item.unit || "piece")}</td><td data-label="Status"><span class="status ${item.qty === 0 ? "out" : "low"}">${item.qty === 0 ? "Out of stock" : "Low stock"}</span></td></tr>`).join("")}</tbody></table></div>`
+    : '<div class="empty">Everything is stocked up. Nice work!</div>';
+  showLargeListPagination("#stock-watch-pagination", "stockWatch", page, low.length);
+}
+
 function render() {
   applyShopTypeTheme(data.shopType || "general");
   const permissions = data.permissions || {};
-  const canManageSalesRecords = signedInUser?.permissions?.records && permissions.sales;
-  const canManageExpenseRecords = signedInUser?.permissions?.records && permissions.expenses;
   const todayKey = dateKey(new Date());
   const month = todayKey.slice(0, 7);
   const displayName = signedInUser?.displayName || signedInUser?.username || "Shopkeeper";
@@ -1746,32 +1814,14 @@ function render() {
   const quickSaleHidden = !permissions.sales || data.shopType === "pharmacy" || data.requireCustomer || data.taxMode !== "none" || !quickPaymentChoices().length;
   $("#new-sale").classList.toggle("hidden", quickSaleHidden);
   $("#sale-shortcut").classList.toggle("hidden", quickSaleHidden);
-  $("#low-count").textContent = permissions.inventory ? `${data.products.filter(item => item.qty <= item.min).length} low` : "—";
-
-  const low = data.products.filter(item => item.qty <= item.min);
-  $("#stock-watch-count").textContent = low.length ? `${low.length} low` : "";
-  $("#stock-watch").innerHTML = low.length
-    ? `<div class="table-scroll stock-watch-scroll"><table><thead><tr><th>PRODUCT</th><th>UNIT</th><th>IN STOCK</th><th>REORDER AT</th><th>STATUS</th></tr></thead><tbody>${low.map(item => `<tr><td class="product-cell" data-label="Product">${esc(item.icon || "📦")} &nbsp;${esc(productLabel(item))}</td><td data-label="Unit">${esc(item.unit || "piece")}</td><td class="qty" data-label="In stock">${item.qty} ${esc(item.unit || "piece")}</td><td data-label="Reorder at">${item.min} ${esc(item.unit || "piece")}</td><td data-label="Status"><span class="status ${item.qty === 0 ? "out" : "low"}">${item.qty === 0 ? "Out of stock" : "Low stock"}</span></td></tr>`).join("")}</tbody></table></div>`
-    : '<div class="empty">Everything is stocked up. Nice work!</div>';
+  renderStockWatch();
   renderInventoryProducts();
   renderOnlineOrders();
   renderRepairJobs();
   renderDevices();
-  const canReturnSales = permissions.sales && permissions.inventory;
   $("#sales-actions-header").classList.remove("hidden");
   $("#sales").classList.remove("sales-has-actions");
-  const localSaleGroups = groupLocalSales(data.sales);
-  const localSales = localSaleGroups.flatMap(group => group.lines);
-  $("#sales-table").innerHTML = localSaleGroups.map(group => localSaleGroupHtml(group, canManageSalesRecords, canReturnSales)).join("");
-  $("#sales-empty").classList.toggle("hidden", localSales.length > 0);
-  const salesGross = localSales.reduce((sum, item) => sum + Number(item.original_total ?? item.total ?? 0), 0);
-  const salesNet = localSales.reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const returnsTotal = Math.max(0, salesGross - salesNet);
-  $("#sales-summary").innerHTML = `<div class="list-summary-heading"><b>Sales totals</b><small>Local sale lines only; online-order bills stay separate</small></div><div class="list-summary-cards"><div><small>Sale lines</small><b>${localSales.length}</b></div><div><small>Gross sales</small><b>${money(salesGross)}</b></div><div><small>Returned value</small><b>${money(returnsTotal)}</b></div><div><small>Net sales after returns</small><b>${money(salesNet)}</b></div></div>`;
-  $("#expenses-actions-header").classList.toggle("hidden", !canManageExpenseRecords);
-  $("#expenses").classList.toggle("expenses-has-actions", canManageExpenseRecords);
-  $("#expenses-table").innerHTML = data.expenses.map(item => `<tr><td>${dateLabel(item.date)}</td><td>${esc(item.category)}</td><td>${esc(item.note || "—")}</td><td><b>${money(item.amount)}</b></td>${canManageExpenseRecords ? `<td><button class="user-action" data-expense-action="edit" data-id="${item.id}">Edit</button><button class="user-action danger" data-expense-action="delete" data-id="${item.id}">Delete</button></td>` : ""}</tr>`).join("");
-  $("#expenses-empty").classList.toggle("hidden", data.expenses.length > 0);
+  renderExpenses();
   $("#add-product").classList.toggle("hidden", !permissions.inventory);
   $("#new-sale").classList.toggle("hidden", quickSaleHidden);
   $("#sale-shortcut").classList.toggle("hidden", quickSaleHidden);
@@ -3107,18 +3157,20 @@ $("#sales .table-scroll").insertAdjacentHTML("beforebegin", `<div class="sales-f
 let currentMatchingSales = [], currentLocalSaleGroups = [];
 function filterSales() {
   const q = $("#sales-search").value.trim().toLowerCase(), from = $("#sales-from").value, to = $("#sales-to").value;
-  const groups = groupLocalSales(data.sales), matchingGroups = [];
-  [...$("#sales-table").rows].forEach((row, i) => {
-    const group = groups[i];
-    if (!group) return;
+  const groups = groupLocalSales(data.sales);
+  const matchingGroups = groups.filter(group => {
+    if ((from && group.date < from) || (to && group.date > to)) return false;
+    if (!q) return true;
     const first = group.lines[0] || {};
     const hay = [group.billId ? billNo(group.billId) : `Direct sale ${first.id}`, first.bill_customer, first.bill_phone, group.date, localSaleGroupTotals(group).net, ...group.lines.flatMap(sale => [sale.product, sale.payment, sale.total])].join(" ").toLowerCase();
-    const ok = (!q || hay.includes(q)) && (!from || group.date >= from) && (!to || group.date <= to);
-    row.classList.toggle("hidden", !ok);
-    if (ok) matchingGroups.push(group);
+    return hay.includes(q);
   });
   currentLocalSaleGroups = matchingGroups;
   currentMatchingSales = matchingGroups.flatMap(group => group.lines);
+  const page = largeListPage("sales", matchingGroups);
+  const canManage = signedInUser?.permissions?.records && data.permissions?.sales;
+  const canReturn = data.permissions?.sales && data.permissions?.inventory;
+  $("#sales-table").innerHTML = page.visible.map(group => localSaleGroupHtml(group, canManage, canReturn)).join("");
   const shown = matchingGroups.length, filtering = Boolean(q || from || to);
   const salesGross = currentMatchingSales.reduce((sum, item) => sum + Number(item.original_total ?? item.total ?? 0), 0);
   const salesNet = currentMatchingSales.reduce((sum, item) => sum + Number(item.total || 0), 0);
@@ -3126,10 +3178,11 @@ function filterSales() {
   $("#sales-count").textContent = filtering ? `${shown} of ${groups.length} local sales` : `${shown} local sales`;
   $("#sales-summary").innerHTML = `<div class="list-summary-heading"><b>Sales totals</b><small>${filtering ? "Totals for the local sales currently shown" : "Local sale lines only; online-order bills stay separate"}</small></div><div class="list-summary-cards"><div><small>Sale lines</small><b>${currentMatchingSales.length}</b></div><div><small>Gross sales</small><b>${money(salesGross)}</b></div><div><small>Returned value</small><b>${money(returnsTotal)}</b></div><div><small>Net sales after returns</small><b>${money(salesNet)}</b></div></div>`;
   $("#sales-empty").textContent = filtering && !shown ? "No local sales match your search." : "Your local sales will appear here.";
-  $("#sales-empty").classList.toggle("hidden", !!shown || (!filtering && currentMatchingSales.length > 0));
+  $("#sales-empty").classList.toggle("hidden", shown > 0);
+  showLargeListPagination("#sales-pagination", "sales", page, shown);
 }
-["#sales-search", "#sales-from", "#sales-to"].forEach(id => $(id).addEventListener("input", filterSales));
-$("#sales-clear").onclick = () => { $("#sales-search").value = $("#sales-from").value = $("#sales-to").value = ""; filterSales(); };
+["#sales-search", "#sales-from", "#sales-to"].forEach(id => $(id).addEventListener("input", () => { largeListPages.sales = 1; filterSales(); }));
+$("#sales-clear").onclick = () => { $("#sales-search").value = $("#sales-from").value = $("#sales-to").value = ""; largeListPages.sales = 1; filterSales(); };
 $("#sales-print").onclick = () => {
   if (!currentMatchingSales.length) return toast("No sales to print.");
   const from = $("#sales-from").value, to = $("#sales-to").value;

@@ -1263,6 +1263,30 @@ function stateFor(user) {
         WHERE expiry_date<>'' AND expiry_date>=? AND quantity_remaining>quantity_quarantined
         GROUP BY product_id`).all(today()).map(row => [Number(row.product_id), Number(row.qty || 0)]))
     : null;
+  const serviceJobRows = salesPermission && settings?.shop_type === "mobile"
+    ? db.prepare("SELECT * FROM service_jobs ORDER BY id DESC LIMIT 2000").all()
+    : [];
+  const serviceJobIds = serviceJobRows.map(job => Number(job.id));
+  const serviceJobPayments = new Map(), serviceJobParts = new Map();
+  if (serviceJobIds.length) {
+    const placeholders = serviceJobIds.map(() => "?").join(",");
+    for (const row of db.prepare(`SELECT job_id,date,amount,method,received_by FROM service_job_payments WHERE job_id IN (${placeholders}) ORDER BY job_id,id`).all(...serviceJobIds)) {
+      const { job_id: jobId, ...payment } = row;
+      if (!serviceJobPayments.has(jobId)) serviceJobPayments.set(jobId, []);
+      serviceJobPayments.get(jobId).push(payment);
+    }
+    for (const row of db.prepare(`SELECT job_id,product_id,product_name,qty,unit,unit_cost FROM service_job_parts WHERE job_id IN (${placeholders}) ORDER BY job_id,id`).all(...serviceJobIds)) {
+      const { job_id: jobId, ...part } = row;
+      if (!serviceJobParts.has(jobId)) serviceJobParts.set(jobId, []);
+      serviceJobParts.get(jobId).push(part);
+    }
+  }
+  const serviceJobs = serviceJobRows.map(job => {
+    const payments = serviceJobPayments.get(Number(job.id)) || [], parts = serviceJobParts.get(Number(job.id)) || [];
+    const paid = payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+    const charge = job.status === "Delivered" ? Number(job.final_charge) : Number(job.estimate);
+    return { ...job, job_no: "R-" + String(job.id).padStart(6, "0"), payments, parts, paid, due: Math.max(0, charge - paid) };
+  });
   return {
     shopName: settings?.shop_name || "Bolts & Boards",
     workspace: settings?.workspace || "Uttara, Dhaka",
@@ -1324,13 +1348,7 @@ function stateFor(user) {
       }) : [],
     salesReturns: salesPermission ? db.prepare("SELECT * FROM sales_returns ORDER BY id DESC LIMIT 2000").all() : [],
     onlineOrderReturns: onlineOrdersPermission ? db.prepare("SELECT * FROM sales_returns WHERE online_order_id IS NOT NULL ORDER BY id DESC LIMIT 2000").all() : [],
-    serviceJobs: salesPermission && settings?.shop_type === "mobile" ? db.prepare("SELECT * FROM service_jobs ORDER BY id DESC LIMIT 2000").all().map(job => {
-      const payments = db.prepare("SELECT date,amount,method,received_by FROM service_job_payments WHERE job_id=? ORDER BY id").all(job.id);
-      const parts = db.prepare("SELECT product_id,product_name,qty,unit,unit_cost FROM service_job_parts WHERE job_id=? ORDER BY id").all(job.id);
-      const paid = payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
-      const charge = job.status === "Delivered" ? Number(job.final_charge) : Number(job.estimate);
-      return { ...job, job_no: "R-" + String(job.id).padStart(6, "0"), payments, parts, paid, due: Math.max(0, charge - paid) };
-    }) : [],
+    serviceJobs,
     onlineOrderCustomers: onlineOrdersPermission ? db.prepare("SELECT name,phone,address,city_area FROM (SELECT customer_name AS name,customer_phone AS phone,shipping_address AS address,city_area FROM online_orders UNION SELECT customer AS name,phone,'' AS address,'' AS city_area FROM bills) WHERE LENGTH(TRIM(name))>0 ORDER BY name COLLATE NOCASE LIMIT 500").all() : [],
     onlineOrders: onlineOrdersPermission ? db.prepare("SELECT * FROM online_orders ORDER BY id DESC LIMIT 2000").all().map(order => ({
       ...order,
