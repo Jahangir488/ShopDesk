@@ -1768,9 +1768,9 @@ function render() {
 }
 
 const dialog = $("#modal");
-const BULK_INVENTORY_MAX_FILE_BYTES = 5 * 1024 * 1024;
-const BULK_INVENTORY_MAX_ROWS = 5000;
-const BULK_INVENTORY_UPLOAD_HELP = "The Category column is imported, and missing categories are created for this shop type. Upload up to 5 MB or 5,000 rows at a time.";
+const BULK_INVENTORY_MAX_FILE_BYTES = 25 * 1024 * 1024;
+const BULK_INVENTORY_MAX_ROWS = 25000;
+const BULK_INVENTORY_UPLOAD_HELP = "The Category column is imported, and missing categories are created for this shop type. Upload up to 25 MB or 25,000 rows at a time.";
 const bulkInventoryCoreHeaders = ["Product ID", "Product Name", "SKU", "Selling Price", "Cost", "Quantity", "Low Stock Alert", "Unit", "Category", "Barcode"];
 function bulkInventoryTemplateConfig(shopType = data.shopType) {
   const baseRow = item => [
@@ -2561,7 +2561,7 @@ $("#bulk-inventory-file").onchange = async event => {
   const file = event.target.files?.[0];
   if (!file) return;
   try {
-    if (file.size > BULK_INVENTORY_MAX_FILE_BYTES) throw new Error("Please keep the inventory CSV file under 5 MB.");
+    if (file.size > BULK_INVENTORY_MAX_FILE_BYTES) throw new Error("Please keep the inventory CSV file under 25 MB.");
     const csvRows = parseCsv((await file.text()).replace(/^\uFEFF/, ""));
     const rawHeaders = csvRows.shift();
     if (!rawHeaders || !rawHeaders.length) throw new Error("The CSV file is empty.");
@@ -2611,7 +2611,7 @@ $("#bulk-inventory-file").onchange = async event => {
       };
     });
     if (!rows.length) throw new Error("The template has no inventory rows to upload.");
-    if (rows.length > BULK_INVENTORY_MAX_ROWS) throw new Error("Upload no more than 5,000 rows at a time.");
+    if (rows.length > BULK_INVENTORY_MAX_ROWS) throw new Error("Upload no more than 25,000 rows at a time.");
     const updates = rows.filter(row => row.id).length;
     const additions = rows.length - updates;
     const summary = data.shopType === "pharmacy"

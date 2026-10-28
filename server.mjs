@@ -2043,9 +2043,9 @@ async function handleApi(request, response, url) {
     if (user.role !== "admin" || !can(user, "records") || !requirePermission(user, "inventory")) {
       return json(response, 403, { error: "Administrator, edit-record, and inventory access are required for bulk inventory upload." });
     }
-    const body = await readJson(request, 16_000_000);
-    if (!Array.isArray(body.rows) || body.rows.length < 1 || body.rows.length > 5000) {
-      return json(response, 400, { error: "Upload between 1 and 5,000 inventory rows." });
+    const body = await readJson(request, 64_000_000);
+    if (!Array.isArray(body.rows) || body.rows.length < 1 || body.rows.length > 25000) {
+      return json(response, 400, { error: "Upload between 1 and 25,000 inventory rows." });
     }
     const isPharmacy = pharmacyMode();
     const seenIds = new Set();
