@@ -40,6 +40,19 @@ try {
   ok("Batches & expiry is a read-only list; Receive batch and Add medicine always restore Save");
 } catch (error) { fail("modal save actions: " + error.message); }
 
+console.log("Shop profile separation");
+try {
+  const server = readFileSync(join(root, "server.mjs"), "utf8");
+  const app = readFileSync(join(root, "app.js"), "utf8");
+  const html = readFileSync(join(root, "index.html"), "utf8");
+  for (const token of ["AsyncLocalStorage", "CREATE TABLE IF NOT EXISTS shop_profiles", "session_profile_id", "/api/profiles/switch", "validateBackupForCurrentProfile", "currentProfileDataDir"]) {
+    if (!server.includes(token)) fail(`profile isolation server safeguard is missing: ${token}`);
+  }
+  if (!html.includes('id="shop-profiles-button"')) fail("shop-profile switcher is missing from the top bar");
+  if (!app.includes("Switching affects only this sign-in session") || !app.includes("Fixed for this profile")) fail("profile switcher or fixed-type explanation is missing");
+  ok("per-session profile routing, isolated data paths, safe restore, and switcher UI present");
+} catch (error) { fail("shop profile separation: " + error.message); }
+
 console.log("Translations");
 try {
   const bn = JSON.parse(readFileSync(join(root, "i18n", "bn.json"), "utf8"));

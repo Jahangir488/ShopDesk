@@ -1105,4 +1105,38 @@ body[data-shop-type] thead th{
   font-size:21px;
   line-height:1;
 }
+.shop-profile-list{
+  display:grid;
+  gap:8px;
+  margin:16px 0;
+}
+.shop-profile-choice{
+  width:100%;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  padding:13px 15px;
+  border:1px solid var(--line,#dfe3e6);
+  border-radius:10px;
+  background:#fff;
+  color:inherit;
+  text-align:left;
+  cursor:pointer;
+}
+.shop-profile-choice:hover:not(:disabled),.shop-profile-choice:focus-visible{
+  border-color:var(--theme-primary,#1f6f5c);
+  background:var(--theme-welcome-bg,#f3f8f6);
+}
+.shop-profile-choice.current{
+  border-color:var(--theme-primary,#1f6f5c);
+  background:var(--theme-welcome-bg,#f3f8f6);
+  opacity:1;
+}
+.shop-profile-choice small{
+  display:block;
+  margin-top:3px;
+  color:var(--muted,#66736d);
+  font-weight:400;
+}
 

@@ -4,6 +4,8 @@ import { dirname, extname, isAbsolute, join, normalize, relative } from "node:pa
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes, randomInt, scryptSync, timingSafeEqual } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { connect as tlsConnect } from "node:tls";
 import { cpus as systemCpus, freemem, networkInterfaces, totalmem } from "node:os";
 import { DEFAULT_FOLDER_NAME, DEFAULT_KEEP, GoogleDriveBackup, decryptSecret, encryptSecret, loadBackupKeyMaterial, prepareOffsitePayload } from "./lib/offsite.mjs";
@@ -69,7 +71,18 @@ function serverLoadStatus() {
 }
 mkdirSync(dataDir, { recursive: true });
 const dbFile = join(dataDir, "shop.sqlite3");
-let db = new DatabaseSync(dbFile);
+let masterDb = new DatabaseSync(dbFile);
+const profileContext = new AsyncLocalStorage();
+const profileDatabases = new Map();
+// Every business query resolves to the request's profile connection. Authentication
+// queries use masterDb explicitly, so sessions remain shared without sharing data.
+const db = new Proxy({}, {
+  get(_target, property) {
+    const connection = profileContext.getStore()?.db || masterDb;
+    const value = Reflect.get(connection, property, connection);
+    return typeof value === "function" ? value.bind(connection) : value;
+  }
+});
 db.exec(`
   PRAGMA journal_mode = WAL;
   PRAGMA busy_timeout = 5000;
@@ -802,6 +815,159 @@ function escapeHtml(value) {
 function htmlPage(title, message, ok = true) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Shop Desk</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f2f4f6;color:#1f2328;font:16px/1.6 system-ui,"Segoe UI",sans-serif}main{background:#fff;border:1px solid #dfe3e6;border-radius:14px;padding:32px;max-width:520px;margin:24px;box-shadow:0 18px 50px #1f23281a}h1{margin:0 0 10px;font-size:22px}p{color:#5b6670}a{display:inline-block;margin-top:10px;background:#1f6f5c;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;font-weight:600}</style></head><body><main><h1>${ok ? "&#10003;" : "&#9888;"} ${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p><a href="/#backup-tools">Return to Shop Desk</a></main></body></html>`;
 }
+const SHOP_PROFILES = [
+  { type: "general", name: "General store" },
+  { type: "pharmacy", name: "Pharmacy" },
+  { type: "grocery", name: "Grocery" },
+  { type: "restaurant", name: "Restaurant" },
+  { type: "hardware", name: "Hardware & tools" },
+  { type: "clothing", name: "Clothing" },
+  { type: "mobile", name: "Mobile, repair & devices" }
+];
+const profileDefinition = type => SHOP_PROFILES.find(profile => profile.type === type) || SHOP_PROFILES[0];
+const masterProfile = () => masterDb.prepare("SELECT * FROM shop_profiles WHERE is_master=1 ORDER BY id LIMIT 1").get();
+
+function ensureProfileRegistry() {
+  masterDb.exec(`
+    CREATE TABLE IF NOT EXISTS shop_profiles (
+      id INTEGER PRIMARY KEY,
+      type TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      directory TEXT NOT NULL UNIQUE,
+      is_master INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+  const userColumns = masterDb.prepare("PRAGMA table_info(users)").all().map(column => column.name);
+  if (!userColumns.includes("last_profile_id")) masterDb.exec("ALTER TABLE users ADD COLUMN last_profile_id INTEGER");
+  const sessionColumns = masterDb.prepare("PRAGMA table_info(sessions)").all().map(column => column.name);
+  if (!sessionColumns.includes("profile_id")) masterDb.exec("ALTER TABLE sessions ADD COLUMN profile_id INTEGER");
+  masterDb.prepare("INSERT OR IGNORE INTO settings(id,shop_name,workspace) VALUES(1,'Shop Desk','Set workspace')").run();
+  if (!masterProfile()) {
+    const settings = masterDb.prepare("SELECT shop_name, shop_type FROM settings WHERE id=1").get() || {};
+    const definition = profileDefinition(settings.shop_type);
+    masterDb.prepare("INSERT INTO shop_profiles(type,name,directory,is_master) VALUES(?,?, '',1)")
+      .run(definition.type, String(settings.shop_name || definition.name).trim() || definition.name);
+  }
+  for (const definition of SHOP_PROFILES) {
+    masterDb.prepare("INSERT OR IGNORE INTO shop_profiles(type,name,directory,is_master) VALUES(?,?,?,0)")
+      .run(definition.type, definition.name, `profiles/${definition.type}`);
+  }
+  const currentMaster = masterProfile();
+  // Type is fixed within a profile; retain custom categories but remove stale
+  // ownership labels left by the old single-database shop-type selector.
+  masterDb.prepare("UPDATE categories SET shop_type=?").run(currentMaster.type);
+  addProfileCategories(currentMaster.type);
+  profileDatabases.set(currentMaster.id, { db: masterDb, dbFile, dataDir, profile: currentMaster });
+}
+
+function ensureProfileReady(profile) {
+  const cached = profileDatabases.get(profile.id);
+  if (cached && cached.db.isOpen !== false) return cached;
+  if (profile.is_master) {
+    if (masterDb.isOpen === false) {
+      masterDb = new DatabaseSync(dbFile);
+      masterDb.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;");
+    }
+    const currentMaster = masterProfile();
+    const entry = { db: masterDb, dbFile, dataDir, profile: currentMaster };
+    profileDatabases.set(profile.id, entry);
+    return entry;
+  }
+  const profileDataDir = join(dataDir, "profiles", profile.type);
+  const profileDbFile = join(profileDataDir, "shop.sqlite3");
+  mkdirSync(profileDataDir, { recursive: true });
+  const isNew = !existsSync(profileDbFile);
+  const initialized = spawnSync(process.execPath, [join(root, "server.mjs")], {
+    env: {
+      ...process.env,
+      SHOP_DATA_DIR: profileDataDir,
+      SHOP_PROFILE_CHILD: "1",
+      SHOP_INITIALIZE_ONLY: "1",
+      SHOP_PROFILE_NEW: isNew ? "1" : "0",
+      SHOP_PROFILE_TYPE: profile.type,
+      SHOP_PROFILE_NAME: profile.name
+    },
+    encoding: "utf8",
+    timeout: 30000,
+    windowsHide: true
+  });
+  if (initialized.error || initialized.status !== 0) {
+    const detail = String(initialized.stderr || initialized.error?.message || "initialization failed").trim().slice(-800);
+    throw new Error(`Could not initialize ${profile.name}: ${detail}`);
+  }
+  const connection = new DatabaseSync(profileDbFile);
+  connection.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;");
+  const entry = { db: connection, dbFile: profileDbFile, dataDir: profileDataDir, profile };
+  profileDatabases.set(profile.id, entry);
+  return entry;
+}
+
+function withShopProfile(profile, callback) {
+  const entry = ensureProfileReady(profile);
+  return profileContext.run({ ...entry, profile }, callback);
+}
+function listShopProfiles(selectedId) {
+  const activeId = selectedId || profileContext.getStore()?.profile?.id || masterProfile()?.id;
+  return masterDb.prepare("SELECT * FROM shop_profiles ORDER BY is_master DESC, id").all()
+    .map(profile => ({ id: profile.id, type: profile.type, name: profile.name, current: profile.id === activeId, isMaster: Boolean(profile.is_master) }));
+}
+function requestShopProfile(request) {
+  const cookies = parseCookies(request.headers.cookie);
+  const token = cookies.sid;
+  const selected = token ? masterDb.prepare("SELECT profile_id FROM sessions WHERE token_hash=? AND expires_at>?").get(tokenHash(token), Date.now()) : null;
+  return masterDb.prepare("SELECT * FROM shop_profiles WHERE id=?").get(selected?.profile_id || -1) || masterProfile();
+}
+function usesMasterDatabase(pathname) {
+  return pathname === "/api/login" || pathname === "/api/logout" || pathname === "/api/setup" ||
+    pathname === "/api/auth/status" || pathname === "/api/auth/me" || pathname === "/api/email-recovery-request" ||
+    pathname.startsWith("/api/recover/") || pathname === "/api/recover-account" || pathname === "/api/recovery-code" || pathname.startsWith("/api/users") ||
+    pathname === "/api/profiles" || pathname === "/api/profiles/switch" ||
+    pathname === "/api/profile" || pathname.startsWith("/api/profile/");
+}
+function currentProfileDataDir() {
+  return profileContext.getStore()?.dataDir || dataDir;
+}
+function currentProfileDbFile() {
+  return profileContext.getStore()?.dbFile || dbFile;
+}
+function reopenCurrentProfileDatabase() {
+  const context = profileContext.getStore();
+  if (!context) throw new Error("No active shop profile for database restore.");
+  const connection = new DatabaseSync(context.dbFile);
+  connection.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;");
+  context.db = connection;
+  if (context.profile.is_master) masterDb = connection;
+  profileDatabases.set(context.profile.id, { ...context, db: connection });
+  return connection;
+}
+function finishRestoredDatabase() {
+  upgradeRestoredDatabase();
+  if (profileContext.getStore()?.profile?.is_master) ensureProfileRegistry();
+}
+function validateBackupForCurrentProfile(check) {
+  const columns = check.prepare("PRAGMA table_info(settings)").all().map(column => column.name);
+  const backupType = columns.includes("shop_type") ? (check.prepare("SELECT shop_type FROM settings WHERE id=1").get()?.shop_type || "general") : "general";
+  const currentType = db.prepare("SELECT shop_type FROM settings WHERE id=1").get()?.shop_type || "general";
+  if (backupType !== currentType) {
+    throw new Error(`This backup belongs to ${profileDefinition(backupType).name}, not ${profileDefinition(currentType).name}. Switch to the matching shop profile before restoring it.`);
+  }
+}
+
+if (process.env.SHOP_PROFILE_CHILD === "1") {
+  const definition = profileDefinition(process.env.SHOP_PROFILE_TYPE);
+  db.prepare("INSERT OR IGNORE INTO settings(id,shop_name,workspace,shop_type) VALUES(1,?, 'Set workspace', ?)")
+    .run(String(process.env.SHOP_PROFILE_NAME || definition.name), definition.type);
+  if (process.env.SHOP_PROFILE_NEW === "1") {
+    db.prepare("UPDATE settings SET shop_name=?, shop_type=? WHERE id=1").run(String(process.env.SHOP_PROFILE_NAME || definition.name), definition.type);
+    db.exec("DELETE FROM categories;");
+    addProfileCategories(definition.type);
+  }
+  db.prepare("UPDATE categories SET shop_type=?").run(definition.type);
+  addProfileCategories(definition.type);
+}
+if (process.env.SHOP_PROFILE_CHILD !== "1") ensureProfileRegistry();
+
 const tokenHash = token => createHash("sha256").update(token).digest("hex");
 const validText = value => typeof value === "string" && value.trim().length > 0 && value.length <= 500;
 const validAmount = value => Number.isFinite(Number(value)) && Number(value) >= 0;
@@ -1302,16 +1468,17 @@ function currentUser(request) {
   const token = parseCookies(request.headers.cookie).sid;
   if (!token) return null;
   const hash = tokenHash(token);
-  const session = db.prepare(`SELECT users.* FROM sessions JOIN users ON users.id=sessions.user_id
+  const session = masterDb.prepare(`SELECT users.*,sessions.profile_id AS session_profile_id FROM sessions JOIN users ON users.id=sessions.user_id
     WHERE sessions.token_hash=? AND sessions.expires_at>? AND users.active=1`).get(hash, Date.now());
-  if (!session) db.prepare("DELETE FROM sessions WHERE token_hash=?").run(hash);
+  if (!session) masterDb.prepare("DELETE FROM sessions WHERE token_hash=?").run(hash);
   return session || null;
 }
 
 function createSession(user, response) {
   const token = randomBytes(32).toString("base64url");
   const expiry = Date.now() + 12 * 60 * 60 * 1000;
-  db.prepare("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)").run(tokenHash(token), user.id, expiry);
+  const selected = masterDb.prepare("SELECT id FROM shop_profiles WHERE id=?").get(user.last_profile_id) || masterProfile();
+  masterDb.prepare("INSERT INTO sessions(token_hash,user_id,expires_at,profile_id) VALUES(?,?,?,?)").run(tokenHash(token), user.id, expiry, selected.id);
   response.setHeader("Set-Cookie", `sid=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${isSecureRequest(response.req) ? "; Secure" : ""}`);
 }
 
@@ -1409,7 +1576,6 @@ function stateFor(user) {
   const expensesPermission = can(user, "expenses");
   const supplierEditPermission = can(user, "supplier_purchases");
   const foodPackagesPermission = can(user, "food_packages");
-  if (settings?.shop_type === "restaurant") seedStarterFoodPackages(false);
   const pharmacyAvailability = settings?.shop_type === "pharmacy"
     ? new Map(db.prepare(`SELECT product_id,SUM(MAX(0,quantity_remaining-quantity_quarantined)) AS qty
         FROM medicine_batches
@@ -1450,6 +1616,8 @@ function stateFor(user) {
     whatsappNumber: settings?.whatsapp_number || "",
     contactAddress: settings?.contact_address || "",
     shopType: settings?.shop_type || "general",
+    activeProfile: (() => { const profile = profileContext.getStore()?.profile || masterProfile(); return { id: profile.id, type: profile.type, name: profile.name }; })(),
+    profiles: listShopProfiles(),
     foodPackages: settings?.shop_type === "restaurant" && (inventory || salesPermission || foodPackagesPermission)
       ? readFoodPackages()
       : [],
@@ -1521,7 +1689,7 @@ const mobileServiceEnabled = () => db.prepare("SELECT shop_type FROM settings WH
 
 // The owner is the "jahangir" account (or, if that does not exist, the first administrator) and always has every power. Everyone else has only what is granted to them.
 const CAPS = ["inventory", "sales", "expenses", "server_load", "team", "admins", "records", "repair_records", "food_packages", "settings", "supplier_purchases", "backups", "online_orders", "delete_online_orders"];
-const ownerId = () => (db.prepare("SELECT id FROM users WHERE username='jahangir' COLLATE NOCASE").get() || db.prepare("SELECT MIN(id) AS id FROM users WHERE role='admin'").get()).id;
+const ownerId = () => (masterDb.prepare("SELECT id FROM users WHERE username='jahangir' COLLATE NOCASE").get() || masterDb.prepare("SELECT MIN(id) AS id FROM users WHERE role='admin'").get()).id;
 const can = (user, permission) => permission === "repair_records"
   ? user.id === ownerId() || user.role === "admin" || Boolean(user.can_repair_records)
   : permission === "food_packages"
@@ -1733,6 +1901,20 @@ async function handleApi(request, response, url) {
     return json(response, 403, { error: "Only Jahangir and administrators can set up or change account recovery options." });
   }
   if (route === "/api/auth/me" && method === "GET") return json(response, 200, { user: publicUser(user) });
+  if (route === "/api/profiles" && method === "GET") {
+    return json(response, 200, { profiles: listShopProfiles(user.session_profile_id), activeProfileId: user.session_profile_id || masterProfile().id });
+  }
+  if (route === "/api/profiles/switch" && method === "POST") {
+    const body = await readJson(request);
+    const target = masterDb.prepare("SELECT * FROM shop_profiles WHERE id=?").get(Number(body.profileId));
+    if (!target) return json(response, 404, { error: "Shop profile not found." });
+    // Initialize first so a failed profile open cannot strand the session.
+    ensureProfileReady(target);
+    const token = parseCookies(request.headers.cookie).sid;
+    masterDb.prepare("UPDATE sessions SET profile_id=? WHERE token_hash=?").run(target.id, tokenHash(token));
+    masterDb.prepare("UPDATE users SET last_profile_id=? WHERE id=?").run(target.id, user.id);
+    return withShopProfile(target, () => json(response, 200, stateFor({ ...user, session_profile_id: target.id })));
+  }
   if (route === "/api/update-check" && method === "GET") {
     if (user.role !== "admin" && !can(user, "settings")) return json(response, 403, { error: "Shop settings access is required to check for updates." });
     const manifestUrl = String(process.env.SHOP_UPDATE_MANIFEST_URL || "").trim();
@@ -1847,7 +2029,7 @@ async function handleApi(request, response, url) {
   if (route === "/api/settings" && method === "PUT") {
     if (!can(user, "settings")) return json(response, 403, { error: "Shop settings access is required." });
     const body = await readJson(request);
-    const validTypes = ["hardware", "grocery", "clothing", "pharmacy", "mobile", "restaurant", "general"];
+    const validTypes = SHOP_PROFILES.map(profile => profile.type);
     const validCurrencies = ["BDT", "USD", "EUR", "GBP", "INR", "PKR", "NPR", "LKR", "AUD", "CAD"];
     const validLocales = ["en-BD", "bn-BD", "en-US", "en-GB", "en-IN", "en-PK", "en-NP", "en-LK", "en-AU", "en-CA"];
     const methods = Array.isArray(body.paymentMethods) ? [...new Set(body.paymentMethods.map(value => String(value).trim()).filter(Boolean))] : [];
@@ -1858,9 +2040,12 @@ async function handleApi(request, response, url) {
     const whatsappNumber = String(body.whatsappNumber || "").trim();
     const contactAddress = String(body.contactAddress || "").trim();
     const taxRate = Number(body.taxRate);
-    const existingSettings = db.prepare("SELECT language, bangla_digits FROM settings WHERE id=1").get() || {};
+    const existingSettings = db.prepare("SELECT language, bangla_digits, shop_type FROM settings WHERE id=1").get() || {};
     const language = body.language === undefined ? (existingSettings.language || "en") : (body.language === "bn" ? "bn" : "en");
     const banglaDigits = body.banglaDigits === undefined ? Boolean(existingSettings.bangla_digits) : Boolean(body.banglaDigits);
+    if (body.shopType !== (existingSettings.shop_type || "general")) {
+      return json(response, 409, { error: "Shop type is fixed for this profile. Use Switch shop profile to work in a separate shop type without mixing records." });
+    }
     if (!validText(body.shopName) || !validText(body.workspace) || !validTypes.includes(body.shopType) || !validCurrencies.includes(body.currencyCode) || !validLocales.includes(body.locale) ||
         !Number.isFinite(taxRate) || taxRate < 0 || taxRate > 100 || !["none", "inclusive", "exclusive"].includes(body.taxMode) || !methods.length || methods.length > 10 || methods.some(value => value.length > 40) || contactNumber.length > 60 || website.length > 250 || email.length > 254 || (email && !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email)) || facebookPage.length > 250 || whatsappNumber.length > 60 || contactAddress.length > 300) {
       return json(response, 400, { error: "Check the shop type, currency, tax, and payment settings." });
@@ -1873,7 +2058,6 @@ async function handleApi(request, response, url) {
       .run(body.shopName.trim(), body.workspace.trim(), body.shopType, body.currencyCode, body.locale, taxRate, body.taxMode, body.requireCustomer ? 1 : 0, body.allowDiscounts ? 1 : 0, methods.join(","), contactNumber, website, email, facebookPage, whatsappNumber, contactAddress, language, banglaDigits ? 1 : 0);
     addProfileCategories(body.shopType);
     ensurePharmacyDetails();
-    if (body.shopType === "restaurant") seedStarterFoodPackages(false);
     return json(response, 200, stateFor(user));
   }
 
@@ -3483,7 +3667,7 @@ async function handleApi(request, response, url) {
     if (user.role !== "admin" || !can(user, "backups")) return json(response, 403, { error: "Backup and restore access is required." });
     const name = backupFileMatch[1];
     if (!/^shop-\d{4}-\d{2}-\d{2}(?:-\d{6,13})?\.sqlite3$/.test(name)) return json(response, 400, { error: "Backup name is invalid." });
-    const file = join(backupDir, name);
+    const file = join(currentBackupDir(), name);
     if (!existsSync(file)) return json(response, 404, { error: "Backup file not found." });
     response.writeHead(200, { "Content-Type": "application/vnd.sqlite3", "Content-Disposition": `attachment; filename="${name}"`, "Cache-Control": "no-store" });
     createReadStream(file).pipe(response);
@@ -3494,7 +3678,8 @@ async function handleApi(request, response, url) {
     let bytes;
     try { bytes = await readBinary(request); } catch (error) { return json(response, error.status || 400, { error: error.message || "The backup file could not be read." }); }
     if (bytes.length < 16 || bytes.subarray(0, 16).toString("binary") !== "SQLite format 3\0") return json(response, 400, { error: "Choose a valid Shop Desk SQLite backup file." });
-    const uploadName = `shop-${today()}-${Date.now()}.sqlite3`, uploadFile = join(backupDir, uploadName);
+    const uploadName = `shop-${today()}-${Date.now()}.sqlite3`, uploadFile = join(currentBackupDir(), uploadName);
+    mkdirSync(currentBackupDir(), { recursive: true });
     writeFileSync(uploadFile, bytes, { flag: "wx" });
     let check;
     try {
@@ -3502,33 +3687,33 @@ async function handleApi(request, response, url) {
       const integrity = check.prepare("PRAGMA integrity_check").get();
       const hasTable = table => Boolean(check.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table));
       if (integrity?.integrity_check !== "ok" || !["users", "settings", "products", "sales", "bills"].every(hasTable)) throw new Error("This file is not a valid Shop Desk database backup.");
+      validateBackupForCurrentProfile(check);
     } catch (error) {
       try { check?.close(); } catch {}
       rmSync(uploadFile, { force: true });
       return json(response, 400, { error: error.message || "The backup could not be checked." });
     }
     check.close();
-    const safetyName = `shop-${today()}-${Date.now() + 1}.sqlite3`, safetyFile = join(backupDir, safetyName);
+    const safetyName = `shop-${today()}-${Date.now() + 1}.sqlite3`, safetyFile = join(currentBackupDir(), safetyName);
     let databaseClosed = false;
     try {
       db.exec(`VACUUM INTO '${safetyFile.replace(/'/g, "''")}'`);
       db.close(); databaseClosed = true;
-      copyFileSync(uploadFile, dbFile);
-      db = new DatabaseSync(dbFile);
-      db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;");
-      upgradeRestoredDatabase();
+      copyFileSync(uploadFile, currentProfileDbFile());
+      reopenCurrentProfileDatabase();
+      finishRestoredDatabase();
       return json(response, 200, { ok: true, safetyBackup: safetyName, restoredBackup: uploadName });
     } catch (error) {
       if (!databaseClosed) { rmSync(uploadFile, { force: true }); return json(response, 500, { error: "Restore could not start. The current database is still open and unchanged." }); }
       try { db?.close(); } catch {}
-      try { copyFileSync(safetyFile, dbFile); db = new DatabaseSync(dbFile); db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;"); upgradeRestoredDatabase(); }
+      try { copyFileSync(safetyFile, currentProfileDbFile()); reopenCurrentProfileDatabase(); finishRestoredDatabase(); }
       catch (restoreError) { console.error("Could not reopen the safety copy after restore failure:", restoreError); }
       rmSync(uploadFile, { force: true });
       return json(response, 500, { error: "Restore failed. The pre-restore safety copy was kept." });
     }
   }
   if (route === "/api/fresh-start" && method === "POST") {
-    const owner = db.prepare("SELECT id FROM users WHERE username='jahangir' COLLATE NOCASE AND role='admin'").get();
+    const owner = masterDb.prepare("SELECT id FROM users WHERE username='jahangir' COLLATE NOCASE AND role='admin'").get();
     if (user.username.toLowerCase() !== "jahangir" || user.role !== "admin" || !owner || owner.id !== user.id) return json(response, 403, { error: "Only the Jahangir administrator can prepare a fresh shop setup." });
     const body = await readJson(request);
     if (body.confirmation !== "FRESH START") return json(response, 400, { error: "Type FRESH START to confirm this action." });
@@ -3538,14 +3723,13 @@ async function handleApi(request, response, url) {
     db.exec("BEGIN IMMEDIATE");
     try {
       for (const table of ["medicine_batch_sales", "medicine_batch_returns", "medicine_batches", "medicine_details", "service_job_parts", "service_job_payments", "service_jobs", "online_orders", "sold_devices", "bill_payments", "sales_returns", "sales", "bills", "expenses", "purchase_lines", "purchases", "supplier_payments", "stock_movements", "customers", "suppliers", "products", "categories", "activity_log"]) db.exec(`DELETE FROM ${table}`);
-      db.prepare("DELETE FROM sessions WHERE user_id<>?").run(owner.id);
-      db.prepare("DELETE FROM users WHERE id<>?").run(owner.id);
+      const currentType = db.prepare("SELECT shop_type FROM settings WHERE id=1").get()?.shop_type || "general";
       db.prepare(`INSERT INTO settings(id,shop_name,workspace,shop_type,currency_code,locale,tax_rate,tax_mode,require_customer,allow_discounts,payment_methods,contact_number,website,email,facebook_page,whatsapp_number,contact_address)
-        VALUES(1,'Shop Desk','Set workspace','general','BDT','en-BD',0,'none',0,1,'Cash,bKash,Nagad,Card,Due','','','','','','')
+        VALUES(1,'Shop Desk','Set workspace',?,'BDT','en-BD',0,'none',0,1,'Cash,bKash,Nagad,Card,Due','','','','','','')
         ON CONFLICT(id) DO UPDATE SET shop_name=excluded.shop_name,workspace=excluded.workspace,shop_type=excluded.shop_type,
         currency_code=excluded.currency_code,locale=excluded.locale,tax_rate=excluded.tax_rate,tax_mode=excluded.tax_mode,
-        require_customer=excluded.require_customer,allow_discounts=excluded.allow_discounts,payment_methods=excluded.payment_methods,contact_number=excluded.contact_number,website=excluded.website,email=excluded.email,facebook_page=excluded.facebook_page,whatsapp_number=excluded.whatsapp_number,contact_address=excluded.contact_address`).run();
-      addProfileCategories("general");
+        require_customer=excluded.require_customer,allow_discounts=excluded.allow_discounts,payment_methods=excluded.payment_methods,contact_number=excluded.contact_number,website=excluded.website,email=excluded.email,facebook_page=excluded.facebook_page,whatsapp_number=excluded.whatsapp_number,contact_address=excluded.contact_address`).run(currentType);
+      addProfileCategories(currentType);
       db.exec("COMMIT");
       return json(response, 200, { ok: true, backup: backupName });
     } catch (error) {
@@ -3558,7 +3742,7 @@ async function handleApi(request, response, url) {
     if (user.role !== "admin" || !can(user, "backups")) return json(response, 403, { error: "Backup and restore access is required." });
     const name = backupDeleteMatch[1];
     if (!/^shop-\d{4}-\d{2}-\d{2}(?:-\d{6,13})?\.sqlite3$/.test(name)) return json(response, 400, { error: "Backup name is invalid." });
-    const file = join(backupDir, name);
+    const file = join(currentBackupDir(), name);
     if (!existsSync(file)) return json(response, 404, { error: "Backup file not found. Refresh the backup list and try again." });
     try { rmSync(file); }
     catch (error) { return json(response, 500, { error: "Could not delete the backup: " + error.message }); }
@@ -3568,7 +3752,7 @@ async function handleApi(request, response, url) {
     if (user.role !== "admin" || !can(user, "backups")) return json(response, 403, { error: "Backup and restore access is required." });
     const body = await readJson(request), name = String(body.name || "");
     if (!/^shop-\d{4}-\d{2}-\d{2}(?:-\d{6,13})?\.sqlite3$/.test(name)) return json(response, 400, { error: "Backup name is invalid." });
-    const file = join(backupDir, name);
+    const file = join(currentBackupDir(), name);
     if (!existsSync(file)) return json(response, 404, { error: "Backup file not found." });
     let check;
     try {
@@ -3576,24 +3760,24 @@ async function handleApi(request, response, url) {
       const integrity = check.prepare("PRAGMA integrity_check").get();
       const hasTable = table => Boolean(check.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table));
       if (integrity?.integrity_check !== "ok" || !["users", "settings", "products", "sales", "bills"].every(hasTable)) throw new Error("This file is not a valid Shop Desk database backup.");
+      validateBackupForCurrentProfile(check);
     } catch (error) { try { check?.close(); } catch {} return json(response, 400, { error: error.message || "The backup could not be checked." }); }
     check.close();
     const safetyName = `shop-${today()}-${Date.now()}.sqlite3`;
-    const safetyFile = join(backupDir, safetyName);
+    const safetyFile = join(currentBackupDir(), safetyName);
     let databaseClosed = false;
     try {
       db.exec(`VACUUM INTO '${safetyFile.replace(/'/g, "''")}'`);
       db.close();
       databaseClosed = true;
-      copyFileSync(file, dbFile);
-      db = new DatabaseSync(dbFile);
-      db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;");
-      upgradeRestoredDatabase();
+      copyFileSync(file, currentProfileDbFile());
+      reopenCurrentProfileDatabase();
+      finishRestoredDatabase();
       return json(response, 200, { ok: true, safetyBackup: safetyName });
     } catch (error) {
       if (!databaseClosed) return json(response, 500, { error: "Restore could not start. The current database is still open and unchanged." });
       try { db?.close(); } catch {}
-      try { copyFileSync(safetyFile, dbFile); db = new DatabaseSync(dbFile); db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;"); upgradeRestoredDatabase(); } catch (restoreError) { console.error("Could not reopen the safety copy after restore failure:", restoreError); }
+      try { copyFileSync(safetyFile, currentProfileDbFile()); reopenCurrentProfileDatabase(); finishRestoredDatabase(); } catch (restoreError) { console.error("Could not reopen the safety copy after restore failure:", restoreError); }
       return json(response, 500, { error: "Restore failed. The pre-restore safety copy was kept." });
     }
   }
@@ -3654,7 +3838,7 @@ async function handleApi(request, response, url) {
     if (user.role !== "admin" || !can(user, "backups")) return json(response, 403, { error: "Backup and restore access is required." });
     try {
       const files = await withDrive(async tokens => {
-        const folderId = await driveClient.folderId(tokens, offsiteRow().folder_name || DEFAULT_FOLDER_NAME);
+        const folderId = await driveClient.folderId(tokens, offsiteFolder(offsiteRow()));
         return driveClient.list(tokens, folderId);
       });
       return json(response, 200, { files });
@@ -3664,7 +3848,7 @@ async function handleApi(request, response, url) {
     if (user.role !== "admin" || !can(user, "backups")) return json(response, 403, { error: "Backup and restore access is required." });
     let created;
     try { if (method === "POST") created = runBackup("manual"); } catch (error) { return json(response, 500, { error: "Backup failed: " + error.message }); }
-    const files = existsSync(backupDir) ? readdirSync(backupDir).filter(name => /^shop-\d{4}-\d{2}-\d{2}(?:-\d{6,13})?\.sqlite3$/.test(name)).sort().reverse().map(name => ({ name, size: statSync(join(backupDir, name)).size })) : [];
+    const files = existsSync(currentBackupDir()) ? readdirSync(currentBackupDir()).filter(name => /^shop-\d{4}-\d{2}-\d{2}(?:-\d{6,13})?\.sqlite3$/.test(name)).sort().reverse().map(name => ({ name, size: statSync(join(currentBackupDir(), name)).size })) : [];
     return json(response, method === "POST" ? 201 : 200, { files, ...(created ? { created } : {}) });
   }
   if (route === "/api/backups/folders" && method === "GET") {
@@ -3673,7 +3857,7 @@ async function handleApi(request, response, url) {
       const roots = process.platform === "win32" ? Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ", letter => `${letter}:\\`).filter(root => existsSync(root)) : ["/"];
       return json(response, 200, { roots });
     }
-    const requested = url.searchParams.get("path") || backupDir;
+    const requested = url.searchParams.get("path") || currentBackupDir();
     if (!isAbsolute(requested)) return json(response, 400, { error: "Choose an absolute folder path on the server PC." });
     const folder = normalize(requested);
     try {
@@ -3694,10 +3878,9 @@ async function handleApi(request, response, url) {
       try { mkdirSync(directory, { recursive: true }); }
       catch (error) { return json(response, 400, { error: "The server could not use that backup folder: " + error.message }); }
       db.prepare("UPDATE backup_schedule SET enabled=?,time=?,directory=? WHERE id=1").run(body.enabled ? 1 : 0, body.time, directory);
-      backupDir = directory;
     }
     const schedule = db.prepare("SELECT enabled,time,directory,last_run_date,last_backup_at FROM backup_schedule WHERE id=1").get();
-    return json(response, 200, { enabled: Boolean(schedule.enabled), time: schedule.time, directory: schedule.directory || backupDir, lastBackupAt: schedule.last_backup_at || null });
+    return json(response, 200, { enabled: Boolean(schedule.enabled), time: schedule.time, directory: schedule.directory || currentBackupDir(), lastBackupAt: schedule.last_backup_at || null });
   }
   if (route === "/api/activity" && method === "GET") {
     if (!can(user, "team") && !can(user, "admins")) return json(response, 403, { error: "Only administrators can view the activity log." });
@@ -3810,18 +3993,22 @@ function logActivity(user, method, route) {
   } catch { /* logging must never break a request */ }
 }
 // Scheduled backup of the whole database (consistent copy, safe while the shop is running). Keeps the newest 14.
-let backupDir = db.prepare("SELECT directory FROM backup_schedule WHERE id=1").get()?.directory || process.env.SHOP_BACKUP_DIR || join(dataDir, "backups");
+function currentBackupDir() {
+  const configured = db.prepare("SELECT directory FROM backup_schedule WHERE id=1").get()?.directory;
+  const inherited = profileContext.getStore()?.profile?.is_master ? process.env.SHOP_BACKUP_DIR : "";
+  return configured || inherited || join(currentProfileDataDir(), "backups");
+}
 function runBackup(reason) {
-  mkdirSync(backupDir, { recursive: true });
+  mkdirSync(currentBackupDir(), { recursive: true });
   const dailyName = `shop-${today()}.sqlite3`;
-  if (reason === "auto" && existsSync(join(backupDir, dailyName))) return dailyName;
+  if (reason === "auto" && existsSync(join(currentBackupDir(), dailyName))) return dailyName;
   let suffix = Date.now();
   let name = reason === "auto" ? dailyName : `shop-${today()}-${suffix}.sqlite3`;
-  while (existsSync(join(backupDir, name))) name = `shop-${today()}-${++suffix}.sqlite3`;
-  const file = join(backupDir, name);
+  while (existsSync(join(currentBackupDir(), name))) name = `shop-${today()}-${++suffix}.sqlite3`;
+  const file = join(currentBackupDir(), name);
   db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
-  const files = readdirSync(backupDir).filter(name => /^shop-\d{4}-\d{2}-\d{2}(?:-\d{6,13})?\.sqlite3$/.test(name)).sort();
-  files.slice(0, Math.max(0, files.length - 14)).forEach(name => rmSync(join(backupDir, name), { force: true }));
+  const files = readdirSync(currentBackupDir()).filter(name => /^shop-\d{4}-\d{2}-\d{2}(?:-\d{6,13})?\.sqlite3$/.test(name)).sort();
+  files.slice(0, Math.max(0, files.length - 14)).forEach(name => rmSync(join(currentBackupDir(), name), { force: true }));
   return name;
 }
 // ---- Google Drive offsite backups ----
@@ -3840,6 +4027,11 @@ const driveClient = new GoogleDriveBackup({
   }
 });
 const offsiteRow = () => db.prepare("SELECT * FROM offsite_backup WHERE id=1").get();
+const offsiteFolder = row => {
+  const base = row?.folder_name || DEFAULT_FOLDER_NAME;
+  const profile = profileContext.getStore()?.profile;
+  return profile && !profile.is_master ? `${base} - ${profile.type}` : base;
+};
 function logSystem(action) { try { db.prepare("INSERT INTO activity_log(username,action) VALUES('system',?)").run(action); } catch { /* logging must never break a request */ } }
 function offsitePublic() {
   const row = offsiteRow() || {};
@@ -3888,11 +4080,11 @@ async function uploadOffsite(reason = "auto") {
   db.prepare("UPDATE offsite_backup SET last_attempt_at=?, last_error='' WHERE id=1").run(new Date().toISOString());
   try {
     const localName = runBackup("offsite");
-    const plain = readFileSync(join(backupDir, localName));
+    const plain = readFileSync(join(currentBackupDir(), localName));
     const shopName = db.prepare("SELECT shop_name FROM settings WHERE id=1").get()?.shop_name || "shop";
     const payload = prepareOffsitePayload({ dbBuffer: plain, keyMaterial: backupKeyMaterial, shopName });
     const uploaded = await withDrive(async tokens => {
-      const folderId = await driveClient.folderId(tokens, row.folder_name || DEFAULT_FOLDER_NAME);
+      const folderId = await driveClient.folderId(tokens, offsiteFolder(row));
       const file = await driveClient.upload(tokens, { name: payload.name, buffer: payload.buffer, folderId });
       await driveClient.prune(tokens, folderId, row.keep || DEFAULT_KEEP);
       return file;
@@ -3922,21 +4114,45 @@ async function offsiteTick() {
   catch (error) { console.error("Offsite backup failed:", error.message); }
   finally { offsiteRunning = false; }
 }
-setInterval(() => { offsiteTick(); }, 15 * 60 * 1000).unref();
-setTimeout(() => { offsiteTick(); }, 90 * 1000).unref();
+if (process.env.SHOP_INITIALIZE_ONLY === "1") {
+  try { masterDb.exec("PRAGMA wal_checkpoint(TRUNCATE)"); masterDb.close(); } catch {}
+  process.exit(0);
+}
+async function offsiteTickAll() {
+  try {
+    const profiles = masterDb.prepare("SELECT * FROM shop_profiles ORDER BY id").all();
+    for (const profile of profiles) {
+      if (!profile.is_master && !profileDatabases.has(profile.id)) continue;
+      try { await withShopProfile(profile, offsiteTick); }
+      catch (error) { console.error(`Offsite backup check failed for ${profile.name}:`, error.message); }
+    }
+  } catch (error) { console.error("Offsite backup scheduler failed:", error.message); }
+}
+setInterval(() => { offsiteTickAll(); }, 15 * 60 * 1000).unref();
+setTimeout(() => { offsiteTickAll(); }, 90 * 1000).unref();
 
-const scheduledBackup = () => {
+const scheduledBackupForProfile = () => {
   const schedule = db.prepare("SELECT enabled,time,directory,last_run_date,last_run_time,last_run_directory FROM backup_schedule WHERE id=1").get();
   if (!schedule?.enabled) return;
   const now = new Date();
   const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
   const date = today();
-  if (currentTime < schedule.time || (schedule.last_run_date === date && schedule.last_run_time === schedule.time && schedule.last_run_directory === backupDir)) return;
+  if (currentTime < schedule.time || (schedule.last_run_date === date && schedule.last_run_time === schedule.time && schedule.last_run_directory === currentBackupDir())) return;
   try {
     runBackup("auto");
-    db.prepare("UPDATE backup_schedule SET last_run_date=?,last_run_time=?,last_run_directory=?,last_backup_at=? WHERE id=1").run(date, schedule.time, backupDir, now.toISOString());
+    db.prepare("UPDATE backup_schedule SET last_run_date=?,last_run_time=?,last_run_directory=?,last_backup_at=? WHERE id=1").run(date, schedule.time, currentBackupDir(), now.toISOString());
     console.info(`Scheduled backup completed at ${now.toLocaleString()}.`);
   } catch (error) { console.error("Scheduled backup failed:", error.message); }
+};
+const scheduledBackup = () => {
+  try {
+    const profiles = masterDb.prepare("SELECT * FROM shop_profiles ORDER BY id").all();
+    for (const profile of profiles) {
+      if (!profile.is_master && !profileDatabases.has(profile.id)) continue;
+      try { withShopProfile(profile, scheduledBackupForProfile); }
+      catch (error) { console.error(`Scheduled backup check failed for ${profile.name}:`, error.message); }
+    }
+  } catch (error) { console.error("Backup scheduler failed:", error.message); }
 };
 scheduledBackup();
 setInterval(scheduledBackup, 30000).unref();
@@ -3952,8 +4168,10 @@ const server = createServer(async (request, response) => {
   let url;
   try { url = new URL(request.url, `http://${request.headers.host || "localhost"}`); }
   catch { response.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" }); response.end("Bad request"); return; }
+  const sessionProfile = requestShopProfile(request);
   if (url.pathname.startsWith("/api/")) {
-    try { await handleApi(request, response, url); }
+    const routeProfile = usesMasterDatabase(url.pathname) ? masterProfile() : sessionProfile;
+    try { await withShopProfile(routeProfile, () => handleApi(request, response, url)); }
     catch (error) {
       console.error("Request error:", error);
       if (!response.headersSent) json(response, 400, { error: error.message || "The request could not be completed." });
@@ -3989,7 +4207,7 @@ const server = createServer(async (request, response) => {
   };
   if (requested === "sw.js") headers["Service-Worker-Allowed"] = "/";
   if (requested === "join.html") {
-    const info = connectInfo();
+    const info = withShopProfile(sessionProfile, connectInfo);
     const lanList = info.urls.map((address, index) => `<li><a href="${escapeHtml(address)}">${escapeHtml(address)}${index === 0 ? " <span>প্রধান</span>" : ""}</a></li>`).join("");
     contents = contents.toString("utf8")
       .replace("{{SHOP_NAME}}", escapeHtml(info.shopName))
@@ -4013,7 +4231,10 @@ let shuttingDown = false;
 function shutdown() {
   if (shuttingDown) return; shuttingDown = true;
   server.close();
-  try { db.exec("PRAGMA wal_checkpoint(TRUNCATE)"); db.close(); } catch {}
+  const connections = new Set([masterDb, ...[...profileDatabases.values()].map(entry => entry.db)]);
+  for (const connection of connections) {
+    try { connection.exec("PRAGMA wal_checkpoint(TRUNCATE)"); connection.close(); } catch {}
+  }
   process.exit(0);
 }
 process.on("SIGTERM", shutdown);
