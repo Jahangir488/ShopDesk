@@ -3949,7 +3949,9 @@ const server = createServer(async (request, response) => {
   if (isSecureRequest(request)) response.setHeader("Strict-Transport-Security", "max-age=31536000");
   if (request.url === "/healthz") { response.writeHead(200, { "Content-Type": "text/plain" }); response.end("ok"); return; }
   response.setHeader("Content-Security-Policy", `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'${allowEmbed ? "" : "; frame-ancestors 'none'"}`);
-  const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
+  let url;
+  try { url = new URL(request.url, `http://${request.headers.host || "localhost"}`); }
+  catch { response.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" }); response.end("Bad request"); return; }
   if (url.pathname.startsWith("/api/")) {
     try { await handleApi(request, response, url); }
     catch (error) {
