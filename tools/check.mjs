@@ -109,6 +109,40 @@ try {
   ok(`licensing removed, shop types unlocked, Pharmacy batch flows and MedEx catalog (${catalogStats.totalMedicines} medicines) intact`);
 } catch (error) { fail("Pharmacy workflow: " + error.message); }
 
+console.log("Bulk inventory CSV size and Category column");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8");
+  const server = readFileSync(join(root, "server.mjs"), "utf8");
+  const maxBytesExpression = app.match(/const BULK_INVENTORY_MAX_FILE_BYTES = ([^;]+);/)?.[1];
+  const maxRowsExpression = app.match(/const BULK_INVENTORY_MAX_ROWS = ([^;]+);/)?.[1];
+  const maxBytes = maxBytesExpression ? new Function(`return (${maxBytesExpression});`)() : 0;
+  const maxRows = maxRowsExpression ? new Function(`return (${maxRowsExpression});`)() : 0;
+  if (maxBytes < 5 * 1024 * 1024) fail("bulk inventory browser limit must allow at least 5 MB");
+  if (maxRows < 5000) fail("bulk inventory browser limit must allow at least 5,000 rows");
+  if (!server.includes("readJson(request, 16_000_000)")) fail("bulk inventory endpoint needs its larger bounded JSON body limit");
+  if (!server.includes("body.rows.length > 5000")) fail("bulk inventory endpoint still has the old row limit");
+  if (!app.includes('getCol(values, "category", "product category")')) fail("inventory CSV Category column is not mapped");
+  if (!server.includes("seedCategory(category, currentShopType())")) fail("bulk categories must be created only for the active shop type");
+  const parserStart = app.indexOf("function parseCsv(text) {");
+  const parserEnd = app.indexOf("\n// <dialog>", parserStart);
+  if (parserStart < 0 || parserEnd < 0) throw new Error("parseCsv is missing");
+  const parseCsv = new Function(`${app.slice(parserStart, parserEnd)}\nreturn parseCsv;`)();
+  const headers = ["Product ID", "Product Name", "SKU", "Selling Price", "Cost", "Quantity", "Low Stock Alert", "Unit", "Category", "Barcode", "Brand", "Smaller Unit", "Units per Pack"];
+  const records = Array.from({ length: 1200 }, (_, index) => [
+    "", `Bulk Product ${index} ${"N".repeat(170)}`, `BULK-${index}-${"S".repeat(80)}`,
+    "12.50", "8.25", "2", "1", "piece",
+    index === 0 ? "Bulk, Category" : index === 1 ? "নতুন ক্যাটাগরি" : "Bulk Category",
+    `9${String(index).padStart(8, "0")}${"B".repeat(90)}`, "R".repeat(55), "", ""
+  ]);
+  const csvCell = value => `"${String(value ?? "").split('"').join('""')}"`;
+  const csv = [headers, ...records].map(row => row.map(csvCell).join(",")).join("\r\n");
+  if (Buffer.byteLength(csv, "utf8") <= 400000) throw new Error("large CSV fixture is not over 400 KB");
+  const parsed = parseCsv(csv);
+  if (parsed.length !== 1201) fail(`large CSV parsed ${parsed.length - 1} rows instead of 1,200`);
+  if (parsed[1]?.[8] !== "Bulk, Category" || parsed[2]?.[8] !== "নতুন ক্যাটাগরি") fail("quoted or Bangla Category values were not preserved");
+  ok(`${records.length} rows / ${(Buffer.byteLength(csv, "utf8") / 1024).toFixed(0)} KB CSV parsed; Category mapping and shop-type creation safeguards present`);
+} catch (error) { fail("bulk inventory CSV: " + error.message); }
+
 console.log("Restaurant receipt and shop-type categories");
 try {
   const server = readFileSync(join(root, "server.mjs"), "utf8");

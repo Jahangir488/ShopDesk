@@ -1113,13 +1113,13 @@ function parseCookies(header = "") {
   return Object.fromEntries(header.split(";").map(part => part.trim().split("=")).filter(pair => pair.length === 2));
 }
 
-function readJson(request) {
+function readJson(request, maxCharacters = 1_000_000) {
   return new Promise((resolve, reject) => {
     let body = "";
     request.setEncoding("utf8");
     request.on("data", chunk => {
       body += chunk;
-      if (body.length > 1_000_000) {
+      if (body.length > maxCharacters) {
         reject(new Error("Request is too large."));
         request.destroy();
       }
@@ -2043,9 +2043,9 @@ async function handleApi(request, response, url) {
     if (user.role !== "admin" || !can(user, "records") || !requirePermission(user, "inventory")) {
       return json(response, 403, { error: "Administrator, edit-record, and inventory access are required for bulk inventory upload." });
     }
-    const body = await readJson(request);
-    if (!Array.isArray(body.rows) || body.rows.length < 1 || body.rows.length > 500) {
-      return json(response, 400, { error: "Upload between 1 and 500 inventory rows." });
+    const body = await readJson(request, 16_000_000);
+    if (!Array.isArray(body.rows) || body.rows.length < 1 || body.rows.length > 5000) {
+      return json(response, 400, { error: "Upload between 1 and 5,000 inventory rows." });
     }
     const isPharmacy = pharmacyMode();
     const seenIds = new Set();
