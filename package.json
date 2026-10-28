@@ -7,7 +7,7 @@
   "main": "server.mjs",
   "scripts": {
     "start": "node server.mjs",
-    "check": "node tools/check.mjs",
+    "check": "node tools/check.mjs && node tools/profile-check.mjs",
     "icons": "node tools/make-icons.mjs",
     "i18n:report": "node tools/i18n-report.mjs",
     "release:manifest": "node tools/release-manifest.mjs"

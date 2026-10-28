@@ -2,8 +2,13 @@ const $ = selector => document.querySelector(selector);
 const money = amount => {
   const value = Number(amount) || 0, currency = data.currencyCode || "BDT";
   const locale = data.banglaDigits ? "bn-BD" : (data.locale || "en-BD");
-  try { return new Intl.NumberFormat(locale, { style: "currency", currency, maximumFractionDigits: 0 }).format(value); }
-  catch { return `${currency} ${localizeDigits(Math.round(value).toLocaleString())}`; }
+  // Pharmacy base-unit prices often include poisha (for example ৳2.50/tablet).
+  // Keep whole amounts compact, but never round an edited decimal price away.
+  try { return new Intl.NumberFormat(locale, { style: "currency", currency, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value); }
+  catch {
+    const rounded = Math.round((value + Number.EPSILON) * 100) / 100;
+    return `${currency} ${localizeDigits(rounded.toLocaleString("en-US", { maximumFractionDigits: 2 }))}`;
+  }
 };
 const currencySymbol = () => {
   try { return new Intl.NumberFormat(data.locale || "en-BD", { style: "currency", currency: data.currencyCode || "BDT", maximumFractionDigits: 0 }).formatToParts(0).find(part => part.type === "currency")?.value || data.currencyCode || "BDT"; }
@@ -228,12 +233,12 @@ async function updateState(path, body, method = "POST") {
   data = await api(path, { method, body: JSON.stringify(body) });
   render();
 }
-function toast(message) {
+function toast(message, duration = 3000) {
   const element = $("#toast");
   element.textContent = tt(message);
   element.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => element.classList.remove("show"), 3000);
+  toastTimer = setTimeout(() => element.classList.remove("show"), duration);
 }
 function showAuth() {
   signedInUser = null;
@@ -403,23 +408,65 @@ function reportRange() {
   }
   return { start, end, buckets, monthly, caption: start > end ? "Invalid date range" : start + " to " + end };
 }
+function summarizeSales(sales) {
+  return (sales || []).reduce((summary, item) => {
+    const grossSales = Number(item.original_total ?? item.total ?? 0);
+    const netSales = Number(item.total || 0);
+    const grossCost = Number(item.original_cost ?? item.cost ?? 0);
+    const netCost = Number(item.cost || 0);
+    const grossTax = Number(item.original_tax_amount ?? item.tax_amount ?? 0);
+    const netTax = Number(item.tax_amount || 0);
+    summary.grossSales += grossSales;
+    summary.returnedValue += Math.max(0, grossSales - netSales);
+    summary.netSales += netSales;
+    summary.grossCost += grossCost;
+    summary.netCost += netCost;
+    summary.profitBeforeReturns += grossSales - grossCost;
+    summary.returnedProfit += Math.max(0, grossSales - netSales) - Math.max(0, grossCost - netCost);
+    summary.profitAfterReturns += netSales - netCost;
+    summary.returnedTax += Math.max(0, grossTax - netTax);
+    summary.netTax += netTax;
+    return summary;
+  }, { grossSales: 0, returnedValue: 0, netSales: 0, grossCost: 0, netCost: 0, profitBeforeReturns: 0, returnedProfit: 0, profitAfterReturns: 0, returnedTax: 0, netTax: 0 });
+}
+function summarizeOnlineDashboard(orders, sales, today) {
+  const allOrders = orders || [];
+  const onlineBillIds = new Set(allOrders.map(order => Number(order.bill_id || 0)).filter(id => id > 0));
+  const onlineSalesToday = (sales || []).filter(sale => sale.date === today && onlineBillIds.has(Number(sale.bill_id || 0)));
+  const todayOrders = allOrders.filter(order => order.date === today);
+  const activeOrders = allOrders.filter(order => ["Pending", "Confirmed", "Processing", "Shipped"].includes(order.order_status));
+  const count = statuses => allOrders.filter(order => statuses.includes(order.order_status)).length;
+  return {
+    todayOrderCount: todayOrders.length,
+    todayOrderValue: todayOrders.reduce((sum, order) => sum + Number(order.total || 0), 0),
+    activeOrderCount: activeOrders.length,
+    activeCod: activeOrders.reduce((sum, order) => sum + Number(order.due_cod || 0), 0),
+    pendingCount: count(["Pending"]),
+    processingCount: count(["Confirmed", "Processing"]),
+    shippedCount: count(["Shipped"]),
+    deliveredCount: count(["Delivered"]),
+    returnedCount: count(["Returned"]),
+    cancelledCount: count(["Cancelled"]),
+    sales: summarizeSales(onlineSalesToday)
+  };
+}
 function renderReport() {
   const permissions = data.permissions || {};
   const range = reportRange();
   const sales = data.sales.filter(item => item.date >= range.start && item.date <= range.end);
   const expenses = data.expenses.filter(item => item.date >= range.start && item.date <= range.end);
-  const gross = sales.reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const profit = sales.reduce((sum, item) => sum + Number(item.total || 0) - Number(item.cost || 0), 0);
-  const tax = sales.reduce((sum, item) => sum + Number(item.tax_amount || 0), 0);
+  const summary = summarizeSales(sales);
   const costs = expenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  $("#report-caption").textContent = `${range.caption} · Sales, costs, and estimated profit`;
-  $("#report-sales").textContent = permissions.sales ? money(gross) : "—";
-  $("#report-profit").textContent = permissions.sales ? money(profit) : "—";
-  $("#report-tax").textContent = permissions.sales ? money(tax) : "—";
+  $("#report-caption").textContent = `${range.caption} · Sales, returns, costs, and estimated profit`;
+  $("#report-sales").textContent = permissions.sales ? money(summary.grossSales) : "—";
+  $("#report-returns").textContent = permissions.sales ? money(summary.returnedValue) : "—";
+  $("#report-net-sales").textContent = permissions.sales ? money(summary.netSales) : "—";
+  $("#report-profit").textContent = permissions.sales ? money(summary.profitAfterReturns) : "—";
+  $("#report-tax").textContent = permissions.sales ? money(summary.netTax) : "—";
   $("#report-expenses").textContent = permissions.expenses ? money(costs) : "—";
-  $("#report-net").textContent = permissions.sales && permissions.expenses ? money(profit - costs) : "—";
-  $("#chart-total").textContent = permissions.sales ? money(gross) : "—";
-  $("#chart-label").textContent = `Gross sales · ${range.caption}`;
+  $("#report-net").textContent = permissions.sales && permissions.expenses ? money(summary.profitAfterReturns - costs) : "—";
+  $("#chart-total").textContent = permissions.sales ? money(summary.netSales) : "—";
+  $("#chart-label").textContent = `Net sales after returns · ${range.caption}`;
   const amounts = range.buckets.map(bucket => sales.filter(item => range.monthly ? item.date.startsWith(bucket.key) : item.date === bucket.key).reduce((sum, item) => sum + Number(item.total || 0), 0));
   const max = Math.max(1000, ...amounts);
   $("#chart-max").textContent = money(Math.ceil(max / 4 / 1000) * 1000 || 1000);
@@ -602,15 +649,28 @@ document.addEventListener("click", event => {
     field.querySelector("input")?.setAttribute("aria-expanded", "false");
   });
 });
+const INVENTORY_PAGE_SIZE = 250;
+let inventoryPage = 1;
 function renderInventoryProducts() {
   const query = $("#search").value.trim().toLocaleLowerCase();
   const products = data.products.filter(item => [item.name, item.sku, item.barcode, item.unit, item.category, item.brand, item.color, item.size, item.material, item.generic_name, item.strength, item.dosage_form, item.manufacturer].some(value => String(value || "").toLocaleLowerCase().includes(query)));
+  const pageCount = Math.max(1, Math.ceil(products.length / INVENTORY_PAGE_SIZE));
+  inventoryPage = Math.min(Math.max(1, inventoryPage), pageCount);
+  const pageStart = (inventoryPage - 1) * INVENTORY_PAGE_SIZE;
+  const visibleProducts = products.slice(pageStart, pageStart + INVENTORY_PAGE_SIZE);
   const canEditItems = signedInUser?.permissions?.records && data.permissions?.inventory;
   const canDeleteItems = canEditItems;
   const sizeFieldLabel = data.shopType === "restaurant" ? "Portion" : data.shopType === "mobile" ? "Storage" : data.shopType === "hardware" ? "Spec" : data.shopType === "grocery" ? "Pack" : "Size";
-  $("#products-table").innerHTML = products.map(item => { const details = (data.shopType === "pharmacy" ? [["Generic",item.generic_name],["Strength",item.strength],["Form",item.dosage_form],["Maker",item.manufacturer]] : data.shopType === "restaurant" ? [["Portion",item.size],["Type",item.material],["Prep",item.color],["Kitchen",item.brand]] : [["Brand", item.brand], ["Color", item.color], [sizeFieldLabel, item.size], ["Material", item.material]]).filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`).join(" · "); const medexAction = data.shopType === "pharmacy" ? `<button class="user-action" type="button" data-action="medex-product" data-id="${item.id}" data-name="${esc(item.name)}">MedEx info</button>` : ""; return `<tr><td class="product-cell">${esc(item.icon || "📦")} &nbsp;${esc(item.name)}${details ? `<small class="form-hint">${esc(details)}</small>` : ""}</td><td>${esc(item.category || "Other")}</td><td class="sku">${esc(item.sku)}</td><td class="sku">${esc(item.barcode || "—")}</td><td>${esc(item.unit || "piece")}</td><td>${money(item.price)}</td><td class="qty">${data.shopType === "pharmacy" ? `${productSellableQty(item)} sellable / ${Number(item.qty||0)} total` : `${item.qty} ${esc(item.unit || "piece")}`}</td><td class="stock-value" title="${item.qty} × ${money(item.price)} per unit"><b>${money(Number(item.qty) * Number(item.price))}</b></td><td><span class="status ${productSellableQty(item) === 0 ? "out" : productSellableQty(item) <= item.min ? "low" : ""}">${productSellableQty(item) === 0 ? (data.shopType === "pharmacy" && Number(item.qty)>0 ? "No safe-to-sell stock" : "Out of stock") : productSellableQty(item) <= item.min ? "Low stock" : "In stock"}</span></td><td>${medexAction}${canEditItems ? `<button class="user-action" data-action="rename-product" data-id="${item.id}" data-name="${esc(item.name)}" data-unit="${esc(item.unit || "piece")}" data-category="${esc(item.category || "Other")}">Edit item</button>` : ""}${canDeleteItems ? `<button class="user-action danger" data-action="delete-product" data-id="${item.id}" data-name="${esc(productLabel(item))}" data-qty="${item.qty}" data-unit="${esc(item.unit || "piece")}">Delete</button>` : ""}</td></tr>`; }).join("");
+  $("#products-table").innerHTML = visibleProducts.map(item => { const details = (data.shopType === "pharmacy" ? [["Generic",item.generic_name],["Strength",item.strength],["Form",item.dosage_form],["Maker",item.manufacturer]] : data.shopType === "restaurant" ? [["Portion",item.size],["Type",item.material],["Prep",item.color],["Kitchen",item.brand]] : [["Brand", item.brand], ["Color", item.color], [sizeFieldLabel, item.size], ["Material", item.material]]).filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`).join(" · "); const medexAction = data.shopType === "pharmacy" ? `<button class="user-action" type="button" data-action="medex-product" data-id="${item.id}" data-name="${esc(item.name)}">MedEx info</button>` : ""; return `<tr><td class="product-cell">${esc(item.icon || "📦")} &nbsp;${esc(item.name)}${details ? `<small class="form-hint">${esc(details)}</small>` : ""}</td><td>${esc(item.category || "Other")}</td><td class="sku">${esc(item.sku)}</td><td class="sku">${esc(item.barcode || "—")}</td><td>${esc(item.unit || "piece")}</td><td>${money(item.price)}</td><td class="qty">${data.shopType === "pharmacy" ? `${productSellableQty(item)} sellable / ${Number(item.qty||0)} total` : `${item.qty} ${esc(item.unit || "piece")}`}</td><td class="stock-value" title="${item.qty} × ${money(item.price)} per unit"><b>${money(Number(item.qty) * Number(item.price))}</b></td><td><span class="status ${productSellableQty(item) === 0 ? "out" : productSellableQty(item) <= item.min ? "low" : ""}">${productSellableQty(item) === 0 ? (data.shopType === "pharmacy" && Number(item.qty)>0 ? "No safe-to-sell stock" : "Out of stock") : productSellableQty(item) <= item.min ? "Low stock" : "In stock"}</span></td><td>${medexAction}${canEditItems ? `<button class="user-action" data-action="rename-product" data-id="${item.id}" data-name="${esc(item.name)}" data-unit="${esc(item.unit || "piece")}" data-category="${esc(item.category || "Other")}">Edit item</button>` : ""}${canDeleteItems ? `<button class="user-action danger" data-action="delete-product" data-id="${item.id}" data-name="${esc(productLabel(item))}" data-qty="${item.qty}" data-unit="${esc(item.unit || "piece")}">Delete</button>` : ""}</td></tr>`; }).join("");
   $("#products-empty").textContent = data.products.length ? "No inventory items match your search." : "No products yet. Add your first item to get started.";
   $("#products-empty").classList.toggle("hidden", products.length > 0);
+  const pagination = $("#inventory-pagination");
+  if (pagination) {
+    const showingStart = products.length ? pageStart + 1 : 0;
+    const showingEnd = pageStart + visibleProducts.length;
+    pagination.classList.toggle("hidden", pageCount <= 1);
+    pagination.innerHTML = pageCount <= 1 ? "" : `<button class="button secondary" type="button" data-inventory-page="${inventoryPage - 1}" ${inventoryPage === 1 ? "disabled" : ""}>← Previous</button><span>Page ${inventoryPage} of ${pageCount} · Showing ${showingStart}–${showingEnd} of ${products.length}</span><button class="button secondary" type="button" data-inventory-page="${inventoryPage + 1}" ${inventoryPage === pageCount ? "disabled" : ""}>Next →</button>`;
+  }
   const cost = products.reduce((sum, item) => sum + Number(item.cost || 0) * Number(item.qty || 0), 0);
   const retail = products.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.qty || 0), 0);
   const low = products.filter(item => Number(item.qty || 0) <= Number(item.min || 0)).length;
@@ -625,15 +685,45 @@ function renderInventoryProducts() {
   const totalInStock = [...stockByUnit.values()].map(item => `${Number(item.qty.toFixed(3)).toLocaleString("en-BD")} ${item.label}`).join(" · ") || "0";
   $("#inventory-summary").innerHTML = `<div class="list-summary-heading"><b>Inventory totals</b><small>${products.length} product${products.length === 1 ? "" : "s"}${query ? " matching your search" : " in this inventory"}</small></div><div class="list-summary-cards"><div><small>Total in stock</small><b title="${esc(totalInStock)}">${esc(totalInStock)}</b></div><div><small>Stock at cost</small><b>${money(cost)}</b></div><div><small>Stock at selling price</small><b>${money(retail)}</b></div><div><small>Potential gross profit</small><b>${money(retail - cost)}</b></div><div><small>Low / out of stock</small><b>${low}</b></div></div>`;
 }
+const LARGE_LIST_PAGE_SIZE = 250;
+const largeListPages = { sales: 1, onlineOrders: 1, repairs: 1, devices: 1, stockWatch: 1, dashboardOnline: 1, expenses: 1 };
+function largeListPage(key, items) {
+  const pageCount = Math.max(1, Math.ceil(items.length / LARGE_LIST_PAGE_SIZE));
+  const page = Math.min(Math.max(1, Number(largeListPages[key]) || 1), pageCount);
+  largeListPages[key] = page;
+  const start = (page - 1) * LARGE_LIST_PAGE_SIZE;
+  const visible = items.slice(start, start + LARGE_LIST_PAGE_SIZE);
+  return { page, pageCount, start, visible, showingStart: items.length ? start + 1 : 0, showingEnd: start + visible.length };
+}
+function showLargeListPagination(selector, key, page, total) {
+  const element = $(selector);
+  if (!element) return;
+  element.classList.toggle("hidden", page.pageCount <= 1);
+  element.innerHTML = page.pageCount <= 1 ? "" : `<button class="button secondary" type="button" data-large-list="${key}" data-page="${page.page - 1}" ${page.page === 1 ? "disabled" : ""}>← Previous</button><span>Page ${page.page} of ${page.pageCount} · Showing ${page.showingStart}–${page.showingEnd} of ${total}</span><button class="button secondary" type="button" data-large-list="${key}" data-page="${page.page + 1}" ${page.page === page.pageCount ? "disabled" : ""}>Next →</button>`;
+}
+document.addEventListener("click", event => {
+  const button = event.target.closest("button[data-large-list]");
+  if (!button || button.disabled) return;
+  const key = button.dataset.largeList;
+  largeListPages[key] = Number(button.dataset.page) || 1;
+  if (key === "sales") filterSales();
+  else if (key === "onlineOrders") renderOnlineOrders();
+  else if (key === "repairs") renderRepairJobs();
+  else if (key === "devices") renderDevices();
+  else if (key === "stockWatch") renderStockWatch();
+  else if (key === "dashboardOnline") renderOnlineDashboard(dateKey(new Date()), data.permissions || {});
+  else if (key === "expenses") renderExpenses();
+});
 const repairStatuses = ["Received", "Diagnosing", "Waiting for parts", "In repair", "Ready", "Delivered", "Cancelled"];
 function renderRepairJobs() {
   const query = (document.querySelector("#repair-search")?.value || "").trim().toLocaleLowerCase();
   const status = document.querySelector("#repair-status-filter")?.value || "";
   const jobs = (data.serviceJobs || []).filter(job => (!status || job.status === status) &&
     [job.job_no, job.customer, job.phone, job.brand, job.model, job.device_serial, job.issue].some(value => String(value || "").toLocaleLowerCase().includes(query)));
+  const page = largeListPage("repairs", jobs);
   const tbody = document.querySelector("#repairs-table");
   if (!tbody) return;
-  tbody.innerHTML = jobs.map(job => {
+  tbody.innerHTML = page.visible.map(job => {
     const warranty = Number(job.repair_warranty_days || 0), expiry = job.repair_warranty_expires || "";
     const warrantyText = job.status === "Delivered" && warranty ? `${expiry && expiry >= dateKey(new Date()) ? "Active" : "Expired"} · ${dateLabel(expiry)}` : warranty ? `${warranty} days on delivery` : "—";
     const repairAdmin = signedInUser?.role === "admin";
@@ -642,22 +732,25 @@ function renderRepairJobs() {
     return `<tr><td><b>${esc(job.job_no)}</b></td><td>${dateLabel(job.received_date)}</td><td>${esc(job.customer)}<small class="form-hint">${esc(job.phone)}</small></td><td>${esc([job.brand, job.model].filter(Boolean).join(" "))}<small class="form-hint">${esc(job.device_serial || "No IMEI/serial")}</small></td><td>${esc(job.issue)}</td><td><span class="status ${job.status === "Delivered" ? "" : job.status === "Cancelled" ? "out" : "low"}">${esc(job.status)}</span></td><td>${esc(warrantyText)}</td><td>${money(job.status === "Delivered" ? job.final_charge : job.estimate)}<small class="form-hint">Due ${money(job.due)}</small></td><td>${canEdit ? `<button type="button" class="user-action" data-repair-action="open" data-id="${job.id}">Open</button>` : `<button type="button" class="user-action" disabled title="Only an administrator can reopen a cancelled job. Delivered edits need assigned access.">Locked</button>`}<button type="button" class="user-action" data-repair-action="print" data-id="${job.id}">Print ticket</button>${canDelete ? `<button type="button" class="user-action danger" data-repair-action="delete" data-id="${job.id}">Delete</button>` : ""}</td></tr>`;
   }).join("");
   document.querySelector("#repairs-empty")?.classList.toggle("hidden", jobs.length > 0);
+  showLargeListPagination("#repairs-pagination", "repairs", page, jobs.length);
 }
-document.querySelector("#repair-search")?.addEventListener("input", renderRepairJobs);
-document.querySelector("#repair-status-filter")?.addEventListener("change", renderRepairJobs);
+document.querySelector("#repair-search")?.addEventListener("input", () => { largeListPages.repairs = 1; renderRepairJobs(); });
+document.querySelector("#repair-status-filter")?.addEventListener("change", () => { largeListPages.repairs = 1; renderRepairJobs(); });
 function renderDevices() {
   const query = (document.querySelector("#device-search")?.value || "").trim().toLocaleLowerCase();
   const rows = (data.devices || []).filter(device => [device.serial, device.product_name, device.customer, device.phone].some(value => String(value || "").toLocaleLowerCase().includes(query)));
+  const page = largeListPage("devices", rows);
   const body = document.querySelector("#devices-table");
   if (!body) return;
-  body.innerHTML = rows.map(device => {
+  body.innerHTML = page.visible.map(device => {
     const expired = device.warranty_expires && device.warranty_expires < dateKey(new Date());
     const status = device.status === "Returned" ? "Returned" : !device.warranty_months ? "No warranty" : expired ? "Warranty expired" : "Warranty active";
     return `<tr><td><b>${esc(device.serial)}</b></td><td>${esc(device.product_name)}</td><td>${dateLabel(device.sold_date)}</td><td>${esc(device.customer || "—")}<small class="form-hint">${esc(device.phone || "")}</small></td><td>${device.warranty_expires ? dateLabel(device.warranty_expires) : "—"}</td><td><span class="status ${device.status === "Returned" || expired ? "out" : "low"}">${status}</span></td></tr>`;
   }).join("");
   document.querySelector("#devices-empty")?.classList.toggle("hidden", rows.length > 0);
+  showLargeListPagination("#devices-pagination", "devices", page, rows.length);
 }
-document.querySelector("#device-search")?.addEventListener("input", renderDevices);
+document.querySelector("#device-search")?.addEventListener("input", () => { largeListPages.devices = 1; renderDevices(); });
 function repairPartRow(productId = "", qty = 1, index = 0) {
   const options = data.products.map(product => `<option value="${product.id}" ${Number(product.id) === Number(productId) ? "selected" : ""}>${esc(productLabel(product))} · ${product.qty} ${esc(product.unit || "piece")} · cost ${money(product.cost)}</option>`).join("");
   return `<div class="form-row repair-part-row" data-part-row="${index}"><label>Stock part<select name="partProduct" required><option value="">Choose a part</option>${options}</select></label><label>Qty<input name="partQty" type="number" min="0.001" step="any" value="${Number(qty)}" required></label><button class="user-action danger" type="button" data-remove-part aria-label="Remove part">Remove</button></div>`;
@@ -714,7 +807,13 @@ document.querySelector("#repairs-table")?.addEventListener("click", async event 
     if (remove) remove.closest("[data-part-row]").remove();
   };
 });
-$("#search").addEventListener("input", renderInventoryProducts);
+$("#inventory-pagination").onclick = event => {
+  const button = event.target.closest("button[data-inventory-page]");
+  if (!button || button.disabled) return;
+  inventoryPage = Number(button.dataset.inventoryPage) || 1;
+  renderInventoryProducts();
+};
+$("#search").addEventListener("input", () => { inventoryPage = 1; renderInventoryProducts(); });
 
 const clothSizes = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "28", "30", "32", "34", "36", "38", "40", "Free Size"];
 const clothColors = ["Black", "White", "Navy Blue", "Maroon", "Olive Green", "Sky Blue", "Pink", "Grey", "Mustard", "Beige"];
@@ -802,6 +901,74 @@ function pharmacyFormFields(product = {}, includeOpeningBatch = false) {
   </fieldset>`;
 }
 
+function medicineUnitFormValues(product = {}) {
+  const units = [...(product.medicine_units || [])].sort((a, b) => Number(a.factor) - Number(b.factor));
+  const inner = units.length > 1 ? units[0] : null, supplier = units.length > 1 ? units[1] : units[0] || null;
+  return {
+    supplierUnit: supplier?.name || (product.id ? "" : "box"), innerUnit: inner?.name || (product.id ? "" : "strip"),
+    innerPerSupplier: inner && supplier ? Number((supplier.factor / inner.factor).toFixed(6)) : 10,
+    basePerInner: Number((inner?.factor || supplier?.factor || 10).toFixed(6)),
+    supplierPrice: supplier?.price ?? "", innerPrice: inner?.price ?? "", allowLoose: product.allow_loose !== false
+  };
+}
+
+function pharmacyUnitFormFields(product = {}, includePurchase = false) {
+  const values = medicineUnitFormValues(product), base = product.unit || "tablet";
+  return `<fieldset class="pharmacy-fields pharmacy-unit-fields"><legend>Packaging &amp; selling units</legend>
+    <div class="form-row"><label>Supplier / outer unit<input name="supplierUnit" maxlength="30" value="${esc(values.supplierUnit)}" placeholder="box, bottle, pack"></label><label>Inner selling unit (optional)<input name="innerUnit" maxlength="30" value="${esc(values.innerUnit)}" placeholder="strip, packet"></label></div>
+    <div class="form-row"><label id="inner-per-supplier-wrap"><span id="inner-per-supplier-label">Inner units / outer unit</span><input name="innerPerSupplier" type="number" min="0.000001" step="any" value="${values.innerPerSupplier}"></label><label><span id="base-per-inner-label">Base units / inner unit</span><input name="basePerInner" type="number" min="0.000001" step="any" value="${values.basePerInner}"></label></div>
+    <div class="form-row"><label id="inner-selling-price-wrap">Selling price per <span class="inner-unit-label">${esc(values.innerUnit)}</span> (${esc(currencySymbol())})<input name="innerPrice" type="number" min="0" step="any" value="${esc(values.innerPrice)}" placeholder="Auto from base price"><small class="form-hint" id="inner-price-auto"></small></label><label>Selling price per <span class="supplier-unit-label">${esc(values.supplierUnit)}</span> (${esc(currencySymbol())})<input name="supplierPrice" type="number" min="0" step="any" value="${esc(values.supplierPrice)}" placeholder="Auto from base price"><small class="form-hint" id="supplier-price-auto"></small></label></div>
+    <label class="setting-check"><input type="checkbox" name="allowLoose" ${values.allowLoose ? "checked" : ""}> Allow sales as individual <span class="base-unit-label">${esc(base)}</span> (only when appropriate for this medicine)</label>
+    <p class="form-hint">Stock always stays in the internal base unit. Package prices can be set independently; blank prices use base selling price × conversion.</p>
+    ${includePurchase ? `<div class="pharmacy-batch-opening"><h4>Opening purchase</h4><div class="form-row"><label><span id="purchase-quantity-label">Supplier units purchased</span><input name="purchaseQuantity" type="number" min="0" step="any" value="0" required></label><label><span id="purchase-price-label">Purchase price per supplier unit</span> (${esc(currencySymbol())})<input name="purchasePrice" type="number" min="0" step="any" value="0" required></label></div><div class="pharmacy-purchase-calculator" aria-live="polite"><div><small>Calculated inventory</small><b id="medicine-calculated-stock">0 ${esc(base)}</b><span id="medicine-purchase-calculation"></span></div><div><small>Total purchase cost</small><b id="medicine-total-cost">${money(0)}</b></div><div><small>Cost per <span class="base-unit-label">${esc(base)}</span></small><b id="medicine-base-cost">${money(0)}</b></div></div><small class="form-hint">Verify quantities and packaging against the supplier invoice. The batch and expiry above are saved with this opening stock.</small></div>` : ""}
+  </fieldset>`;
+}
+
+function readPharmacyUnitForm(form) {
+  const baseUnit = String(form.get("unit") || "tablet").trim(), basePrice = Number(form.get("price") || 0);
+  const supplierUnit = String(form.get("supplierUnit") || "").trim(), innerUnit = String(form.get("innerUnit") || "").trim();
+  const innerPerSupplier = Number(form.get("innerPerSupplier") || 0), basePerInner = Number(form.get("basePerInner") || 0);
+  const price = (field, factor) => String(form.get(field) ?? "").trim() === "" ? basePrice * factor : Number(form.get(field));
+  const units = [];
+  if (supplierUnit && innerUnit) {
+    units.push({ name: innerUnit, factor: basePerInner, price: price("innerPrice", basePerInner) });
+    units.push({ name: supplierUnit, factor: basePerInner * innerPerSupplier, price: price("supplierPrice", basePerInner * innerPerSupplier) });
+  } else if (supplierUnit) units.push({ name: supplierUnit, factor: basePerInner, price: price("supplierPrice", basePerInner) });
+  const purchaseQuantity = Number(form.get("purchaseQuantity") || 0), purchasePrice = Number(form.get("purchasePrice") || 0);
+  const purchaseUnit = supplierUnit || baseUnit, purchaseFactor = supplierUnit ? units.find(unit => unit.name === supplierUnit)?.factor || 1 : 1;
+  return { baseUnit, supplierUnit, innerUnit, innerPerSupplier, basePerInner, units, allowLoose: form.get("allowLoose") === "on", purchaseUnit, purchaseQuantity, purchasePrice, qty: purchaseQuantity * purchaseFactor, cost: purchaseQuantity > 0 && purchaseFactor > 0 ? purchasePrice / purchaseFactor : 0 };
+}
+
+function attachPharmacyUnitCalculator(includePurchase = false) {
+  const modalForm = $("#modal-form");
+  if (!modalForm) return;
+  const update = () => {
+    const config = readPharmacyUnitForm(new FormData(modalForm)), base = config.baseUnit || "unit";
+    document.querySelectorAll("#modal-fields .base-unit-label").forEach(label => label.textContent = base);
+    document.querySelectorAll("#modal-fields .inner-unit-label").forEach(label => label.textContent = config.innerUnit || "inner unit");
+    document.querySelectorAll("#modal-fields .supplier-unit-label").forEach(label => label.textContent = config.supplierUnit || base);
+    $("#inner-per-supplier-label").textContent = `${config.innerUnit || "Inner units"} / ${config.supplierUnit || "outer unit"}`;
+    $("#base-per-inner-label").textContent = config.innerUnit ? `${base} / ${config.innerUnit}` : `${base} / ${config.supplierUnit || "supplier unit"}`;
+    $("#inner-per-supplier-wrap")?.classList.toggle("hidden", !config.innerUnit);
+    $("#inner-selling-price-wrap")?.classList.toggle("hidden", !config.innerUnit);
+    if ($("#inner-price-auto")) $("#inner-price-auto").textContent = config.innerUnit ? `Blank = ${money(config.units[0]?.price || 0)} per ${config.innerUnit}` : "";
+    if ($("#supplier-price-auto")) $("#supplier-price-auto").textContent = config.supplierUnit ? `Blank = ${money(config.units.find(unit => unit.name === config.supplierUnit)?.price || 0)} per ${config.supplierUnit}` : "";
+    if (!includePurchase) return;
+    $("#purchase-quantity-label").textContent = `${config.purchaseUnit} purchased`;
+    $("#purchase-price-label").textContent = `Purchase price per ${config.purchaseUnit}`;
+    const qty = Number.isFinite(config.qty) ? config.qty : 0, total = config.purchaseQuantity * config.purchasePrice;
+    $("#medicine-calculated-stock").textContent = `${+qty.toFixed(6)} ${base}`;
+    $("#medicine-purchase-calculation").textContent = config.supplierUnit && config.innerUnit
+      ? `${config.purchaseQuantity} ${config.supplierUnit} × ${config.innerPerSupplier} ${config.innerUnit}/${config.supplierUnit} × ${config.basePerInner} ${base}/${config.innerUnit}`
+      : `${config.purchaseQuantity} ${config.purchaseUnit} × ${config.supplierUnit ? config.basePerInner : 1} ${base}/${config.purchaseUnit}`;
+    $("#medicine-total-cost").textContent = money(Number.isFinite(total) ? total : 0);
+    $("#medicine-base-cost").textContent = `${money(Number.isFinite(config.cost) ? config.cost : 0)} / ${base}`;
+  };
+  modalForm.addEventListener("input", update);
+  modalForm.addEventListener("change", update);
+  update();
+}
+
 function attachClothingChipEvents() {
   $("#modal-fields")?.querySelectorAll(".quick-chips").forEach(box => {
     const targetName = box.dataset.target;
@@ -834,7 +1001,7 @@ function renderOnlineOrders() {
   const returnCountBadge = $("#online-order-return-count");
   if (returnCountBadge) returnCountBadge.textContent = returnCount ? String(returnCount) : "";
   const billShortcut = $("#online-order-bills");
-  if (billShortcut) { billShortcut.disabled = !data.permissions?.sales; billShortcut.title = data.permissions?.sales ? "Open Sales bills" : "Sales permission is required"; }
+  if (billShortcut) { billShortcut.disabled = !data.permissions?.sales; billShortcut.title = data.permissions?.sales ? "Open online-order bills" : "Sales permission is required"; }
   const orders = invalidRange ? [] : allOrders.filter(order => {
     if ((from && order.date < from) || (to && order.date > to)) return false;
     if (statusFilter && order.order_status !== statusFilter) return false;
@@ -871,8 +1038,15 @@ function renderOnlineOrders() {
   if (!tbody) return;
 
   const canDeleteOnlineOrders = signedInUser?.permissions?.delete_online_orders && data.permissions?.online_orders;
+  const page = largeListPage("onlineOrders", orders);
+  const returnsByOrder = new Map();
+  for (const row of data.onlineOrderReturns || []) {
+    const key = Number(row.online_order_id);
+    if (!returnsByOrder.has(key)) returnsByOrder.set(key, []);
+    returnsByOrder.get(key).push(row);
+  }
 
-  tbody.innerHTML = orders.map(order => {
+  tbody.innerHTML = page.visible.map(order => {
     const lines = order.lines || [];
     const itemsHtml = lines.map(l => {
       const details = [
@@ -890,7 +1064,7 @@ function renderOnlineOrders() {
     const paymentInfo = `<b>COD: ${money(order.due_cod)}</b><br><small class="form-hint">${esc(order.payment_method)} (${esc(order.payment_status)})</small>${order.advance_paid > 0 ? `<br><small class="form-hint">Advance: ${money(order.advance_paid)}</small>` : ""}`;
 
     const totalInfo = `<b>${money(order.total)}</b>${order.delivery_charge > 0 ? `<br><small class="form-hint">+ ${money(order.delivery_charge)} deliv.</small>` : ""}${order.discount > 0 ? `<br><small class="form-hint">- ${money(order.discount)} disc.</small>` : ""}`;
-    const orderReturnRows = (data.onlineOrderReturns || []).filter(row => Number(row.online_order_id) === Number(order.id));
+    const orderReturnRows = returnsByOrder.get(Number(order.id)) || [];
     const alreadyReturnedQty = orderReturnRows.reduce((sum, row) => sum + Number(row.qty || 0), 0);
     const orderedQty = (order.lines || []).reduce((sum, line) => sum + Number(line.qty || 0), 0);
     const canRecordReturn = ((order.order_status === "Delivered" && order.stock_deducted) || (order.order_status === "Returned" && !order.stock_deducted && alreadyReturnedQty + 0.000001 < orderedQty)) && data.permissions?.inventory;
@@ -920,6 +1094,7 @@ function renderOnlineOrders() {
 
   $("#online-orders-empty").textContent = invalidRange ? "Choose a valid date range." : allOrders.length ? "No online orders match your search, status, or date filters." : "No online orders yet. Click 'New online order' to record your first parcel or customer shipment.";
   $("#online-orders-empty").classList.toggle("hidden", orders.length > 0);
+  showLargeListPagination("#online-orders-pagination", "onlineOrders", page, orders.length);
 
   const totalRevenue = orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
   const totalCod = orders.reduce((sum, o) => sum + Number(o.due_cod || 0), 0);
@@ -1036,12 +1211,12 @@ function openOnlineOrderModal(orderId = 0) {
   const couriers = ["Steadfast Courier", "Pathao Courier", "RedX", "Paperfly", "Sundarban Courier", "SA Paribahan", "In-house Delivery", "Other"];
   const paymentMethods = ["Cash on Delivery", "bKash", "Nagad", "Card", "Bank Transfer", "Paid in full"];
 
-  const stockedProducts = data.products.filter(p => p.qty > 0 || (existing && (existing.lines || []).some(l => Number(l.productId) === Number(p.id))));
+  const stockedProducts = data.products.filter(p => productSellableQty(p) > 0 || (existing && (existing.lines || []).some(l => Number(l.productId) === Number(p.id))));
   if (!stockedProducts.length && !existing) return toast("No products in stock to create an online order.");
 
   let cart = existing ? (existing.lines || []).map(l => {
     const p = data.products.find(x => Number(x.id) === Number(l.productId));
-    return {
+    const line = {
       productId: l.productId,
       name: l.name,
       category: l.category || p?.category || "Other",
@@ -1052,8 +1227,14 @@ function openOnlineOrderModal(orderId = 0) {
       price: Number(l.price),
       qty: Number(l.qty),
       cost: Number(l.cost || p?.cost || 0),
-      max: p ? Number((p.qty + (existing.stock_deducted ? l.qty : 0)).toFixed(6)) : l.qty
+      max: p ? Number(((data.shopType === "pharmacy" ? productSellableQty(p) : Number(p.qty)) + (existing.stock_deducted ? Number(l.qty) : 0)).toFixed(6)) : Number(l.qty),
+      ...(p ? pharmacyLineFields(p) : pharmacyLineFields({ price: l.price }))
     };
+    if (data.shopType === "pharmacy" && l.saleUnit) {
+      line.mode = pharmacyModeForUnit(line, l.saleUnit);
+      if (Number.isFinite(Number(l.salePrice))) line.unitPrices[line.mode] = Number(l.salePrice);
+    }
+    return line;
   }) : [];
 
   const title = existing ? `Edit Online Order ${esc(existing.order_no)}` : "New Online Order";
@@ -1112,7 +1293,7 @@ function openOnlineOrderModal(orderId = 0) {
         </thead>
         <tbody id="order-cart-lines"></tbody>
       </table>
-      <div class="empty" id="order-cart-empty">No items added yet. Search and pick clothing items above.</div>
+      <div class="empty" id="order-cart-empty">No items added yet. Search and pick products above.</div>
     </div>
     <div class="form-row">
       <label>Delivery charge (${esc(currencySymbol())})<input name="deliveryCharge" id="order-delivery-charge" type="number" min="0" step="0.01" value="${Number(existing?.delivery_charge ?? 60)}" required></label>
@@ -1164,6 +1345,7 @@ function openOnlineOrderModal(orderId = 0) {
         name: l.name,
         qty: l.qty,
         price: l.price,
+        ...(data.shopType === "pharmacy" ? { saleUnit: unitOf(l).name, saleQty: l.qty / unitOf(l).f, salePrice: l.price * unitOf(l).f } : {}),
         size: l.size,
         color: l.color,
         brand: l.brand,
@@ -1223,10 +1405,11 @@ function openOnlineOrderModal(orderId = 0) {
         line.size ? `<span class="cloth-size-badge">${esc(line.size)}</span>` : "",
         line.color ? `<span class="cloth-color-badge">${esc(line.color)}</span>` : ""
       ].filter(Boolean).join(" ");
+      const selected = unitOf(line), pharmacy = data.shopType === "pharmacy";
       return `<tr>
-        <td class="product-cell"><b>${esc(line.name)}</b>${details ? `<br>${details}` : ""}<br><small class="form-hint">In stock: ${line.max} ${esc(line.unit)}</small></td>
-        <td><input type="number" min="0" step="0.01" class="bill-input" data-i="${i}" data-f="price" value="${Number(line.price)}" style="width:80px"></td>
-        <td><input type="number" min="0.001" step="any" max="${line.max}" class="bill-input" data-i="${i}" data-f="qty" value="${Number(line.qty)}" style="width:65px"></td>
+        <td class="product-cell"><b>${esc(line.name)}</b>${details ? `<br>${details}` : ""}<br><small class="form-hint">Available: ${pharmacy ? `${+(line.max / selected.f).toFixed(3)} ${esc(selected.name)} · ` : ""}${line.max} ${esc(line.unit)}</small></td>
+        <td>${pharmacy ? priceCell(line, i) : `<input type="number" min="0" step="0.01" class="bill-input" data-i="${i}" data-f="price" value="${Number(line.price)}" style="width:80px">`}</td>
+        <td>${pharmacy ? qtyCell(line, i) : `<input type="number" min="0.001" step="any" max="${line.max}" class="bill-input" data-i="${i}" data-f="qty" value="${Number(line.qty)}" style="width:65px">`}</td>
         <td><b>${money(line.price * line.qty)}</b></td>
         <td><button type="button" class="user-action danger" data-remove="${i}">×</button></td>
       </tr>`;
@@ -1239,7 +1422,7 @@ function openOnlineOrderModal(orderId = 0) {
     if (!product) return;
     const existingLine = cart.find(l => Number(l.productId) === Number(product.id));
     if (!existingLine) {
-      cart.push({
+      const line = {
         productId: product.id,
         name: product.name,
         category: product.category || "Other",
@@ -1250,12 +1433,22 @@ function openOnlineOrderModal(orderId = 0) {
         price: Number(product.price),
         cost: Number(product.cost || 0),
         qty: 1,
-        max: Number(product.qty)
-      });
-    } else if (existingLine.qty < existingLine.max) {
-      existingLine.qty++;
+        max: Number(productSellableQty(product)),
+        ...pharmacyLineFields(product)
+      };
+      if (data.shopType === "pharmacy") {
+        const selected = unitOf(line);
+        if (line.max + 0.000001 < selected.f) return toast(`Only ${line.max} ${line.unit} of ${line.name} is available; not enough for one ${selected.name}.`);
+        line.mode = selected.key;
+        line.qty = selected.f;
+        const configured = line.unitPrices?.[selected.key];
+        if (configured !== undefined) line.price = configured / selected.f;
+      }
+      cart.push(line);
     } else {
-      return toast(`Only ${existingLine.max} ${existingLine.unit} of ${existingLine.name} in stock.`);
+      const increment = data.shopType === "pharmacy" ? unitOf(existingLine).f : 1;
+      if (existingLine.qty + increment <= existingLine.max + 0.000001) existingLine.qty = Number((existingLine.qty + increment).toFixed(6));
+      else return toast(`Only ${existingLine.max} ${existingLine.unit} of ${existingLine.name} in stock.`);
     }
     drawCart();
     $("#order-product-search")?.focus();
@@ -1273,11 +1466,32 @@ function openOnlineOrderModal(orderId = 0) {
     const input = e.target;
     const line = cart[input.dataset.i];
     if (!line) return;
-    if (input.dataset.f === "price") line.price = Number(input.value) || 0;
+    if (input.dataset.f === "mode") {
+      const selected = unitOf({ ...line, mode: input.value });
+      if (line.max + 0.000001 < selected.f) { toast(`Only ${line.max} ${line.unit} of ${line.name} is available; not enough for one ${selected.name}.`); return drawCart(); }
+      line.mode = selected.key;
+      line.qty = selected.f;
+      const configured = line.unitPrices?.[selected.key];
+      if (configured !== undefined) line.price = configured / selected.f;
+      return drawCart();
+    }
+    const selected = unitOf(line), value = Number(input.value) || 0;
+    if (data.shopType === "pharmacy" && input.dataset.f === "price") {
+      line.price = value / selected.f;
+      line.unitPrices = line.unitPrices || {};
+      line.unitPrices[selected.key] = value;
+    } else if (input.dataset.f === "price") line.price = value;
     if (input.dataset.f === "qty") {
-      let val = Number(input.value) || 0;
-      if (val > line.max) { val = line.max; input.value = val; toast(`Only ${line.max} ${line.unit} available in stock.`); }
-      line.qty = val;
+      if (data.shopType === "pharmacy") {
+        let qty = Math.round(value * selected.f * 1e6) / 1e6;
+        if (!isFractional(line.unit)) qty = Math.round(qty);
+        if (qty > line.max) { qty = line.max; input.value = +(qty / selected.f).toFixed(6); toast(`Only ${line.max} ${line.unit} available in stock.`); }
+        line.qty = qty;
+      } else {
+        let val = value;
+        if (val > line.max) { val = line.max; input.value = val; toast(`Only ${line.max} ${line.unit} available in stock.`); }
+        line.qty = val;
+      }
     }
     input.closest("tr").cells[3].innerHTML = `<b>${money(line.price * line.qty)}</b>`;
     calculate();
@@ -1359,14 +1573,13 @@ function downloadOnlineOrdersExcel() {
   }
   const csv = "﻿" + rows.map(row => row.map(val => csvCell(val)).join(",")).join("\r\n");
   downloadFile(`online-orders-${dateKey(new Date())}.csv`, csv);
-  toast("Online orders downloaded");
 }
 
-document.querySelector("#online-order-search")?.addEventListener("input", renderOnlineOrders);
-document.querySelector("#online-order-status-filter")?.addEventListener("change", renderOnlineOrders);
-document.querySelector("#online-orders-from")?.addEventListener("change", renderOnlineOrders);
-document.querySelector("#online-orders-to")?.addEventListener("change", renderOnlineOrders);
-document.querySelector("#online-orders-clear-dates")?.addEventListener("click", () => { $("#online-orders-from").value = ""; $("#online-orders-to").value = ""; renderOnlineOrders(); });
+document.querySelector("#online-order-search")?.addEventListener("input", () => { largeListPages.onlineOrders = 1; renderOnlineOrders(); });
+document.querySelector("#online-order-status-filter")?.addEventListener("change", () => { largeListPages.onlineOrders = 1; renderOnlineOrders(); });
+document.querySelector("#online-orders-from")?.addEventListener("change", () => { largeListPages.onlineOrders = 1; renderOnlineOrders(); });
+document.querySelector("#online-orders-to")?.addEventListener("change", () => { largeListPages.onlineOrders = 1; renderOnlineOrders(); });
+document.querySelector("#online-orders-clear-dates")?.addEventListener("click", () => { $("#online-orders-from").value = ""; $("#online-orders-to").value = ""; largeListPages.onlineOrders = 1; renderOnlineOrders(); });
 
 function openOnlineOrderReturnModal(order) {
   const recorded = (data.onlineOrderReturns || []).filter(row => Number(row.online_order_id) === Number(order.id));
@@ -1461,14 +1674,14 @@ function openOnlineOrderCustomers() {
     $("#online-customer-body").innerHTML = filtered.map(customer => `<tr data-customer-search="${esc(customer.search)}"><td>${esc(customer.name)}</td><td>${esc(customer.phone || "—")}</td><td>${customer.count}</td><td>${money(customer.total)}</td><td>${customer.latest ? esc(dateLabel(customer.latest)) : "—"}</td></tr>`).join("");
     $("#online-customer-count").textContent = `${filtered.length} customer${filtered.length === 1 ? "" : "s"} · Select a row to filter orders`;
     $("#online-customer-empty").classList.toggle("hidden", filtered.length > 0);
-    $("#online-customer-body").querySelectorAll("tr[data-customer-search]").forEach(row => row.onclick = () => { $("#online-order-search").value = row.dataset.customerSearch; closeModal(); renderOnlineOrders(); });
+    $("#online-customer-body").querySelectorAll("tr[data-customer-search]").forEach(row => row.onclick = () => { $("#online-order-search").value = row.dataset.customerSearch; largeListPages.onlineOrders = 1; closeModal(); renderOnlineOrders(); });
   };
   $("#online-customer-search").oninput = renderCustomers;
   renderCustomers();
 }
 
 document.querySelector("#online-order-customers")?.addEventListener("click", () => openOnlineOrderCustomers());
-document.querySelector("#online-order-bills")?.addEventListener("click", () => { if (!data.permissions?.sales) return toast("Sales permission is required to view Bills."); openBills(false); });
+document.querySelector("#online-order-bills")?.addEventListener("click", () => { if (!data.permissions?.sales) return toast("Sales permission is required to view Bills."); openBills(false, {}, "online"); });
 document.querySelector("#online-order-returns")?.addEventListener("click", () => openOnlineOrderReturnsHistory());
 document.querySelector("#download-online-orders")?.addEventListener("click", downloadOnlineOrdersExcel);
 document.querySelector("#new-online-order")?.addEventListener("click", () => openOnlineOrderModal(0));
@@ -1533,16 +1746,104 @@ function applyShopTypeTheme(shopType) {
   if (brandIcon) brandIcon.innerHTML = `<span class="brand-type-emoji" aria-hidden="true">${theme.icon}</span>`;
 }
 
+const ONLINE_DASHBOARD_STATUS_GROUPS = [
+  { key: "pending", label: "Pending", statuses: ["Pending"], className: "pending", countKey: "pendingCount" },
+  { key: "processing", label: "Confirmed / Processing", statuses: ["Confirmed", "Processing"], className: "processing", countKey: "processingCount" },
+  { key: "shipped", label: "Shipped", statuses: ["Shipped"], className: "shipped", countKey: "shippedCount" },
+  { key: "delivered", label: "Delivered", statuses: ["Delivered"], className: "delivered", countKey: "deliveredCount" },
+  { key: "returned", label: "Returned", statuses: ["Returned"], className: "returned", countKey: "returnedCount" },
+  { key: "cancelled", label: "Cancelled", statuses: ["Cancelled"], className: "cancelled", countKey: "cancelledCount" }
+];
+let dashboardOnlineStatusFilter = "";
+function onlineDashboardOrdersForStatus(orders, statusFilter) {
+  const group = ONLINE_DASHBOARD_STATUS_GROUPS.find(item => item.key === statusFilter);
+  return group ? (orders || []).filter(order => group.statuses.includes(order.order_status)) : (orders || []);
+}
+
+function renderOnlineDashboard(todayKey, permissions) {
+  const panel = $("#dashboard-online-sales");
+  if (!panel) return;
+  panel.classList.toggle("hidden", !permissions.online_orders);
+  if (!permissions.online_orders) return;
+  const orders = data.onlineOrders || [];
+  const summary = summarizeOnlineDashboard(orders, data.sales || [], todayKey);
+  $("#online-today-orders").textContent = localizeDigits(summary.todayOrderCount);
+  $("#online-today-order-value").textContent = `${money(summary.todayOrderValue)} order value`;
+  $("#online-gross-sales").textContent = permissions.sales ? money(summary.sales.grossSales) : "—";
+  $("#online-returned-value").textContent = permissions.sales ? money(summary.sales.returnedValue) : "—";
+  $("#online-net-sales").textContent = permissions.sales ? money(summary.sales.netSales) : "—";
+  $("#online-profit-after-returns").textContent = permissions.sales ? money(summary.sales.profitAfterReturns) : "—";
+  $("#online-profit-breakdown").textContent = permissions.sales ? `Before returns ${money(summary.sales.profitBeforeReturns)} · Reversed ${money(summary.sales.returnedProfit)}` : "Sales access required";
+  $("#online-active-cod").textContent = money(summary.activeCod);
+  $("#online-active-count").textContent = `${localizeDigits(summary.activeOrderCount)} active orders`;
+  $("#online-dashboard-status").innerHTML = ONLINE_DASHBOARD_STATUS_GROUPS.map(group => {
+    const active = dashboardOnlineStatusFilter === group.key;
+    return `<button type="button" class="online-dashboard-status-item${active ? " active" : ""}" data-online-status-filter="${group.key}" aria-pressed="${active}" title="${esc(t("Filter orders by status"))}"><span class="status ${group.className}">${esc(t(group.label))}</span><b>${localizeDigits(summary[group.countKey])}</b></button>`;
+  }).join("");
+  const activeGroup = ONLINE_DASHBOARD_STATUS_GROUPS.find(group => group.key === dashboardOnlineStatusFilter);
+  const filteredOrders = onlineDashboardOrdersForStatus(orders, dashboardOnlineStatusFilter);
+  const page = largeListPage("dashboardOnline", filteredOrders);
+  const visibleOrders = page.visible;
+  const returnTotals = new Map();
+  for (const row of data.onlineOrderReturns || []) returnTotals.set(Number(row.online_order_id), (returnTotals.get(Number(row.online_order_id)) || 0) + Number(row.total || 0));
+  $("#online-orders-filter-label").textContent = activeGroup ? `· ${t(activeGroup.label)}` : "";
+  $("#online-orders-show-all").classList.toggle("hidden", !activeGroup);
+  $("#online-orders-list-meta").textContent = `${localizeDigits(filteredOrders.length)} / ${localizeDigits(orders.length)} ${t("orders shown")}`;
+  $("#dashboard-online-orders-list").innerHTML = visibleOrders.length ? visibleOrders.map(order => {
+    const items = (order.lines || []).map(line => `${esc(line.name)} × ${localizeDigits(line.qty)} ${esc(line.unit || "piece")} · ${money(line.lineTotal ?? Number(line.qty || 0) * Number(line.price || 0))}`).join("<br>");
+    const returnedValue = returnTotals.get(Number(order.id)) || 0;
+    return `<article class="online-dashboard-order"><div class="online-dashboard-order-main"><div class="online-dashboard-order-title"><b>${esc(order.order_no)}</b><span>${dateLabel(order.date)}</span></div><strong>${esc(order.customer_name)}</strong><small>📞 ${esc(order.customer_phone)}</small><small>📍 ${esc(order.shipping_address)}${order.city_area ? ` (${esc(order.city_area)})` : ""}</small><small class="online-dashboard-order-items">${items || "No items"}</small>${order.notes ? `<small>Note: ${esc(order.notes)}</small>` : ""}</div><div class="online-dashboard-order-courier"><b>${esc(order.courier || "Not assigned")}</b>${order.tracking_id ? `<small>Tracking: ${esc(order.tracking_id)}</small>` : "<small>No tracking ID</small>"}</div><div class="online-dashboard-order-payment"><b>${money(order.total)}</b><small>${esc(order.payment_method)} · ${esc(order.payment_status)}</small><small>Advance ${money(order.advance_paid)} · COD ${money(order.due_cod)}</small>${Number(order.delivery_charge || 0) > 0 || Number(order.discount || 0) > 0 ? `<small>Delivery ${money(order.delivery_charge)} · Discount ${money(order.discount)}</small>` : ""}${returnedValue > 0 ? `<small class="online-dashboard-order-returned"><span>Returned</span> ${money(returnedValue)}</small>` : ""}</div><span class="status ${order.order_status.toLowerCase()}">${esc(order.order_status)}</span></article>`;
+  }).join("") : activeGroup ? '<div class="empty">No orders match this status.</div>' : '<div class="empty">No online orders yet. Your latest online orders will appear here.</div>';
+  showLargeListPagination("#dashboard-online-pagination", "dashboardOnline", page, filteredOrders.length);
+}
+
+$("#dashboard-online-sales")?.addEventListener("click", event => {
+  const showAll = event.target.closest("[data-online-show-all]");
+  const statusButton = event.target.closest("[data-online-status-filter]");
+  if (!showAll && !statusButton) return;
+  const nextFilter = showAll ? "" : statusButton.dataset.onlineStatusFilter;
+  dashboardOnlineStatusFilter = !showAll && dashboardOnlineStatusFilter !== nextFilter ? nextFilter : "";
+  largeListPages.dashboardOnline = 1;
+  renderOnlineDashboard(dateKey(new Date()), data.permissions || {});
+  $("#dashboard-online-orders-list").scrollTop = 0;
+});
+
+function renderExpenses() {
+  const canManage = signedInUser?.permissions?.records && data.permissions?.expenses;
+  $("#expenses-actions-header").classList.toggle("hidden", !canManage);
+  $("#expenses").classList.toggle("expenses-has-actions", canManage);
+  const expenses = data.expenses || [];
+  const page = largeListPage("expenses", expenses);
+  $("#expenses-table").innerHTML = page.visible.map(item => `<tr><td>${dateLabel(item.date)}</td><td>${esc(item.category)}</td><td>${esc(item.note || "—")}</td><td><b>${money(item.amount)}</b></td>${canManage ? `<td><button class="user-action" data-expense-action="edit" data-id="${item.id}">Edit</button><button class="user-action danger" data-expense-action="delete" data-id="${item.id}">Delete</button></td>` : ""}</tr>`).join("");
+  $("#expenses-empty").classList.toggle("hidden", expenses.length > 0);
+  showLargeListPagination("#expenses-pagination", "expenses", page, expenses.length);
+}
+
+function renderStockWatch() {
+  const permissions = data.permissions || {};
+  const low = data.products.filter(item => item.qty <= item.min);
+  $("#low-count").textContent = permissions.inventory ? `${low.length} low` : "—";
+  $("#stock-watch-count").textContent = low.length ? `${low.length} low` : "";
+  const page = largeListPage("stockWatch", low);
+  $("#stock-watch").innerHTML = low.length
+    ? `<div class="table-scroll stock-watch-scroll"><table><thead><tr><th>PRODUCT</th><th>UNIT</th><th>IN STOCK</th><th>REORDER AT</th><th>STATUS</th></tr></thead><tbody>${page.visible.map(item => `<tr><td class="product-cell" data-label="Product">${esc(item.icon || "📦")} &nbsp;${esc(productLabel(item))}</td><td data-label="Unit">${esc(item.unit || "piece")}</td><td class="qty" data-label="In stock">${item.qty} ${esc(item.unit || "piece")}</td><td data-label="Reorder at">${item.min} ${esc(item.unit || "piece")}</td><td data-label="Status"><span class="status ${item.qty === 0 ? "out" : "low"}">${item.qty === 0 ? "Out of stock" : "Low stock"}</span></td></tr>`).join("")}</tbody></table></div>`
+    : '<div class="empty">Everything is stocked up. Nice work!</div>';
+  showLargeListPagination("#stock-watch-pagination", "stockWatch", page, low.length);
+}
+
 function render() {
   applyShopTypeTheme(data.shopType || "general");
   const permissions = data.permissions || {};
-  const canManageSalesRecords = signedInUser?.permissions?.records && permissions.sales;
-  const canManageExpenseRecords = signedInUser?.permissions?.records && permissions.expenses;
   const todayKey = dateKey(new Date());
   const month = todayKey.slice(0, 7);
   const displayName = signedInUser?.displayName || signedInUser?.username || "Shopkeeper";
   $("#welcome-greeting").innerHTML = `${t("Good morning")}, ${esc(displayName)} <span>✳</span>`;
   $("#signed-in-as").textContent = displayName;
+  const activeShopProfile = data.activeProfile || { name: data.shopType || "General store", type: data.shopType || "general" };
+  if ($("#shop-profiles-button")) {
+    $("#shop-profiles-button").innerHTML = `${esc(activeShopProfile.name)} <span aria-hidden="true">▾</span>`;
+    $("#shop-profiles-button").title = `${activeShopProfile.name} · Switch shop profile (separate records)`;
+  }
   $("#profile-initial").textContent = displayName.trim().charAt(0).toUpperCase() || "?";
   const profilePhoto = $("#profile-photo");
   if (signedInUser?.avatarData) {
@@ -1560,13 +1861,21 @@ function render() {
   $("#workspace-name").textContent = data.workspace || "Set workspace";
   refreshTopbarClock();
   renderDashboardTrend();
-  const dashboardReturns = permissions.sales ? (data.salesReturns || []).slice(0, 5) : [];
+  renderOnlineDashboard(todayKey, permissions);
+  const allReturns = permissions.sales ? (data.salesReturns || []) : [];
+  const dashboardReturns = allReturns.slice(0, 5);
   $("#dashboard-returns").classList.toggle("hidden", !permissions.sales);
-  $("#dashboard-returns-list").innerHTML = dashboardReturns.length ? dashboardReturns.map(row => `<div class="dashboard-return-row"><div class="dashboard-return-product">${esc(row.product)}<small class="dashboard-return-meta">${dateLabel(row.date)}${row.reason ? ` · ${esc(row.reason)}` : ""}</small></div><span class="dashboard-return-qty">${Number(row.qty)} ${esc(row.unit || "piece")}</span><b class="dashboard-return-amount">${money(row.total)}</b></div>`).join("") : '<div class="dashboard-returns-empty">No product returns have been recorded.</div>';
+  $("#dashboard-returns-total").textContent = money(allReturns.reduce((sum, row) => sum + Number(row.total || 0), 0));
+  $("#dashboard-returns-count").textContent = localizeDigits(allReturns.length);
+  $("#dashboard-refunds-total").textContent = money(allReturns.reduce((sum, row) => sum + Number(row.refund_amount || 0), 0));
+  $("#dashboard-returns-list").innerHTML = dashboardReturns.length ? dashboardReturns.map(row => `<div class="dashboard-return-row"><div class="dashboard-return-product">${esc(row.product)}<small class="dashboard-return-meta">${dateLabel(row.date)}${row.reason ? ` · ${esc(row.reason)}` : ""}</small></div><span class="dashboard-return-qty">${Number(row.qty)} ${esc(row.unit || "piece")}</span><b class="dashboard-return-amount">−${money(row.total)}</b></div>`).join("") : '<div class="dashboard-returns-empty">No product returns have been recorded.</div>';
   const salesToday = data.sales.filter(item => item.date === todayKey);
-  $("#today-sales").textContent = permissions.sales ? money(salesToday.reduce((sum, item) => sum + item.total, 0)) : "—";
+  const todaySummary = summarizeSales(salesToday);
+  $("#today-sales").textContent = permissions.sales ? money(todaySummary.netSales) : "—";
   $("#today-count").textContent = permissions.sales ? `${salesToday.length} transactions` : "No access";
-  $("#today-profit").textContent = permissions.sales ? money(salesToday.reduce((sum, item) => sum + item.total - item.cost, 0)) : "—";
+  $("#today-sales-breakdown").textContent = permissions.sales ? `Gross ${money(todaySummary.grossSales)} · Returns ${money(todaySummary.returnedValue)}` : "No access";
+  $("#today-profit").textContent = permissions.sales ? money(todaySummary.profitAfterReturns) : "—";
+  $("#today-profit-breakdown").textContent = permissions.sales ? `Before returns ${money(todaySummary.profitBeforeReturns)} · Reversed ${money(todaySummary.returnedProfit)}` : "No access";
   const monthlyExpenses = data.expenses.filter(item => item.date.startsWith(month));
   $("#month-expenses").textContent = permissions.expenses ? money(monthlyExpenses.reduce((sum, item) => sum + item.amount, 0)) : "—";
   $("#expense-count").textContent = permissions.expenses ? `${monthlyExpenses.length} recorded this month` : "No access";
@@ -1598,7 +1907,7 @@ function render() {
   const canBulkInventory = signedInUser?.role === "admin" && signedInUser?.permissions?.records && permissions.inventory;
   $("#bulk-inventory-tools").classList.toggle("hidden", !canBulkInventory);
   if ($("#bulk-inventory-help")) {
-    $("#bulk-inventory-help").textContent = bulkInventoryTemplateConfig(data.shopType).help;
+    $("#bulk-inventory-help").textContent = `${bulkInventoryTemplateConfig(data.shopType).help} ${BULK_INVENTORY_UPLOAD_HELP}`;
     $("#bulk-inventory-help").classList.toggle("hidden", !canBulkInventory);
   }
   $("#manage-categories").classList.toggle("hidden", !(signedInUser?.permissions?.records && permissions.inventory));
@@ -1622,39 +1931,14 @@ function render() {
   const quickSaleHidden = !permissions.sales || data.shopType === "pharmacy" || data.requireCustomer || data.taxMode !== "none" || !quickPaymentChoices().length;
   $("#new-sale").classList.toggle("hidden", quickSaleHidden);
   $("#sale-shortcut").classList.toggle("hidden", quickSaleHidden);
-  $("#low-count").textContent = permissions.inventory ? `${data.products.filter(item => item.qty <= item.min).length} low` : "—";
-
-  const low = data.products.filter(item => item.qty <= item.min);
-  $("#stock-watch-count").textContent = low.length ? `${low.length} low` : "";
-  $("#stock-watch").innerHTML = low.length
-    ? `<div class="table-scroll stock-watch-scroll"><table><thead><tr><th>PRODUCT</th><th>UNIT</th><th>IN STOCK</th><th>REORDER AT</th><th>STATUS</th></tr></thead><tbody>${low.map(item => `<tr><td class="product-cell" data-label="Product">${esc(item.icon || "📦")} &nbsp;${esc(productLabel(item))}</td><td data-label="Unit">${esc(item.unit || "piece")}</td><td class="qty" data-label="In stock">${item.qty} ${esc(item.unit || "piece")}</td><td data-label="Reorder at">${item.min} ${esc(item.unit || "piece")}</td><td data-label="Status"><span class="status ${item.qty === 0 ? "out" : "low"}">${item.qty === 0 ? "Out of stock" : "Low stock"}</span></td></tr>`).join("")}</tbody></table></div>`
-    : '<div class="empty">Everything is stocked up. Nice work!</div>';
+  renderStockWatch();
   renderInventoryProducts();
   renderOnlineOrders();
   renderRepairJobs();
   renderDevices();
-  const canReturnSales = permissions.sales && permissions.inventory;
-  $("#sales-actions-header").classList.toggle("hidden", !canManageSalesRecords && !canReturnSales);
-  $("#sales").classList.toggle("sales-has-actions", canManageSalesRecords || canReturnSales);
-  $("#sales-table").innerHTML = data.sales.map(item => {
-    const returned = Number(item.returned_qty || 0) > 0;
-    const isRepair = Number(item.service_job_id) > 0;
-    const returnButton = !isRepair && canReturnSales && item.product_id && Number(item.original_remaining_qty) > 0
-      ? `<button type="button" class="user-action" data-sale-action="return" data-id="${item.id}">Return</button>` : "";
-    const actions = [
-      canManageSalesRecords && !isRepair ? `<button class="user-action" data-sale-action="edit" data-id="${item.id}">Edit</button><button class="user-action danger" data-sale-action="delete" data-id="${item.id}">Delete</button>` : ""
-    ].join("");
-    return `<tr><td>${dateLabel(item.date)}</td><td class="product-cell">${esc(item.product)}${returned ? `<small class="form-hint">Returned ${Number(item.returned_qty)} ${esc(item.unit || "piece")}</small>` : ""}${returnButton}</td><td>${item.qty} ${esc(item.unit || "piece")}</td><td>${esc(item.payment)}</td><td><b>${money(item.total)}</b>${Number(item.tax_amount) > 0 ? `<small class="form-hint">+ ${money(item.tax_amount)} tax</small>` : ""}</td>${canManageSalesRecords || canReturnSales ? `<td>${actions || "—"}</td>` : ""}</tr>`;
-  }).join("");
-  $("#sales-empty").classList.toggle("hidden", data.sales.length > 0);
-  const salesGross = data.sales.reduce((sum, item) => sum + Number(item.original_total ?? item.total ?? 0), 0);
-  const salesNet = data.sales.reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const returnsTotal = Math.max(0, salesGross - salesNet);
-  $("#sales-summary").innerHTML = `<div class="list-summary-heading"><b>Sales totals</b><small>All-time totals across recorded sale lines</small></div><div class="list-summary-cards"><div><small>Sale lines</small><b>${data.sales.length}</b></div><div><small>Gross sales</small><b>${money(salesGross)}</b></div><div><small>Returned value</small><b>${money(returnsTotal)}</b></div><div><small>Net sales after returns</small><b>${money(salesNet)}</b></div></div>`;
-  $("#expenses-actions-header").classList.toggle("hidden", !canManageExpenseRecords);
-  $("#expenses").classList.toggle("expenses-has-actions", canManageExpenseRecords);
-  $("#expenses-table").innerHTML = data.expenses.map(item => `<tr><td>${dateLabel(item.date)}</td><td>${esc(item.category)}</td><td>${esc(item.note || "—")}</td><td><b>${money(item.amount)}</b></td>${canManageExpenseRecords ? `<td><button class="user-action" data-expense-action="edit" data-id="${item.id}">Edit</button><button class="user-action danger" data-expense-action="delete" data-id="${item.id}">Delete</button></td>` : ""}</tr>`).join("");
-  $("#expenses-empty").classList.toggle("hidden", data.expenses.length > 0);
+  $("#sales-actions-header").classList.remove("hidden");
+  $("#sales").classList.remove("sales-has-actions");
+  renderExpenses();
   $("#add-product").classList.toggle("hidden", !permissions.inventory);
   $("#new-sale").classList.toggle("hidden", quickSaleHidden);
   $("#sale-shortcut").classList.toggle("hidden", quickSaleHidden);
@@ -1669,6 +1953,9 @@ function render() {
 }
 
 const dialog = $("#modal");
+const BULK_INVENTORY_MAX_FILE_BYTES = 25 * 1024 * 1024;
+const BULK_INVENTORY_MAX_ROWS = 25000;
+const BULK_INVENTORY_UPLOAD_HELP = "The Category column is imported, and missing categories are created for this shop type. Upload up to 25 MB or 25,000 rows at a time.";
 const bulkInventoryCoreHeaders = ["Product ID", "Product Name", "SKU", "Selling Price", "Cost", "Quantity", "Low Stock Alert", "Unit", "Category", "Barcode"];
 function bulkInventoryTemplateConfig(shopType = data.shopType) {
   const baseRow = item => [
@@ -1693,7 +1980,7 @@ function bulkInventoryTemplateConfig(shopType = data.shopType) {
     return {
       filename: "pharmacy-inventory-template.csv",
       headers: [...bulkInventoryCoreHeaders, "Generic Name", "Strength", "Dosage Form", "Manufacturer", "Batch Number", "Expiry Date"],
-      help: "Pharmacy Excel template: includes Generic Name, Strength, Dosage Form, Manufacturer, Batch Number, and Expiry Date (YYYY-MM-DD). Keep Product ID unchanged to update medicine details/prices; leave Product ID blank (with Batch Number & Expiry Date) to add new medicines.",
+      help: "Pharmacy Excel template: includes Generic Name, Strength, Dosage Form, Manufacturer, Batch Number, and Expiry Date (YYYY-MM-DD). Keep Product ID unchanged to update medicine details/prices; leave Product ID blank to add new medicines. For new medicines, blank price/cost/quantity become 0 and blank low-stock alert becomes 5. Dated stock needs Batch Number & Expiry Date; blank expiry holds stock for verification and cannot be sold.",
       toRow: item => {
         const batch = batchesByProduct.get(item.id);
         return [...baseRow(item), item.generic_name || "", item.strength || "", item.dosage_form || "", item.manufacturer || "", batch?.batch_number || "", batch?.expiry_date || ""];
@@ -1764,6 +2051,7 @@ function downloadFile(filename, content, type = "text/csv;charset=utf-8") {
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 30000);
+  toast(`Download complete: ${filename}`, 4000);
 }
 function parseCsv(text) {
   const rows = [];
@@ -1806,7 +2094,13 @@ function closeDialogElement(element) {
 function openModal(title, markup, onSave) {
   $("#modal-title").textContent = t(title);
   const submit = $("#submit-modal");
-  if (submit) submit.textContent = t("Save");
+  if (submit) {
+    submit.textContent = t("Save");
+    submit.classList.remove("hidden");
+    submit.disabled = false;
+  }
+  const cancel = $("#cancel-modal");
+  if (cancel) cancel.textContent = t("Cancel");
   const errorBanner = $("#modal-error-banner");
   if (errorBanner) {
     errorBanner.textContent = "";
@@ -1875,13 +2169,38 @@ document.addEventListener("keydown", event => {
   }
 }, true);
 
+$("#shop-profiles-button").onclick = () => {
+  const profiles = data.profiles || [];
+  const activeId = Number(data.activeProfile?.id);
+  const choices = profiles.map(profile => {
+    const current = Number(profile.id) === activeId;
+    return `<button type="button" class="shop-profile-choice ${current ? "current" : ""}" data-switch-profile="${Number(profile.id)}" ${current ? "disabled" : ""}><span><b>${esc(profile.name)}</b><small>${current ? "Current profile" : "Open separate inventory, sales, and reports"}</small></span><span aria-hidden="true">${current ? "✓" : "→"}</span></button>`;
+  }).join("");
+  openModal("Switch shop profile", `<p class="form-hint">Each shop profile has its own inventory, batches, purchases, sales, expenses, reports, and backups. Records never move between profiles.</p><div class="shop-profile-list">${choices || '<div class="empty">No shop profiles are available.</div>'}</div><p class="form-hint">Switching affects only this sign-in session. Other users stay in their selected profile.</p>`, () => false);
+  $("#submit-modal")?.classList.add("hidden");
+  if ($("#cancel-modal")) $("#cancel-modal").textContent = t("Close");
+  document.querySelectorAll("[data-switch-profile]").forEach(button => {
+    button.onclick = async () => {
+      document.querySelectorAll("[data-switch-profile]").forEach(choice => { choice.disabled = true; });
+      try {
+        await api("/api/profiles/switch", { method: "POST", body: JSON.stringify({ profileId: Number(button.dataset.switchProfile) }) });
+        // Reload all state and filters so no rows from the previous shop remain visible.
+        location.reload();
+      } catch (error) {
+        toast(error.message);
+        document.querySelectorAll("[data-switch-profile]").forEach(choice => { choice.disabled = Number(choice.dataset.switchProfile) === activeId; });
+      }
+    };
+  });
+};
+
 $("#edit-workspace").onclick = () => {
   if (!data.permissions.settings) {
     toast("You do not have permission to change shop settings and location.");
     return;
   }
   const select = (name, values, current, disabled = false) => `<select name="${name}" ${disabled ? "disabled" : ""}>${values.map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join("")}</select>`;
-  openModal("Shop settings", `<label>Shop name<input name="shopName" value="${esc(data.shopName)}" required></label><label>Workspace / location<input name="workspace" value="${esc(data.workspace)}" required></label><h3>Business contact details for printed orders</h3><div class="form-row"><label>Contact number<input name="contactNumber" maxlength="60" value="${esc(data.contactNumber || "")}"></label><label>WhatsApp number<input name="whatsappNumber" maxlength="60" value="${esc(data.whatsappNumber || "")}"></label></div><div class="form-row"><label>Email address<input name="email" type="email" maxlength="254" value="${esc(data.email || "")}"></label><label>Website<input name="website" maxlength="250" value="${esc(data.website || "")}" placeholder="www.example.com"></label></div><label>Facebook page<input name="facebookPage" maxlength="250" value="${esc(data.facebookPage || "")}" placeholder="Facebook page URL"></label><label>Contact / return address<input name="contactAddress" maxlength="300" value="${esc(data.contactAddress || "")}" placeholder="Office or shop return address"></label><div class="form-row"><label>Shop type${select("shopType", [["general","General retail"],["hardware","Hardware"],["grocery","Grocery"],["clothing","Clothing"],["pharmacy","Pharmacy"],["mobile","Mobile phone sales & service"],["restaurant","Food & restaurant"]], data.shopType)}<small class="form-hint">Adds starter categories for this business without changing existing products.</small></label><label>Currency${select("currencyCode", [["BDT","Bangladeshi taka (BDT)"],["USD","US dollar (USD)"],["EUR","Euro (EUR)"],["GBP","Pound sterling (GBP)"],["INR","Indian rupee (INR)"],["PKR","Pakistani rupee (PKR)"],["NPR","Nepalese rupee (NPR)"],["LKR","Sri Lankan rupee (LKR)"],["AUD","Australian dollar (AUD)"],["CAD","Canadian dollar (CAD)"]], data.currencyCode)}<small class="form-hint">Changing currency changes display only; it does not convert existing amounts.</small></label></div><label>Number and date region${select("locale", [["en-BD","English · Bangladesh"],["bn-BD","বাংলা · বাংলাদেশ"],["en-US","English · United States"],["en-GB","English · United Kingdom"],["en-IN","English · India"],["en-PK","English · Pakistan"],["en-NP","English · Nepal"],["en-LK","English · Sri Lanka"],["en-AU","English · Australia"],["en-CA","English · Canada"]], data.locale)}</label><label>Language<select name="language"><option value="bn" ${data.language === "bn" ? "selected" : ""}>বাংলা</option><option value="en" ${data.language !== "bn" ? "selected" : ""}>English</option></select></label><label class="setting-check"><input type="checkbox" name="banglaDigits" ${data.banglaDigits ? "checked" : ""}> Bangla digits (০১২৩)</label></div><div class="form-row"><label>Tax mode${select("taxMode", [["none","No tax"],["inclusive","Tax included in prices"],["exclusive","Add tax at checkout"]], data.taxMode)}</label><label>Tax rate (%)<input name="taxRate" type="number" min="0" max="100" step="0.01" value="${Number(data.taxRate || 0)}"></label></div><label>Payment methods <small class="form-hint">Separate options with commas. Example: Cash, Card, Mobile pay, Due.</small><input name="paymentMethods" maxlength="400" value="${esc((data.paymentMethods || []).join(", "))}" required></label><label class="setting-check"><input type="checkbox" name="requireCustomer" ${data.requireCustomer ? "checked" : ""}> Require a customer name on every bill</label><label class="setting-check"><input type="checkbox" name="allowDiscounts" ${data.allowDiscounts ? "checked" : ""}> Allow bill discounts</label>`, async form => {
+  openModal("Shop settings", `<label>Shop name<input name="shopName" value="${esc(data.shopName)}" required></label><label>Workspace / location<input name="workspace" value="${esc(data.workspace)}" required></label><h3>Business contact details for printed orders</h3><div class="form-row"><label>Contact number<input name="contactNumber" maxlength="60" value="${esc(data.contactNumber || "")}"></label><label>WhatsApp number<input name="whatsappNumber" maxlength="60" value="${esc(data.whatsappNumber || "")}"></label></div><div class="form-row"><label>Email address<input name="email" type="email" maxlength="254" value="${esc(data.email || "")}"></label><label>Website<input name="website" maxlength="250" value="${esc(data.website || "")}" placeholder="www.example.com"></label></div><label>Facebook page<input name="facebookPage" maxlength="250" value="${esc(data.facebookPage || "")}" placeholder="Facebook page URL"></label><label>Contact / return address<input name="contactAddress" maxlength="300" value="${esc(data.contactAddress || "")}" placeholder="Office or shop return address"></label><div class="form-row"><label>Shop type${select("shopType", [["general","General retail"],["hardware","Hardware"],["grocery","Grocery"],["clothing","Clothing"],["pharmacy","Pharmacy"],["mobile","Mobile phone sales & service"],["restaurant","Food & restaurant"]], data.shopType, true)}<small class="form-hint">Fixed for this profile. Use Switch shop profile in the top bar to open another shop type with separate records.</small></label><label>Currency${select("currencyCode", [["BDT","Bangladeshi taka (BDT)"],["USD","US dollar (USD)"],["EUR","Euro (EUR)"],["GBP","Pound sterling (GBP)"],["INR","Indian rupee (INR)"],["PKR","Pakistani rupee (PKR)"],["NPR","Nepalese rupee (NPR)"],["LKR","Sri Lankan rupee (LKR)"],["AUD","Australian dollar (AUD)"],["CAD","Canadian dollar (CAD)"]], data.currencyCode)}<small class="form-hint">Changing currency changes display only; it does not convert existing amounts.</small></label></div><label>Number and date region${select("locale", [["en-BD","English · Bangladesh"],["bn-BD","বাংলা · বাংলাদেশ"],["en-US","English · United States"],["en-GB","English · United Kingdom"],["en-IN","English · India"],["en-PK","English · Pakistan"],["en-NP","English · Nepal"],["en-LK","English · Sri Lanka"],["en-AU","English · Australia"],["en-CA","English · Canada"]], data.locale)}</label><label>Language<select name="language"><option value="bn" ${data.language === "bn" ? "selected" : ""}>বাংলা</option><option value="en" ${data.language !== "bn" ? "selected" : ""}>English</option></select></label><label class="setting-check"><input type="checkbox" name="banglaDigits" ${data.banglaDigits ? "checked" : ""}> Bangla digits (০১২৩)</label></div><div class="form-row"><label>Tax mode${select("taxMode", [["none","No tax"],["inclusive","Tax included in prices"],["exclusive","Add tax at checkout"]], data.taxMode)}</label><label>Tax rate (%)<input name="taxRate" type="number" min="0" max="100" step="0.01" value="${Number(data.taxRate || 0)}"></label></div><label>Payment methods <small class="form-hint">Separate options with commas. Example: Cash, Card, Mobile pay, Due.</small><input name="paymentMethods" maxlength="400" value="${esc((data.paymentMethods || []).join(", "))}" required></label><label class="setting-check"><input type="checkbox" name="requireCustomer" ${data.requireCustomer ? "checked" : ""}> Require a customer name on every bill</label><label class="setting-check"><input type="checkbox" name="allowDiscounts" ${data.allowDiscounts ? "checked" : ""}> Allow bill discounts</label>`, async form => {
     const previousLanguage = data.language, previousDigits = data.banglaDigits;
     data = await api("/api/settings", { method: "PUT", body: JSON.stringify({ shopName: form.get("shopName").trim(), workspace: form.get("workspace").trim(), contactNumber: form.get("contactNumber").trim(), website: form.get("website").trim(), email: form.get("email").trim(), facebookPage: form.get("facebookPage").trim(), whatsappNumber: form.get("whatsappNumber").trim(), contactAddress: form.get("contactAddress").trim(), shopType: form.get("shopType") || data.shopType, currencyCode: form.get("currencyCode"), locale: form.get("locale"), taxMode: form.get("taxMode"), taxRate: Number(form.get("taxRate")), paymentMethods: String(form.get("paymentMethods")).split(",").map(value => value.trim()).filter(Boolean), requireCustomer: form.get("requireCustomer") === "on", allowDiscounts: form.get("allowDiscounts") === "on", language: form.get("language"), banglaDigits: form.get("banglaDigits") === "on" }) });
     if (data.language !== previousLanguage || data.banglaDigits !== previousDigits) { location.reload(); return; }
@@ -2034,7 +2353,29 @@ $("#profile-button").onclick = () => {
   };
 };
 
+function openMedicineProductForm(product = null) {
+  const editing = Boolean(product), item = product || { unit: "tablet", min: 5, price: "", cost: 0, category: "Medicines" };
+  const categories = [...new Set([item.category || "Medicines", ...(data.categories || []).map(category => category.name)])];
+  const existingNames = [...new Map(data.products.map(medicine => [medicine.name.toLocaleLowerCase(), medicine])).values()];
+  openModal(editing ? "Edit medicine & units" : "Add medicine", `<label>Medicine name<input name="name" list="medicine-name-suggestions" maxlength="200" autocomplete="off" required value="${esc(item.name || "")}" placeholder="e.g. Napa 500 mg"><datalist id="medicine-name-suggestions">${existingNames.map(medicine => `<option value="${esc(medicine.name)}"></option>`).join("")}</datalist></label><div class="form-row"><label>Category<select name="category">${categories.map(name => `<option ${name === item.category ? "selected" : ""}>${esc(name)}</option>`).join("")}</select></label><label>SKU / item code<input name="sku" maxlength="100" value="${esc(item.sku || "")}" placeholder="Optional"></label></div><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" value="${esc(item.barcode || "")}" placeholder="Scan or enter barcode"></label>${pharmacyFormFields(item, !editing)}<div class="form-row"><label>Internal stock unit<input name="unit" maxlength="30" value="${esc(item.unit || "tablet")}" placeholder="tablet, capsule, ml, gram" required><small class="form-hint">Smallest practical unit used for stock, cost, batch deduction, and returns.</small></label><label>Selling price per <span class="base-unit-label">${esc(item.unit || "tablet")}</span> (${esc(currencySymbol())})<input name="price" type="number" min="0" step="any" value="${esc(item.price)}" required></label></div>${editing ? `<div class="form-row"><label>Purchase cost per <span class="base-unit-label">${esc(item.unit)}</span> (${esc(currencySymbol())})<input name="cost" type="number" min="0" step="any" value="${Number(item.cost)}" required></label><label>Low-stock alert at (<span class="base-unit-label">${esc(item.unit)}</span>)<input name="min" type="number" min="0" step="any" value="${Number(item.min)}" required></label></div><p class="form-hint">Current stock: <b>${Number(item.qty)} ${esc(item.unit)}</b>. Quantity remains batch-controlled; receive stock from Batches &amp; expiry or Supplier purchase.</p>` : `<label>Low-stock alert at (<span class="base-unit-label">${esc(item.unit)}</span>)<input name="min" type="number" min="0" step="any" value="${Number(item.min)}" required></label>`}${pharmacyUnitFormFields(item, !editing)}`, async form => {
+    const config = readPharmacyUnitForm(form);
+    if (!config.baseUnit) throw new Error("Enter the internal stock unit, such as tablet, capsule, ml, or gram.");
+    const payload = {
+      name: String(form.get("name") || "").trim(), category: form.get("category"), sku: String(form.get("sku") || "").trim(), barcode: String(form.get("barcode") || "").trim(),
+      genericName: form.get("genericName") || "", strength: form.get("strength") || "", dosageForm: form.get("dosageForm") || "", manufacturer: form.get("manufacturer") || "",
+      unit: config.baseUnit, price: Number(form.get("price")), min: Number(form.get("min")), sale_units: config.units, allow_loose: config.allowLoose
+    };
+    if (editing) Object.assign(payload, { cost: Number(form.get("cost")), qty: Number(item.qty) });
+    else Object.assign(payload, { cost: config.cost, qty: config.qty, batchNumber: String(form.get("batchNumber") || "").trim(), expiryDate: form.get("expiryDate") || "", purchaseUnit: config.purchaseUnit, purchaseQuantity: config.purchaseQuantity, purchasePrice: config.purchasePrice });
+    const result = await api(editing ? `/api/products/${item.id}` : "/api/products", { method: editing ? "PATCH" : "POST", body: JSON.stringify(payload) });
+    data = result; render(); toast(editing ? "Medicine and selling units updated" : `Medicine added: ${+config.qty.toFixed(6)} ${config.baseUnit} in opening stock`);
+  });
+  attachPharmacyFormMedexEvents();
+  attachPharmacyUnitCalculator(!editing);
+}
+
 $("#add-product").onclick = () => {
+  if (data.shopType === "pharmacy") return openMedicineProductForm();
   const categories = data.categories || [];
   const existingNames = [...new Map(data.products.map(item => [item.name.toLocaleLowerCase(), item])).values()];
   const clothing = clothingFormFields();
@@ -2051,8 +2392,9 @@ $("#add-product").onclick = () => {
 };
 $("#manage-categories").onclick = () => {
   const categories = data.categories || [];
+  const categoryExample = data.shopType === "restaurant" ? "Rice & Biryani" : data.shopType === "pharmacy" ? "Medicines" : data.shopType === "grocery" ? "Produce" : "Hand tools";
   const rows = categories.map(category => `<div class="category-row"><b>${esc(category.name)}</b>${category.name.toLowerCase() === "other" ? `<small>Fallback category</small>` : `<button class="user-action" data-category-action="edit" data-id="${category.id}" data-name="${esc(category.name)}">Edit</button><button class="user-action danger" data-category-action="delete" data-id="${category.id}" data-name="${esc(category.name)}">Delete</button>`}</div>`).join("");
-  openModal("Manage product categories", `<div class="category-list">${rows}</div><label>Add category<input name="name" maxlength="80" placeholder="e.g. Hand tools"></label><p class="form-hint">Deleting a category moves its products to Other.</p>`, async form => {
+  openModal("Manage product categories", `<div class="category-list">${rows}</div><label>Add category<input name="name" maxlength="80" placeholder="e.g. ${esc(categoryExample)}"></label><p class="form-hint">Only categories for this shop type are shown. Deleting a category moves its products to Other.</p>`, async form => {
     data = await api("/api/categories", { method: "POST", body: JSON.stringify({ name: form.get("name").trim() }) });
     render();
     toast("Category added");
@@ -2199,11 +2541,9 @@ $("#download-report").onclick = () => {
   const expenseTotal = expenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const rows = [["SHOP REPORT", range.start + " to " + range.end], [], ["SUMMARY", "AMOUNT"]];
   if (permissions.sales) {
-    const gross = sales.reduce((sum, item) => sum + Number(item.total || 0), 0);
-    const profit = sales.reduce((sum, item) => sum + Number(item.total || 0) - Number(item.cost || 0), 0);
-    const tax = sales.reduce((sum, item) => sum + Number(item.tax_amount || 0), 0);
-    rows.push(["Gross sales (excluding tax)", gross], ["Tax collected", tax], ["Gross profit", profit]);
-    if (permissions.expenses) rows.push(["Expenses", expenseTotal], ["Net profit", profit - expenseTotal]);
+    const summary = summarizeSales(sales);
+    rows.push(["Gross sales (excluding tax)", summary.grossSales], ["Returned value (excluding tax)", summary.returnedValue], ["Net sales after returns (excluding tax)", summary.netSales], ["Tax collected after returns", summary.netTax], ["Profit after returns", summary.profitAfterReturns]);
+    if (permissions.expenses) rows.push(["Expenses", expenseTotal], ["Net profit", summary.profitAfterReturns - expenseTotal]);
     rows.push([], ["SALES", "Date", "Product", "Quantity", "Unit", "Payment", "Sales (ex tax)", "Tax", "Cost", "Profit"]);
     for (const item of sales) rows.push(["", item.date, item.product, item.qty, item.unit || "piece", item.payment, item.total, item.tax_amount || 0, item.cost, Number(item.total || 0) - Number(item.cost || 0)]);
   }
@@ -2218,7 +2558,6 @@ $("#download-report").onclick = () => {
     return '"' + cell.split('"').join('""') + '"';
   }).join(",")).join("\r\n");
   downloadFile(`shop-report-${range.start}-to-${range.end}.csv`, csv);
-  toast("Excel-compatible report downloaded");
 };
 $("#print-report").onclick = () => {
   const permissions = data.permissions || {}, range = reportRange();
@@ -2228,9 +2567,12 @@ $("#print-report").onclick = () => {
   const rows = [];
   if (permissions.sales) for (const item of sales) rows.push(`<tr><td>${esc(item.date)}</td><td>${esc(item.product)}</td><td>${item.qty} ${esc(item.unit || "piece")}</td><td>${esc(item.payment)}</td><td>${money(item.total)}</td><td>${money(item.tax_amount || 0)}</td><td>${money(Number(item.total || 0) - Number(item.cost || 0))}</td></tr>`);
   if (permissions.expenses) for (const item of expenses) rows.push(`<tr><td>${esc(item.date)}</td><td>${esc(item.category)}${item.note ? ` · ${esc(item.note)}` : ""}</td><td></td><td>Expense</td><td>${money(item.amount)}</td><td></td><td></td></tr>`);
-  const gross = sales.reduce((sum, item) => sum + Number(item.total || 0), 0), tax = sales.reduce((sum, item) => sum + Number(item.tax_amount || 0), 0);
-  const grossProfit = sales.reduce((sum, item) => sum + Number(item.total || 0) - Number(item.cost || 0), 0), spent = expenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  const summary = [["Sales (ex tax)", gross], ["Tax collected", tax], ["Gross profit", grossProfit], ["Expenses", spent], ["Net profit", grossProfit - spent]].filter(([label]) => label !== "Sales (ex tax)" || permissions.sales).filter(([label]) => label !== "Expenses" || permissions.expenses).map(([label, amount]) => `<tr><th>${label}</th><td>${money(amount)}</td></tr>`).join("");
+  const salesSummary = summarizeSales(sales), spent = expenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const summaryRows = [];
+  if (permissions.sales) summaryRows.push(["Gross sales (ex tax)", salesSummary.grossSales], ["Returned value (ex tax)", salesSummary.returnedValue], ["Net sales after returns (ex tax)", salesSummary.netSales], ["Tax collected after returns", salesSummary.netTax], ["Profit after returns", salesSummary.profitAfterReturns]);
+  if (permissions.expenses) summaryRows.push(["Expenses", spent]);
+  if (permissions.sales && permissions.expenses) summaryRows.push(["Net profit", salesSummary.profitAfterReturns - spent]);
+  const summary = summaryRows.map(([label, amount]) => `<tr><th>${label}</th><td>${money(amount)}</td></tr>`).join("");
   printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Shop report</title><style>@page{margin:12mm}body{font:12px system-ui,"Segoe UI",sans-serif;color:#17212b}h1{margin:0}p{color:#66727d}table{border-collapse:collapse;width:100%;margin:14px 0}th,td{border:1px solid #d2d8dc;padding:6px;text-align:left}thead th{background:#eef2f3}.summary{width:auto;min-width:50%}.summary td{text-align:right}.summary th{background:#f5f6f7}</style></head><body><h1>${esc(data.shopName)}</h1><p>${esc(data.workspace)} · Report from ${esc(range.start)} to ${esc(range.end)}</p><table class="summary"><tbody>${summary}</tbody></table><table><thead><tr><th>Date</th><th>Item / category</th><th>Quantity</th><th>Payment</th><th>Amount</th><th>Tax</th><th>Profit</th></tr></thead><tbody>${rows.join("") || `<tr><td colspan="7">No records in this period.</td></tr>`}</tbody></table></body></html>`);
 };
 $("#download-stock-watch").onclick = () => {
@@ -2248,7 +2590,6 @@ $("#download-stock-watch").onclick = () => {
     return '"' + cell.split('"').join('""') + '"';
   }).join(",")).join("\r\n");
   downloadFile(`stock-watch-${dateKey(new Date())}.csv`, csv);
-  toast("Stock watch downloaded");
 };
 // ---- Team access: owner, administrators and staff, each with powers that can be given or taken away ----
 const CAP_LABELS = [["inventory", "View and add inventory"], ["sales", "View and record sales and bills"], ["expenses", "View and add expenses"], ["food_packages", "Create and manage custom food packages (Food & restaurant)"], ["online_orders", "Manage online orders"], ["delete_online_orders", "Delete online orders"], ["server_load", "View server load in the top bar"],
@@ -2355,10 +2696,11 @@ $("#products-table").onclick = event => {
   if (button.dataset.action !== "rename-product" || !canEditItems) return;
   const product = data.products.find(item => String(item.id) === String(id));
   if (!product) return toast("Inventory item not found. Refresh and try again.");
+  if (data.shopType === "pharmacy") return openMedicineProductForm(product);
   const oldCategory = product.category || "Other";
   const clothing = clothingFormFields(product);
   const pharmacy = pharmacyFormFields(product, false);
-  openModal("Edit inventory item", `<label>Item name<input name="name" maxlength="200" value="${esc(product.name)}" required></label><div class="form-row"><label>SKU / item code<input name="sku" maxlength="100" value="${esc(product.sku || "")}"></label><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" value="${esc(product.barcode || "")}" placeholder="Scan or enter barcode"></label></div>${clothing}${pharmacy}<div class="form-row"><label>Unit of measure<input name="unit" maxlength="30" value="${esc(product.unit || "piece")}" required></label><label>Category<select name="category">${(data.categories || []).map(item => `<option ${item.name === oldCategory ? "selected" : ""}>${esc(item.name)}</option>`).join("")}</select></label></div><div class="form-row"><label>Selling price per unit (${esc(currencySymbol())})<input name="price" type="number" min="0" step="0.01" value="${Number(product.price)}" required></label><label>Purchase cost per unit (${esc(currencySymbol())})<input name="cost" type="number" min="0" step="0.01" value="${Number(product.cost)}" required></label></div><div class="form-row"><label>Stock quantity (${esc(product.unit || "piece")})<input name="qty" type="number" min="0" step="1" value="${Number(product.qty)}" required></label><label>Low-stock alert at<input name="min" type="number" min="0" step="1" value="${Number(product.min)}" required></label></div><p class="form-hint">Changing stock here sets the new stock total. Past sales keep their recorded cost and unit.</p>`, async form => {
+  openModal("Edit inventory item", `<label>Item name<input name="name" maxlength="200" value="${esc(product.name)}" required></label><div class="form-row"><label>SKU / item code<input name="sku" maxlength="100" value="${esc(product.sku || "")}"></label><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" value="${esc(product.barcode || "")}" placeholder="Scan or enter barcode"></label></div>${clothing}${pharmacy}<div class="form-row"><label>Unit of measure<input name="unit" maxlength="30" value="${esc(product.unit || "piece")}" required></label><label>Category<select name="category">${[...new Set([oldCategory, ...(data.categories || []).map(item => item.name)])].map(name => `<option ${name === oldCategory ? "selected" : ""}>${esc(name)}</option>`).join("")}</select></label></div><div class="form-row"><label>Selling price per unit (${esc(currencySymbol())})<input name="price" type="number" min="0" step="0.01" value="${Number(product.price)}" required></label><label>Purchase cost per unit (${esc(currencySymbol())})<input name="cost" type="number" min="0" step="0.01" value="${Number(product.cost)}" required></label></div><div class="form-row"><label>Stock quantity (${esc(product.unit || "piece")})<input name="qty" type="number" min="0" step="1" value="${Number(product.qty)}" required></label><label>Low-stock alert at<input name="min" type="number" min="0" step="1" value="${Number(product.min)}" required></label></div><p class="form-hint">Changing stock here sets the new stock total. Past sales keep their recorded cost and unit.</p>`, async form => {
     const details = Object.fromEntries(["name","sku","barcode","unit","category"].map(key => [key, (form.get(key) || "").trim()]));
     if (data.shopType !== "pharmacy") for (const key of ["brand", "color", "size", "material"]) if (form.get(key) !== null) details[key] = (form.get(key) || "").trim();
     if (data.shopType === "pharmacy") Object.assign(details,{genericName:form.get("genericName")||"",strength:form.get("strength")||"",dosageForm:form.get("dosageForm")||"",manufacturer:form.get("manufacturer")||""});
@@ -2451,13 +2793,12 @@ $("#download-inventory-template").onclick = () => {
   const rows = [config.headers, ...data.products.map(item => config.toRow(item))];
   const csv = "\uFEFF" + rows.map(row => row.map(csvCell).join(",")).join("\r\n");
   downloadFile(config.filename, csv);
-  toast(`Excel template downloaded (${config.filename})`);
 };
 $("#bulk-inventory-file").onchange = async event => {
   const file = event.target.files?.[0];
   if (!file) return;
   try {
-    if (file.size > 400000) throw new Error("Please keep the CSV file under 400 KB.");
+    if (file.size > BULK_INVENTORY_MAX_FILE_BYTES) throw new Error("Please keep the inventory CSV file under 25 MB.");
     const csvRows = parseCsv((await file.text()).replace(/^\uFEFF/, ""));
     const rawHeaders = csvRows.shift();
     if (!rawHeaders || !rawHeaders.length) throw new Error("The CSV file is empty.");
@@ -2485,7 +2826,7 @@ $("#bulk-inventory-file").onchange = async event => {
       const qty = getCol(values, "quantity") ?? "";
       const min = getCol(values, "low stock alert") ?? "";
       const unit = getCol(values, "unit") ?? "";
-      const category = getCol(values, "category") ?? "";
+      const category = getCol(values, "category", "product category") ?? "";
       const barcode = getCol(values, "barcode");
       const brand = getCol(values, "brand", "kitchen section");
       const color = getCol(values, "color", "spice / prep");
@@ -2507,16 +2848,27 @@ $("#bulk-inventory-file").onchange = async event => {
       };
     });
     if (!rows.length) throw new Error("The template has no inventory rows to upload.");
-    if (rows.length > 500) throw new Error("Upload no more than 500 rows at a time.");
+    if (rows.length > BULK_INVENTORY_MAX_ROWS) throw new Error("Upload no more than 25,000 rows at a time.");
     const updates = rows.filter(row => row.id).length;
     const additions = rows.length - updates;
-    const summary = data.shopType === "pharmacy"
-      ? `${updates} existing medicine(s) will be updated and ${additions} new medicine(s) added. New stock requires a Batch Number and Expiry Date. Missing categories will be created automatically. Continue?`
-      : `${updates} existing item(s) will be updated and ${additions} new item(s) added. Quantity replaces the current stock count. Any new categories in the file will be created automatically. Continue?`;
+    let legacyStockCount = 0;
+    let summary;
+    if (data.shopType === "pharmacy") {
+      const newRows = rows.filter(row => !row.id);
+      const hasBlankDefaults = newRows.some(row => ["price", "cost", "qty", "min"].some(key => String(row[key] ?? "").trim() === ""));
+      legacyStockCount = newRows.filter(row => Number(row.qty || 0) > 0 && !String(row.expiryDate ?? "").trim()).length;
+      summary = `${updates} existing medicine(s) will be updated and ${additions} new medicine(s) added. Missing categories will be created automatically.`;
+      if (hasBlankDefaults) summary += " Blank Selling Price, Cost, and Quantity on new medicines become 0; blank Low Stock Alert becomes 5.";
+      if (legacyStockCount) summary += ` ${legacyStockCount} opening-stock row(s) have no expiry date and will be unavailable for sale until verified in Batches & expiry. Missing batch numbers will be generated as LEGACY batch numbers.`;
+      summary += " Continue?";
+    } else {
+      summary = `${updates} existing item(s) will be updated and ${additions} new item(s) added. Quantity replaces the current stock count. Any new categories in the file will be created automatically. Continue?`;
+    }
     if (!confirm(summary)) return;
     data = await api("/api/inventory/bulk", { method: "POST", body: JSON.stringify({ rows }) });
+    inventoryPage = 1;
+    toast(`Upload complete: ${additions} added, ${updates} updated${legacyStockCount ? `; ${legacyStockCount} legacy stock row(s) need expiry verification before sale` : ""}`, legacyStockCount ? 7000 : 4000);
     render();
-    toast(`Inventory updated: ${updates} updated, ${additions} added`);
   } catch (error) {
     toast(error.message);
   } finally {
@@ -2539,6 +2891,48 @@ setInterval(async () => {
 setInterval(refreshServerLoad, 30000);
 // ---- Billing: several items for one customer, saved as one printable bill ----
 const billNo = id => "B-" + String(id).padStart(8, "0");
+function groupLocalSales(sales) {
+  const groups = new Map();
+  for (const sale of sales || []) {
+    if (Number(sale.online_order_linked)) continue;
+    const billId = Number(sale.bill_id || 0), key = billId ? `bill:${billId}` : `sale:${sale.id}`;
+    if (!groups.has(key)) groups.set(key, { key, billId, date: sale.date, lines: [] });
+    groups.get(key).lines.push(sale);
+  }
+  return [...groups.values()].map(group => ({ ...group, lines: group.lines.slice().sort((a, b) => Number(a.id) - Number(b.id)) }));
+}
+function localSaleGroupTotals(group) {
+  const first = group.lines[0] || {};
+  if (group.billId && first.bill_total !== null && first.bill_total !== undefined) {
+    const gross = Number(first.bill_total || 0), returned = Number(first.bill_returned || 0), net = Math.max(0, gross - returned), paid = Number(first.bill_paid || 0);
+    return { gross, returned, net, paid, due: Math.max(0, net - paid), tax: 0 };
+  }
+  const summary = summarizeSales(group.lines), directDue = /due|unpaid/i.test(first.payment || "") ? summary.netSales : 0;
+  return { gross: summary.grossSales, returned: summary.returnedValue, net: summary.netSales, paid: Math.max(0, summary.netSales - directDue), due: directDue, tax: summary.netTax };
+}
+function localSaleGroupHtml(group, canManageSalesRecords, canReturnSales) {
+  const first = group.lines[0] || {}, totals = localSaleGroupTotals(group), isBill = group.billId > 0;
+  const items = group.lines.map(item => {
+    const originalQty = Number(item.original_qty ?? item.qty ?? 0), gross = Number(item.original_total ?? item.total ?? 0), net = Number(item.total || 0);
+    const returnedQty = Number(item.returned_qty || 0), returnedValue = Math.max(0, gross - net), unit = item.unit || "piece";
+    const isRepair = Number(item.service_job_id) > 0;
+    const returnButton = !isRepair && canReturnSales && item.product_id && Number(item.original_remaining_qty) > 0
+      ? `<button type="button" class="user-action" data-sale-action="return" data-id="${item.id}">Return</button>` : "";
+    return `<div class="local-sale-item"><div><b>${esc(item.product)}</b><small>${localizeDigits(originalQty)} ${esc(unit)} × ${money(originalQty > 0 ? gross / originalQty : 0)} · ${money(gross)}</small>${returnedQty > 0 ? `<small class="local-sale-return"><span>Returned</span> ${localizeDigits(returnedQty)} ${esc(unit)} · ${money(returnedValue)} · <span>Net</span> ${localizeDigits(item.qty)} ${esc(unit)} / ${money(net)}</small>` : ""}</div>${returnButton}</div>`;
+  }).join("");
+  const actions = [];
+  if (isBill) {
+    actions.push(`<button type="button" class="user-action" data-print-bill="${group.billId}">Print</button>`);
+    if (totals.due > 0) actions.push(`<button type="button" class="user-action" data-local-bill-action="receive" data-id="${group.billId}">Receive</button>`);
+    if (canManageSalesRecords && totals.returned <= 0) actions.push(`<button type="button" class="user-action" data-local-bill-action="edit" data-id="${group.billId}">Edit</button><button type="button" class="user-action danger" data-local-bill-action="delete" data-id="${group.billId}">Delete</button>`);
+  } else if (canManageSalesRecords && !Number(first.service_job_id)) {
+    actions.push(`<button type="button" class="user-action" data-sale-action="edit" data-id="${first.id}">Edit</button><button type="button" class="user-action danger" data-sale-action="delete" data-id="${first.id}">Delete</button>`);
+  }
+  const reference = isBill ? billNo(group.billId) : `${t("Direct sale")} #${first.id}`;
+  const customer = first.bill_customer || "—";
+  const payment = `<b>${esc(first.payment || "—")}</b><small class="form-hint"><span>Paid</span> ${money(totals.paid)}</small>${totals.due > 0 ? `<small class="form-hint local-sale-due"><span>Due</span> ${money(totals.due)}</small>` : ""}`;
+  return `<tr><td class="product-cell"><b>${esc(reference)}</b></td><td>${dateLabel(group.date)}</td><td>${esc(customer)}${first.bill_phone ? `<small class="form-hint">${esc(first.bill_phone)}</small>` : ""}</td><td class="local-sale-items">${items || "—"}</td><td>${payment}</td><td class="local-sale-total"><b>${money(totals.net)}</b>${totals.returned > 0 ? `<small class="form-hint local-sale-return"><span>Returned</span> ${money(totals.returned)}</small>` : ""}${!isBill && totals.tax > 0 ? `<small class="form-hint">+ ${money(totals.tax)} tax</small>` : ""}</td><td>${actions.join("") || "—"}</td></tr>`;
+}
 // Weighed and measured items (kg, litre, metre...) can be sold in fractions; kg can be typed in gm, litre in ml, metre in cm.
 const FRACTIONAL = /^(kgs?|kilos?|kilograms?|gm?s?|grams?|l|ltrs?|lit(re|er)s?|ml|m|meters?|metres?|ft|feet|foot|yards?|yd|inch(es)?|cm|mm)$/i;
 const isFractional = unit => FRACTIONAL.test(String(unit || "").trim());
@@ -2550,8 +2944,22 @@ const smallUnit = unit => {
   return null;
 };
 const fmtQty = (qty, unit) => { const small = smallUnit(unit); return small && qty < 1 ? `${+(qty * small.factor).toFixed(1)} ${small.name}` : `${qty} ${unit}`; };
-// Each bill line can be typed in its own unit: the item's unit, a smaller one (kg to gm), or a pack such as a coil.
+function medicinePurchaseUnits(product) {
+  return [{ name: product.unit || "piece", factor: 1 }, ...(product.medicine_units || []).map(unit => ({ name: unit.name, factor: Number(unit.factor) }))];
+}
+function pharmacyLineFields(product) {
+  const medicineUnits = Array.isArray(product.medicine_units) ? product.medicine_units : [];
+  const unitPrices = { base: Number(product.price || 0) };
+  for (const unit of medicineUnits) unitPrices[`medicine:${String(unit.name).toLocaleLowerCase()}`] = Number(unit.price || 0);
+  return { medicineUnits, allowLoose: product.allow_loose !== false, unitPrices };
+}
+// Each bill line can be typed in its own unit: the item's unit, a smaller one (kg to gm), or a configured Pharmacy package.
 const lineUnits = line => {
+  if (data.shopType === "pharmacy") {
+    const list = line.allowLoose === false ? [] : [{ key: "base", name: line.unit, f: 1 }];
+    for (const unit of line.medicineUnits || []) list.push({ key: `medicine:${String(unit.name).toLocaleLowerCase()}`, name: unit.name, f: Number(unit.factor) });
+    return list.length ? list : [{ key: "base", name: line.unit, f: 1 }];
+  }
   const custom = line.packSize > 0, small = custom ? null : smallUnit(line.unit);
   const list = [{ key: "base", name: line.unit, f: 1 }];
   if (custom) list.push({ key: "custom", name: line.packName || "part", f: line.packSize });
@@ -2559,19 +2967,22 @@ const lineUnits = line => {
   return list;
 };
 const unitOf = line => lineUnits(line).find(u => u.key === line.mode) || lineUnits(line)[0];
+const pharmacyModeForUnit = (line, name) => lineUnits(line).find(unit => String(unit.name).toLocaleLowerCase() === String(name || "").toLocaleLowerCase())?.key || "base";
 const qtyCell = (line, i) => {
-  const units = lineUnits(line), u = unitOf(line), packed = line.packSize > 0, frac = isFractional(line.unit) || packed;
-  const step = u.key === "small" ? 1 : packed ? "any" : frac ? "0.001" : 1;
-  const box = units.length > 1 ? `<select class="bill-input qty-unit" data-i="${i}" data-f="mode">${units.map(x => `<option value="${x.key}" ${x.key === u.key ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : esc(line.unit);
-  const min = u.key === "small" || u.key === "base" && !frac ? 1 : 0.0001;
-  return `<input class="bill-input qty-input" data-i="${i}" data-f="qty" type="number" min="${min}" max="${+(line.max * u.f).toFixed(3)}" step="${step}" value="${+(line.qty * u.f).toFixed(3)}" required> ${box}`;
+  const units = lineUnits(line), u = unitOf(line), pharmacy = data.shopType === "pharmacy", packed = !pharmacy && line.packSize > 0, frac = isFractional(line.unit) || packed;
+  const step = pharmacy ? (isFractional(line.unit) ? "any" : 1) : u.key === "small" ? 1 : packed ? "any" : frac ? "0.001" : 1;
+  const box = units.length > 1 ? `<select class="bill-input qty-unit" data-i="${i}" data-f="mode" aria-label="Selling unit">${units.map(x => `<option value="${esc(x.key)}" ${x.key === u.key ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : esc(line.unit);
+  const min = pharmacy ? (isFractional(line.unit) ? 0.000001 : 1) : u.key === "small" || u.key === "base" && !frac ? 1 : 0.0001;
+  const shownQty = pharmacy ? line.qty / u.f : line.qty * u.f, maxQty = pharmacy ? line.max / u.f : line.max * u.f;
+  return `<input class="bill-input qty-input" data-i="${i}" data-f="qty" type="number" min="${min}" max="${+maxQty.toFixed(6)}" step="${step}" value="${+shownQty.toFixed(6)}" required> ${box}`;
 };
 // Price is kept per stock unit (per coil); for a cut length it is shown and typed per metre/foot.
 const priceCell = (line, i) => {
-  const u = unitOf(line), custom = u.key === "custom", shown = custom ? line.price / u.f : line.price;
-  return `<input class="bill-input" data-i="${i}" data-f="price" type="number" min="0" step="any" value="${+shown.toFixed(4)}" required>${custom ? `<br><small>per ${esc(u.name)}</small>` : ""}`;
+  const u = unitOf(line), pharmacy = data.shopType === "pharmacy", custom = !pharmacy && u.key === "custom", shown = pharmacy ? line.price * u.f : custom ? line.price / u.f : line.price;
+  return `<input class="bill-input" data-i="${i}" data-f="price" type="number" min="0" step="any" value="${+shown.toFixed(4)}" required>${pharmacy || custom ? `<br><small>per ${esc(u.name)}</small>` : ""}`;
 };
 const lineDetail = l => {
+  if (l.saleUnit && Number(l.saleQty) > 0) return `${+Number(l.saleQty).toFixed(6)} ${l.saleUnit} × ${money(Number(l.salePrice ?? (l.price * (l.unitFactor || 1))))}/${l.saleUnit} = ${fmtQty(l.qty, l.unit)}`;
   if (l.packSize > 0) {
     const parts = +(l.qty * l.packSize).toFixed(2), name = l.packName || "part";
     return `${l.qty < 1 ? "" : `${+l.qty.toFixed(3)} ${l.unit} = `}${parts} ${name} × ${money(l.price / l.packSize)}/${name}`;
@@ -2582,12 +2993,33 @@ const baseRender = render;
 render = function () {
   baseRender();
   $("#new-bill").classList.toggle("hidden", !data.permissions?.sales);
-  [...$("#sales-table").rows].forEach((row, index) => {
-    const sale = data.sales[index];
-    if (sale?.bill_id && row.cells[1]) row.cells[1].insertAdjacentHTML("beforeend", ` <button type="button" class="user-action" data-print-bill="${sale.bill_id}">${billNo(sale.bill_id)}</button>`);
-  });
 };
+function restaurantBillHtml(bill) {
+  const subtotal = bill.lines.reduce((sum, line) => sum + line.qty * line.price, 0);
+  const when = new Date(bill.created_at.replace(" ", "T") + "Z").toLocaleString(data.locale || "en-BD");
+  const rows = bill.lines.map(line => {
+    const returnedQty = Number(line.returnedQty || 0), returnedValue = Number(line.returnedValue || 0);
+    const isPackage = line.unit === "package" || line.category === "Combo Meals";
+    const name = String(line.name || "").replace(/\s+\((?:Portion|Type|Prep|Kitchen):[\s\S]*\)$/, "");
+    const details = [];
+    if (line.size) details.push(`Portion: ${line.size}`);
+    if (isPackage && line.brand) details.push(`Includes: ${line.brand}`);
+    if (!isPackage && line.material) details.push(`Type: ${line.material}`);
+    if (!isPackage && line.color) details.push(`Prep: ${line.color}`);
+    if (isPackage && line.color && line.color !== "Custom Package") details.push(`Note: ${line.color}`);
+    const returnNote = returnedQty > 0 ? `<br><small class="returned">Returned: ${esc(fmtQty(returnedQty, line.unit || "piece"))} · ${money(returnedValue)}</small>` : "";
+    return `<tr><td class="item"><b>${esc(name)}</b>${details.length ? `<br><small>${details.map(detail => `<span>${esc(detail)}</span>`).join(" · ")}</small>` : ""}${returnNote}</td><td class="qty">${esc(fmtQty(line.qty, line.unit || "piece"))}</td><td class="r">${money(line.price)}</td><td class="r">${money(line.qty * line.price)}</td></tr>`;
+  }).join("");
+  const paymentText = bill.payments ? (bill.payments.map(payment => `${payment.method} ${money(payment.amount)}`).join(", ") || "None yet") : bill.payment;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${billNo(bill.id)} · Restaurant receipt</title><style>
+@page{margin:4mm}*{box-sizing:border-box}body{font:12px/1.3 system-ui,"Segoe UI",sans-serif;color:#000;width:72mm;max-width:100%;margin:0 auto}h1{font-size:18px;line-height:1.15;margin:0;text-align:center}h2{font-size:11px;letter-spacing:1.2px;margin:5px 0 7px;text-align:center}.c{text-align:center}.meta{margin:3px 0 8px}.meta p{margin:2px 0}small{color:#333}table{width:100%;border-collapse:collapse;table-layout:fixed}th,td{padding:4px 3px;vertical-align:top}th{font-size:10px;text-transform:uppercase;border-top:1px solid #000;border-bottom:1px solid #000}td{border-bottom:1px dotted #777}.item{width:44%;overflow-wrap:anywhere}.qty{width:19%;text-align:center;white-space:nowrap}.r{text-align:right;white-space:nowrap}.line td{border-top:1px dashed #000;border-bottom:0}.total td{border-top:2px solid #000;border-bottom:0;font-size:15px;font-weight:700;padding-top:6px}.returned{color:#a33;font-weight:700}.payment{margin:8px 0 4px}.thanks{text-align:center;font-weight:700;margin:9px 0 0}</style></head><body>
+<h1>${esc(data.shopName)}</h1><h2>RESTAURANT RECEIPT</h2><p class="c">${esc(data.workspace)}${data.contactNumber ? `<br>Phone: ${esc(data.contactNumber)}` : ""}</p>
+<div class="meta"><p>Bill no: <b>${billNo(bill.id)}</b><br>${esc(when)}${bill.customer ? `<br>Customer: ${esc(bill.customer)}` : ""}${bill.phone ? `<br>Phone: ${esc(bill.phone)}` : ""}</p></div>
+<table><thead><tr><th class="item">Item</th><th class="qty">Qty</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead><tbody>${rows}<tr class="line"><td colspan="3">Subtotal</td><td class="r">${money(subtotal)}</td></tr>${Number(bill.delivery_charge || 0) > 0 ? `<tr><td colspan="3">Delivery</td><td class="r">${money(bill.delivery_charge)}</td></tr>` : ""}${bill.discount > 0 ? `<tr><td colspan="3">Discount</td><td class="r">- ${money(bill.discount)}</td></tr>` : ""}${Number(bill.tax_amount) > 0 ? `<tr><td colspan="3">Tax ${bill.tax_mode === "inclusive" ? "included" : ""} (${Number(bill.tax_rate)}%)</td><td class="r">${money(bill.tax_amount)}</td></tr>` : ""}${Number(bill.returned || 0) > 0 ? `<tr><td colspan="3">Returns</td><td class="r">- ${money(bill.returned)}</td></tr>` : ""}<tr class="total"><td colspan="3">${Number(bill.returned || 0) > 0 ? "Final total" : "Total"}</td><td class="r">${money(bill.netTotal ?? bill.total)}</td></tr>${bill.payments ? `<tr class="line"><td colspan="3">Paid</td><td class="r">${money(bill.paid)}</td></tr>${bill.due > 0 ? `<tr class="total"><td colspan="3">DUE</td><td class="r">${money(bill.due)}</td></tr>` : Number(bill.customerCredit) > 0 ? `<tr class="total"><td colspan="3">REFUND DUE</td><td class="r">${money(bill.customerCredit)}</td></tr>` : ""}` : ""}</tbody></table>
+<p class="payment">Payment: ${esc(paymentText)}<br>Served by: ${esc(bill.cashier)}</p><p class="thanks">Thank you for dining with us!</p></body></html>`;
+}
 function billHtml(bill) {
+  if (data.shopType === "restaurant") return restaurantBillHtml(bill);
   const subtotal = bill.lines.reduce((sum, line) => sum + line.qty * line.price, 0);
   const when = new Date(bill.created_at.replace(" ", "T") + "Z").toLocaleString(data.locale || "en-BD");
   const rows = bill.lines.map(line => {
@@ -2613,6 +3045,24 @@ $("#sales-table").addEventListener("click", async event => {
   if (!button) return;
   try { printBill(await api("/api/bills/" + button.dataset.printBill)); } catch (error) { toast(error.message); }
 });
+$("#sales-table").addEventListener("click", async event => {
+  const button = event.target.closest("[data-local-bill-action]");
+  if (!button) return;
+  const id = Number(button.dataset.id), action = button.dataset.localBillAction;
+  let bill;
+  try { bill = await api(`/api/bills/${id}`); } catch (error) { return toast(error.message); }
+  if (action === "edit") return openBillEditor(bill);
+  if (action === "delete") {
+    if (!confirm(`Delete bill ${billNo(id)} permanently? Its items go back into stock, and its sales and payment records are removed.`)) return;
+    try { data = await api(`/api/bills/${id}`, { method: "DELETE" }); render(); toast(`${billNo(id)} deleted`); } catch (error) { toast(error.message); }
+    return;
+  }
+  if (action !== "receive" || !(bill.due > 0)) return;
+  openModal(`Receive payment · ${billNo(id)}`, `<p>Due now: <b>${money(bill.due)}</b></p><label>Amount received (৳)<input name="amount" type="number" min="0.01" max="${bill.due}" step="any" value="${bill.due}" required></label><label>Method<select name="method">${paymentOptions("Cash", quickPaymentChoices())}</select></label>`, async form => {
+    const { bill: saved, ...state } = await api(`/api/bills/${id}/payments`, { method: "POST", body: JSON.stringify({ amount: Number(form.get("amount")), method: form.get("method") }) });
+    data = state; render(); toast("Payment saved");
+  });
+});
 function openBillEditor(editing, initialProduct = null) {
   const pid = l => l.productId || data.products.find(p => p.name === l.name)?.id;
   const extra = Object.fromEntries((editing?.lines || []).map(l => [pid(l), l.qty]));
@@ -2637,7 +3087,7 @@ ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive f
     if (below.length && !confirm(`Warning: these items are priced below purchase cost: ${below.map(line => line.name).join(", ")}. Continue anyway?`)) return false;
     const payload = {
       paid: form.get("paid"),
-      items: cart.map(line => ({ productId: line.id, qty: line.qty, price: line.price, serials: line.serials || [], warrantyMonths: line.warrantyMonths || 0 })),
+      items: cart.map(line => ({ productId: line.id, qty: line.qty, price: line.price, ...(data.shopType === "pharmacy" ? { saleUnit: unitOf(line).name, saleQty: line.qty / unitOf(line).f, salePrice: line.price * unitOf(line).f } : {}), serials: line.serials || [], warrantyMonths: line.warrantyMonths || 0 })),
       customer: form.get("customer"),
       phone: form.get("phone"),
       payment: form.get("payment"),
@@ -2706,16 +3156,29 @@ ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive f
     }
   };
   const draw = () => {
-    $("#bill-lines").innerHTML = cart.map((line, i) => `<tr><td class="product-cell">${esc(line.name)}</td><td>${priceCell(line, i)}</td><td>${qtyCell(line, i)}</td><td><b>${money(line.price * line.qty)}</b></td><td>${data.shopType === "mobile" && /smartphone|feature phone|tablet|mobile phone/i.test(line.category) ? `<label class="device-fields"><small>One IMEI/serial per unit</small><textarea data-i="${i}" data-f="serials" rows="2" placeholder="Enter each on a new line">${esc((line.serials || []).join("\n"))}</textarea><small>Warranty months</small><input class="bill-input" data-i="${i}" data-f="warranty" type="number" min="0" max="120" step="1" value="${Number(line.warrantyMonths || 0)}"></label>` : ""}</td><td><button type="button" class="user-action danger" data-remove="${i}">Remove</button></td></tr>`).join("");
+    $("#bill-lines").innerHTML = cart.map((line, i) => `<tr><td class="product-cell">${esc(line.name)}${data.shopType === "pharmacy" ? `<br><small class="form-hint">Available: ${+(line.max / unitOf(line).f).toFixed(3)} ${esc(unitOf(line).name)} · ${line.max} ${esc(line.unit)}</small>` : ""}</td><td>${priceCell(line, i)}</td><td>${qtyCell(line, i)}</td><td><b>${money(line.price * line.qty)}</b></td><td>${data.shopType === "mobile" && /smartphone|feature phone|tablet|mobile phone/i.test(line.category) ? `<label class="device-fields"><small>One IMEI/serial per unit</small><textarea data-i="${i}" data-f="serials" rows="2" placeholder="Enter each on a new line">${esc((line.serials || []).join("\n"))}</textarea><small>Warranty months</small><input class="bill-input" data-i="${i}" data-f="warranty" type="number" min="0" max="120" step="1" value="${Number(line.warrantyMonths || 0)}"></label>` : ""}</td><td><button type="button" class="user-action danger" data-remove="${i}">Remove</button></td></tr>`).join("");
     $("#bill-empty").classList.toggle("hidden", cart.length > 0);
     totals();
   };
   const addProduct = item => {
     if (!item) return;
     const existing = cart.find(line => line.id === item.id);
-    if (!existing) cart.push({ id: item.id, name: productLabel(item), category: item.category || "", serials: [], warrantyMonths: 12, unit: item.unit || "piece", packSize: item.pack_size || 0, packName: item.pack_name, price: item.price, cost: item.cost, qty: 1, max: +(productSellableQty(item) + (extra[item.id] || 0)).toFixed(6) });
-    else if (existing.qty < existing.max) existing.qty++;
-    else { toast(`Only ${existing.max} ${existing.unit} of ${existing.name} in stock.`); return; }
+    if (!existing) {
+      const line = { id: item.id, name: productLabel(item), category: item.category || "", serials: [], warrantyMonths: 12, unit: item.unit || "piece", packSize: item.pack_size || 0, packName: item.pack_name, price: item.price, cost: item.cost, qty: 1, max: +(productSellableQty(item) + (extra[item.id] || 0)).toFixed(6), ...pharmacyLineFields(item) };
+      if (data.shopType === "pharmacy") {
+        const selected = unitOf(line);
+        if (line.max + 0.000001 < selected.f) return toast(`Only ${line.max} ${line.unit} of ${line.name} is available; not enough for one ${selected.name}.`);
+        line.mode = selected.key;
+        line.qty = selected.f;
+        const configured = line.unitPrices?.[selected.key];
+        if (configured !== undefined) line.price = configured / selected.f;
+      }
+      cart.push(line);
+    } else {
+      const increment = data.shopType === "pharmacy" ? unitOf(existing).f : 1;
+      if (existing.qty + increment <= existing.max + 0.000001) existing.qty = Number((existing.qty + increment).toFixed(6));
+      else { toast(`Only ${existing.max} ${existing.unit} of ${existing.name} in stock.`); return; }
+    }
     draw();
     $("#bill-search")?.focus();
   };
@@ -2730,17 +3193,38 @@ ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive f
   $("#bill-lines").oninput = event => {
     const input = event.target, line = cart[input.dataset.i];
     if (!line) return;
-    if (input.dataset.f === "mode") { line.mode = input.value; return draw(); }
+    if (input.dataset.f === "mode") {
+      if (data.shopType === "pharmacy") {
+        const selected = unitOf({ ...line, mode: input.value });
+        if (line.max + 0.000001 < selected.f) { toast(`Only ${fmtQty(line.max, line.unit)} of ${line.name} in stock; not enough for one ${selected.name}.`); return draw(); }
+        line.mode = selected.key;
+        line.qty = selected.f;
+        const configured = line.unitPrices?.[selected.key];
+        if (configured !== undefined) line.price = configured / selected.f;
+      } else line.mode = input.value;
+      return draw();
+    }
     if (input.dataset.f === "serials") { line.serials = input.value.split(/\r?\n/).map(value => value.trim()).filter(Boolean); return; }
     if (input.dataset.f === "warranty") { line.warrantyMonths = Number(input.value); return; }
-    const f = unitOf(line).f, value = Number(input.value) || 0;
+    const selected = unitOf(line), f = selected.f, value = Number(input.value) || 0;
     if (input.dataset.f === "qty") {
-      const prec = line.packSize > 0 ? 1e6 : 1e3;
-      let qty = Math.round(value / f * prec) / prec;
-      if (!isFractional(line.unit) && !(line.packSize > 0)) qty = Math.round(qty);
-      if (qty > line.max) { qty = line.max; input.value = +(qty * f).toFixed(3); toast(`Only ${fmtQty(line.max, line.unit)} of ${line.name} in stock.`); }
-      line.qty = qty;
-    } else { const u = unitOf(line); line.price = u.key === "custom" ? value * u.f : value; }
+      if (data.shopType === "pharmacy") {
+        let qty = Math.round(value * f * 1e6) / 1e6;
+        if (!isFractional(line.unit)) qty = Math.round(qty);
+        if (qty > line.max) { qty = line.max; input.value = +(qty / f).toFixed(6); toast(`Only ${fmtQty(line.max, line.unit)} of ${line.name} in stock.`); }
+        line.qty = qty;
+      } else {
+        const prec = line.packSize > 0 ? 1e6 : 1e3;
+        let qty = Math.round(value / f * prec) / prec;
+        if (!isFractional(line.unit) && !(line.packSize > 0)) qty = Math.round(qty);
+        if (qty > line.max) { qty = line.max; input.value = +(qty * f).toFixed(3); toast(`Only ${fmtQty(line.max, line.unit)} of ${line.name} in stock.`); }
+        line.qty = qty;
+      }
+    } else if (data.shopType === "pharmacy") {
+      line.price = value / f;
+      line.unitPrices = line.unitPrices || {};
+      line.unitPrices[selected.key] = value;
+    } else line.price = selected.key === "custom" ? value * f : value;
     input.closest("tr").cells[3].innerHTML = `<b>${money(line.price * line.qty)}</b>`;
     totals();
   };
@@ -2878,7 +3362,6 @@ $("#inv-download").onclick = () => {
   const rows = [["Product", "SKU", "Category", "Brand", "Color", "Size", "Material", "Unit", "Quantity", "Minimum", "Selling price", ...(hasCost ? ["Purchase cost", "Stock value (cost)"] : [])],
     ...items.map(p => [p.name, p.sku, p.category || "Other", p.brand || "", p.color || "", p.size || "", p.material || "", p.unit || "piece", p.qty, p.min, p.price, ...(hasCost ? [p.cost, p.cost * p.qty] : [])])];
   downloadFile(`inventory-${today10()}.csv`, "\uFEFF" + rows.map(r => r.map(csvCell).join(",")).join("\r\n"));
-  toast(`${items.length} products downloaded`);
 };
 $("#inv-print").onclick = () => {
   const items = inventoryRows(), hasCost = items.some(p => p.cost !== undefined);
@@ -2891,32 +3374,37 @@ table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5p
 <table><thead><tr><th>#</th><th>Product</th><th>Brand</th><th>Color</th><th>Size</th><th>Material</th><th>SKU</th><th>Category</th><th class="r">Qty</th><th class="r">Min</th><th class="r">Price</th>${hasCost ? '<th class="r">Cost</th>' : ""}</tr></thead><tbody>${items.map((p, i) => `<tr><td>${i + 1}</td><td>${esc(p.name)}</td><td>${esc(p.brand || "")}</td><td>${esc(p.color || "")}</td><td>${esc(p.size || "")}</td><td>${esc(p.material || "")}</td><td>${esc(p.sku)}</td><td>${esc(p.category || "Other")}</td><td class="r">${p.qty} ${esc(p.unit || "piece")}</td><td class="r">${p.min}</td><td class="r">${money(p.price)}</td>${hasCost ? `<td class="r">${money(p.cost)}</td>` : ""}</tr>`).join("")}</tbody></table></body></html>`);
 };
 
-// Sales history: search by item, payment, bill no, date range
-$("#sales .table-scroll").insertAdjacentHTML("beforebegin", `<div class="sales-filter"><label class="search">⌕ <input id="sales-search" placeholder="Search item, payment, bill no, amount"></label><label>From <input type="date" id="sales-from"></label><label>To <input type="date" id="sales-to"></label><button class="button secondary" id="sales-clear" type="button">Clear</button><span class="sales-count" id="sales-count"></span><button class="button secondary" id="sales-print" type="button">Print</button></div>`);
-let currentMatchingSales = [];
+// Local Sales: search whole bills by customer, item, payment, bill no, or date range.
+$("#sales .table-scroll").insertAdjacentHTML("beforebegin", `<div class="sales-filter"><label class="search">⌕ <input id="sales-search" placeholder="Search bill, customer, item, payment"></label><label>From <input type="date" id="sales-from"></label><label>To <input type="date" id="sales-to"></label><button class="button secondary" id="sales-clear" type="button">Clear</button><span class="sales-count" id="sales-count"></span><button class="button secondary" id="sales-print" type="button">Print</button></div>`);
+let currentMatchingSales = [], currentLocalSaleGroups = [];
 function filterSales() {
   const q = $("#sales-search").value.trim().toLowerCase(), from = $("#sales-from").value, to = $("#sales-to").value;
-  const matchingSales = [];
-  [...$("#sales-table").rows].forEach((row, i) => {
-    const s = data.sales[i];
-    if (!s) return;
-    const hay = [s.product, s.payment, s.date, s.total, s.bill_id ? billNo(s.bill_id) : ""].join(" ").toLowerCase();
-    const ok = (!q || hay.includes(q)) && (!from || s.date >= from) && (!to || s.date <= to);
-    row.classList.toggle("hidden", !ok);
-    if (ok) matchingSales.push(s);
+  const groups = groupLocalSales(data.sales);
+  const matchingGroups = groups.filter(group => {
+    if ((from && group.date < from) || (to && group.date > to)) return false;
+    if (!q) return true;
+    const first = group.lines[0] || {};
+    const hay = [group.billId ? billNo(group.billId) : `Direct sale ${first.id}`, first.bill_customer, first.bill_phone, group.date, localSaleGroupTotals(group).net, ...group.lines.flatMap(sale => [sale.product, sale.payment, sale.total])].join(" ").toLowerCase();
+    return hay.includes(q);
   });
-  currentMatchingSales = matchingSales;
-  const shown = matchingSales.length, filtering = Boolean(q || from || to);
-  const salesGross = matchingSales.reduce((sum, item) => sum + Number(item.original_total ?? item.total ?? 0), 0);
-  const salesNet = matchingSales.reduce((sum, item) => sum + Number(item.total || 0), 0);
+  currentLocalSaleGroups = matchingGroups;
+  currentMatchingSales = matchingGroups.flatMap(group => group.lines);
+  const page = largeListPage("sales", matchingGroups);
+  const canManage = signedInUser?.permissions?.records && data.permissions?.sales;
+  const canReturn = data.permissions?.sales && data.permissions?.inventory;
+  $("#sales-table").innerHTML = page.visible.map(group => localSaleGroupHtml(group, canManage, canReturn)).join("");
+  const shown = matchingGroups.length, filtering = Boolean(q || from || to);
+  const salesGross = currentMatchingSales.reduce((sum, item) => sum + Number(item.original_total ?? item.total ?? 0), 0);
+  const salesNet = currentMatchingSales.reduce((sum, item) => sum + Number(item.total || 0), 0);
   const returnsTotal = Math.max(0, salesGross - salesNet);
-  $("#sales-count").textContent = filtering ? `${shown} of ${data.sales.length} sales` : `${shown} sales`;
-  $("#sales-summary").innerHTML = `<div class="list-summary-heading"><b>Sales totals</b><small>${filtering ? "Totals for the sales currently shown" : "All-time totals across recorded sale lines"}</small></div><div class="list-summary-cards"><div><small>Sale lines</small><b>${shown}</b></div><div><small>Gross sales</small><b>${money(salesGross)}</b></div><div><small>Returned value</small><b>${money(returnsTotal)}</b></div><div><small>Net sales after returns</small><b>${money(salesNet)}</b></div></div>`;
-  $("#sales-empty").textContent = filtering && !shown ? "No sales match your search." : "Your recorded sales will appear here.";
-  $("#sales-empty").classList.toggle("hidden", !!shown || (!filtering && data.sales.length > 0));
+  $("#sales-count").textContent = filtering ? `${shown} of ${groups.length} local sales` : `${shown} local sales`;
+  $("#sales-summary").innerHTML = `<div class="list-summary-heading"><b>Sales totals</b><small>${filtering ? "Totals for the local sales currently shown" : "Local sale lines only; online-order bills stay separate"}</small></div><div class="list-summary-cards"><div><small>Sale lines</small><b>${currentMatchingSales.length}</b></div><div><small>Gross sales</small><b>${money(salesGross)}</b></div><div><small>Returned value</small><b>${money(returnsTotal)}</b></div><div><small>Net sales after returns</small><b>${money(salesNet)}</b></div></div>`;
+  $("#sales-empty").textContent = filtering && !shown ? "No local sales match your search." : "Your local sales will appear here.";
+  $("#sales-empty").classList.toggle("hidden", shown > 0);
+  showLargeListPagination("#sales-pagination", "sales", page, shown);
 }
-["#sales-search", "#sales-from", "#sales-to"].forEach(id => $(id).addEventListener("input", filterSales));
-$("#sales-clear").onclick = () => { $("#sales-search").value = $("#sales-from").value = $("#sales-to").value = ""; filterSales(); };
+["#sales-search", "#sales-from", "#sales-to"].forEach(id => $(id).addEventListener("input", () => { largeListPages.sales = 1; filterSales(); }));
+$("#sales-clear").onclick = () => { $("#sales-search").value = $("#sales-from").value = $("#sales-to").value = ""; largeListPages.sales = 1; filterSales(); };
 $("#sales-print").onclick = () => {
   if (!currentMatchingSales.length) return toast("No sales to print.");
   const from = $("#sales-from").value, to = $("#sales-to").value;
@@ -2924,13 +3412,21 @@ $("#sales-print").onclick = () => {
   const salesGross = currentMatchingSales.reduce((sum, item) => sum + Number(item.original_total ?? item.total ?? 0), 0);
   const salesNet = currentMatchingSales.reduce((sum, item) => sum + Number(item.total || 0), 0);
   const returnsTotal = Math.max(0, salesGross - salesNet);
-  printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Sales History</title><style>
+  const printRows = currentLocalSaleGroups.map(group => {
+    const first = group.lines[0] || {}, totals = localSaleGroupTotals(group);
+    const items = group.lines.map(sale => {
+      const originalQty = Number(sale.original_qty ?? sale.qty ?? 0), gross = Number(sale.original_total ?? sale.total ?? 0), returnedQty = Number(sale.returned_qty || 0);
+      return `<b>${esc(sale.product)}</b> · ${originalQty} ${esc(sale.unit || "piece")} × ${money(originalQty > 0 ? gross / originalQty : 0)} = ${money(gross)}${returnedQty > 0 ? `<br><i>Returned ${returnedQty} · Net ${sale.qty} ${esc(sale.unit || "piece")} / ${money(sale.total)}</i>` : ""}`;
+    }).join("<br>");
+    return `<tr><td>${esc(group.date)}</td><td>${group.billId ? billNo(group.billId) : `Direct sale #${first.id}`}</td><td>${esc(first.bill_customer || "-")}${first.bill_phone ? `<br>${esc(first.bill_phone)}` : ""}</td><td>${items}</td><td>${esc(first.payment || "-")}${totals.due > 0 ? `<br>Due ${money(totals.due)}` : ""}</td><td class="r">${money(totals.net)}${totals.returned > 0 ? `<br><small>${money(totals.returned)} returned</small>` : ""}</td></tr>`;
+  }).join("");
+  printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Local Sales</title><style>
 @page{margin:10mm}body{font:12px/1.4 system-ui,"Segoe UI",sans-serif;color:#000}h1{font-size:20px;margin:0}p{margin:2px 0 10px}
-table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5px 7px;text-align:left}th{background:#eee}.r{text-align:right}tr{page-break-inside:avoid}
+table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5px 7px;text-align:left;vertical-align:top}th{background:#eee}.r{text-align:right}tr{page-break-inside:avoid}
 .summary{margin:15px 0;padding:10px;background:#f5f5f5;border:1px solid #ccc}.summary-row{display:flex;justify-content:space-between;margin:3px 0}</style></head><body>
-<h1>${esc(data.shopName)} - Sales History</h1><p>${esc(data.workspace)} · ${new Date().toLocaleString("en-BD")} · ${dateRange}</p>
+<h1>${esc(data.shopName)} - Local Sales</h1><p>${esc(data.workspace)} · ${new Date().toLocaleString("en-BD")} · ${dateRange} · Online-order bills are not included.</p>
 <div class="summary"><div class="summary-row"><span>Sale lines:</span><b>${currentMatchingSales.length}</b></div><div class="summary-row"><span>Gross sales:</span><b>${money(salesGross)}</b></div><div class="summary-row"><span>Returned value:</span><b>${money(returnsTotal)}</b></div><div class="summary-row"><span>Net sales after returns:</span><b>${money(salesNet)}</b></div></div>
-<table><thead><tr><th>Date</th><th>Item</th><th>Qty / Unit</th><th>Payment</th><th>Bill No.</th><th class="r">Total</th></tr></thead><tbody>${currentMatchingSales.map((s) => `<tr><td>${esc(s.date)}</td><td>${esc(s.product)}${s.is_return ? ' <i>(Return)</i>' : ''}</td><td>${s.qty} ${esc(s.unit || "piece")}</td><td>${esc(s.payment)}</td><td>${s.bill_id ? billNo(s.bill_id) : "-"}</td><td class="r">${money(s.total)}</td></tr>`).join("")}</tbody></table></body></html>`);
+<table><thead><tr><th>Date</th><th>Bill / Sale</th><th>Customer</th><th>Items</th><th>Payment</th><th class="r">Total</th></tr></thead><tbody>${printRows}</tbody></table></body></html>`);
 };
 const renderBeforeExtras = render;
 render = function () {
@@ -3018,11 +3514,11 @@ render = function () {
   if (dues) $("#dues-text").textContent = `⚠ Customer dues: ${money(dues.amount)} unpaid across ${dues.count} bill${dues.count === 1 ? "" : "s"}`;
   $("#bills-list").classList.toggle("hidden", !sales);
 };
-$("#customer-history").insertAdjacentHTML("afterend", `<button class="button secondary" id="bills-list" type="button">Bills</button><button class="button secondary" id="returns-list" type="button">Returns</button>`);
-$("#bills-list").onclick = () => openBills(false);
+$("#customer-history").insertAdjacentHTML("afterend", `<button class="button secondary" id="bills-list" type="button">Local bills</button><button class="button secondary" id="returns-list" type="button">Returns</button>`);
+$("#bills-list").onclick = () => openBills(false, {}, "local");
 $("#dues-view").onclick = () => openBills(true);
 $("#returns-list").onclick = () => {
-  const rows = data.salesReturns || [];
+  const rows = (data.salesReturns || []).filter(row => !Number(row.online_order_id || 0));
   openModal("Sales returns", `<div class="returns-search-row"><label class="search">⌕ <input type="search" id="returns-search" placeholder="Search item, bill, reason, staff"></label><button class="button secondary" id="returns-clear-filters" type="button">Clear filters</button></div><div class="returns-date-filters"><label>From<input type="date" id="returns-from"></label><label>To<input type="date" id="returns-to"></label></div><p class="form-hint" id="returns-count"></p><div class="table-scroll bill-cart" style="max-height:430px"><table><thead><tr><th>Date</th><th>Item</th><th>Qty</th><th>Bill</th><th>Return value</th><th>Refund</th><th>Reason / by</th></tr></thead><tbody id="returns-body"></tbody></table></div><div class="empty hidden" id="returns-empty"></div>`, async () => {});
   dialog.classList.add("wide");
   const renderReturns = () => {
@@ -3049,10 +3545,12 @@ $("#returns-list").onclick = () => {
   const submit = $("#submit-modal"); submit.classList.add("hidden");
   dialog.addEventListener("close", () => { dialog.classList.remove("wide"); submit.classList.remove("hidden"); }, { once: true });
 };
-async function openBills(duesOnly, previousFilters = {}) {
+async function openBills(duesOnly, previousFilters = {}, scope = "all") {
+  if (!["all", "local", "online"].includes(scope)) scope = "all";
   let bills;
-  try { bills = (await api("/api/bills")).bills; } catch (error) { return toast(error.message); }
-  openModal("Bills", `<div class="cust-head"><label class="search">⌕ <input id="bill-find" placeholder="Search bill no, customer, phone, item" value="${esc(previousFilters.query || "")}"></label><label><input type="checkbox" id="dues-only" ${duesOnly ? "checked" : ""}> Dues only</label></div><div class="bills-date-filters"><label>From<input type="date" id="bills-from" value="${esc(previousFilters.from || "")}"></label><label>To<input type="date" id="bills-to" value="${esc(previousFilters.to || "")}"></label><button type="button" class="button secondary" id="bills-clear-filters">Clear filters</button></div><p class="form-hint" id="bills-count"></p><div class="table-scroll bill-cart" style="max-height:430px"><table><thead><tr><th>Bill</th><th>Date</th><th>Customer</th><th>Total</th><th>Paid</th><th>Due</th><th></th></tr></thead><tbody id="bills-body"></tbody></table></div><div class="empty hidden" id="bills-empty">No bills found.</div>`, async () => {});
+  try { bills = (await api(`/api/bills?scope=${scope}`)).bills; } catch (error) { return toast(error.message); }
+  const title = scope === "online" ? "Online order bills" : scope === "local" ? "Local sales bills" : "Bills";
+  openModal(title, `<div class="cust-head"><label class="search">⌕ <input id="bill-find" placeholder="Search bill no, customer, phone, item" value="${esc(previousFilters.query || "")}"></label><label><input type="checkbox" id="dues-only" ${duesOnly ? "checked" : ""}> Dues only</label></div><div class="bills-date-filters"><label>From<input type="date" id="bills-from" value="${esc(previousFilters.from || "")}"></label><label>To<input type="date" id="bills-to" value="${esc(previousFilters.to || "")}"></label><button type="button" class="button secondary" id="bills-clear-filters">Clear filters</button></div><p class="form-hint" id="bills-count"></p><div class="table-scroll bill-cart" style="max-height:430px"><table><thead><tr><th>Bill</th><th>Date</th><th>Customer</th><th>Total</th><th>Paid</th><th>Due</th><th></th></tr></thead><tbody id="bills-body"></tbody></table></div><div class="empty hidden" id="bills-empty">No bills found.</div>`, async () => {});
   dialog.classList.add("wide");
   const submit = $("#submit-modal"); submit.classList.add("hidden");
   dialog.addEventListener("close", () => { dialog.classList.remove("wide"); submit.classList.remove("hidden"); }, { once: true });
@@ -3062,7 +3560,7 @@ async function openBills(duesOnly, previousFilters = {}) {
     const invalidRange = Boolean(from && to && from > to);
     const hits = invalidRange ? [] : bills.filter(b => (!dues || b.due > 0) && (!from || b.date >= from) && (!to || b.date <= to) && (!q || `${billNo(b.id)} ${b.customer} ${b.phone} ${b.lines.map(l => l.name).join(" ")}`.toLowerCase().includes(q)));
     const btn = (a, label, cls = "") => `<button type="button" class="user-action ${cls}" data-a="${a}">${label}</button>`;
-    $("#bills-body").innerHTML = hits.map(b => `<tr data-id="${b.id}"><td>${billNo(b.id)}</td><td>${esc(b.date)}</td><td>${esc(b.customer || "-")}${b.phone ? `<br><small>${esc(b.phone)}</small>` : ""}</td><td>${money(b.netTotal ?? b.total)}${b.returned > 0 ? `<small class="form-hint">${money(b.returned)} returned</small>` : ""}</td><td>${money(b.paid)}</td><td>${b.due > 0 ? `<b>${money(b.due)}</b>` : b.customerCredit > 0 ? `<small>Credit ${money(b.customerCredit)}</small>` : "-"}</td><td>${btn("print", "Print")}${b.due > 0 ? btn("pay", "Receive") : ""}${!b.returned ? `${btn("edit", "Edit")}${btn("delete", "Delete", "danger")}` : "Return history"}</td></tr>`).join("");
+    $("#bills-body").innerHTML = hits.map(b => `<tr data-id="${b.id}"><td>${billNo(b.id)}</td><td>${esc(b.date)}</td><td>${esc(b.customer || "-")}${b.phone ? `<br><small>${esc(b.phone)}</small>` : ""}</td><td>${money(b.netTotal ?? b.total)}${b.returned > 0 ? `<small class="form-hint">${money(b.returned)} returned</small>` : ""}</td><td>${money(b.paid)}</td><td>${b.due > 0 ? `<b>${money(b.due)}</b>` : b.customerCredit > 0 ? `<small>Credit ${money(b.customerCredit)}</small>` : "-"}</td><td>${btn("print", "Print")}${b.due > 0 ? btn("pay", "Receive") : ""}${scope === "online" ? "Manage in Online Orders" : !b.returned ? `${btn("edit", "Edit")}${btn("delete", "Delete", "danger")}` : "Return history"}</td></tr>`).join("");
     $("#bills-count").textContent = invalidRange ? "The start date must be before the end date." : `Showing ${hits.length} of ${bills.length} bills`;
     $("#bills-empty").classList.toggle("hidden", hits.length > 0);
     $("#bills-empty").textContent = invalidRange ? "Choose a valid date range." : "No bills match your filters.";
@@ -3078,12 +3576,12 @@ async function openBills(duesOnly, previousFilters = {}) {
     if (button.dataset.a === "edit") return openBillEditor(bill);
     if (button.dataset.a === "delete") {
       if (!confirm(`Delete bill ${billNo(bill.id)} permanently? Its items go back into stock, and its sales and payment records are removed.`)) return;
-      try { data = await api("/api/bills/" + bill.id, { method: "DELETE" }); render(); toast(`${billNo(bill.id)} deleted`); closeModal(); openBills(again, filters); } catch (error) { toast(error.message); }
+      try { data = await api("/api/bills/" + bill.id, { method: "DELETE" }); render(); toast(`${billNo(bill.id)} deleted`); closeModal(); openBills(again, filters, scope); } catch (error) { toast(error.message); }
       return;
     }
     openModal(`Receive payment · ${billNo(bill.id)}`, `<p>Due now: <b>${money(bill.due)}</b></p><label>Amount received (৳)<input name="amount" type="number" min="0.01" max="${bill.due}" step="any" value="${bill.due}" required></label><label>Method<select name="method"><option>Cash</option><option>bKash</option><option>Nagad</option><option>Card</option></select></label>`, async form => {
       const { bill: saved, ...state } = await api(`/api/bills/${bill.id}/payments`, { method: "POST", body: JSON.stringify({ amount: Number(form.get("amount")), method: form.get("method") }) });
-      data = state; render(); toast("Payment saved"); setTimeout(() => openBills(again, filters), 50);
+      data = state; render(); toast("Payment saved"); setTimeout(() => openBills(again, filters, scope), 50);
     });
     submit.classList.remove("hidden");
   };
@@ -3283,7 +3781,7 @@ async function renderBackupManager() {
   try {
     const [{ files }, schedule] = await Promise.all([api("/api/backups"), api("/api/backups/schedule")]);
     const lastBackup = schedule.lastBackupAt ? new Date(schedule.lastBackupAt).toLocaleString() : "No scheduled backup has completed yet.";
-    container.innerHTML = `<section id="offsite-panel" class="offsite-panel"><p class="backup-status">Loading offsite backup…</p></section><p class="backup-intro">Create a dated SQLite copy and choose where to save it on this computer. To restore, select a Shop Desk backup file. Restoring replaces current shop data; a safety copy is made first.</p><section class="backup-schedule"><div><h3>Automatic backup schedule</h3><p>Choose a folder on the shop server PC. The server must be running at the selected time. Uses the server PC’s local time; keeps the newest 14 backups.</p><p class="backup-last-run">Last scheduled backup: <b>${esc(lastBackup)}</b></p></div><form id="backup-schedule-form"><label class="backup-schedule-toggle"><input type="checkbox" name="enabled" ${schedule.enabled ? "checked" : ""}> Enable daily backup</label><label>Backup time<input type="time" name="time" value="${esc(schedule.time)}" required></label><label class="backup-schedule-directory">Server backup folder<span class="backup-folder-choice"><input type="text" id="backup-schedule-directory" name="directory" value="${esc(schedule.directory)}" readonly required><button type="button" class="button secondary" id="browse-backup-folder">Choose folder…</button></span></label><button type="submit" class="button secondary">Save schedule</button><span id="backup-schedule-status" role="status"></span></form></section><dialog id="backup-folder-dialog" class="backup-folder-dialog" aria-labelledby="backup-folder-title"><div class="backup-folder-dialog-content"><div class="backup-folder-heading"><h3 id="backup-folder-title">Choose server backup folder</h3><button type="button" class="user-action" id="close-backup-folder">Close</button></div><p>Browse folders on the server PC, then choose the folder for scheduled backups.</p><div class="backup-folder-current"><button type="button" class="user-action" id="backup-folder-up">Up one folder</button><button type="button" class="user-action" id="backup-folder-drives">Drives</button><strong id="backup-folder-current"></strong></div><p id="backup-folder-error" class="backup-folder-error" role="status"></p><div id="backup-folder-list" class="backup-folder-list"></div><div class="backup-folder-actions"><button type="button" class="button primary" id="use-backup-folder">Use this folder</button><button type="button" class="button secondary" id="cancel-backup-folder">Cancel</button></div></div></dialog><div class="backup-actions"><button type="button" class="button primary" id="create-save-backup">Create and save backup</button><button type="button" class="button secondary" id="restore-from-file">Restore from file…</button></div><p class="backup-status" id="backup-status" role="status"></p>${files.length ? `<h3>Backups stored on the shop server</h3><div class="table-scroll"><table><thead><tr><th>Backup file</th><th>Size</th><th>Actions</th></tr></thead><tbody>${files.map(file => `<tr><td>${esc(file.name)}</td><td>${(file.size / 1048576).toFixed(2)} MB</td><td><button type="button" class="user-action" data-save-backup="${esc(file.name)}">Save to location…</button><button type="button" class="user-action danger" data-restore-server-backup="${esc(file.name)}">Restore</button><button type="button" class="user-action danger" data-delete-backup="${esc(file.name)}" aria-label="Delete backup ${esc(file.name)}">Delete</button></td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">No backups are stored on the shop server yet.</p>`}`;
+    container.innerHTML = `<section id="offsite-panel" class="offsite-panel"><p class="backup-status">Loading offsite backup…</p></section><p class="backup-intro">Backups belong to <b>${esc(data.activeProfile?.name || "this shop profile")}</b>. Create a dated SQLite copy and choose where to save it on this computer. Restoring replaces only this profile’s data, requires a backup of the same shop type, and makes a safety copy first.</p><section class="backup-schedule"><div><h3>Automatic backup schedule</h3><p>Choose a folder on the shop server PC. The server must be running at the selected time. Uses the server PC’s local time; keeps the newest 14 backups.</p><p class="backup-last-run">Last scheduled backup: <b>${esc(lastBackup)}</b></p></div><form id="backup-schedule-form"><label class="backup-schedule-toggle"><input type="checkbox" name="enabled" ${schedule.enabled ? "checked" : ""}> Enable daily backup</label><label>Backup time<input type="time" name="time" value="${esc(schedule.time)}" required></label><label class="backup-schedule-directory">Server backup folder<span class="backup-folder-choice"><input type="text" id="backup-schedule-directory" name="directory" value="${esc(schedule.directory)}" readonly required><button type="button" class="button secondary" id="browse-backup-folder">Choose folder…</button></span></label><button type="submit" class="button secondary">Save schedule</button><span id="backup-schedule-status" role="status"></span></form></section><dialog id="backup-folder-dialog" class="backup-folder-dialog" aria-labelledby="backup-folder-title"><div class="backup-folder-dialog-content"><div class="backup-folder-heading"><h3 id="backup-folder-title">Choose server backup folder</h3><button type="button" class="user-action" id="close-backup-folder">Close</button></div><p>Browse folders on the server PC, then choose the folder for scheduled backups.</p><div class="backup-folder-current"><button type="button" class="user-action" id="backup-folder-up">Up one folder</button><button type="button" class="user-action" id="backup-folder-drives">Drives</button><strong id="backup-folder-current"></strong></div><p id="backup-folder-error" class="backup-folder-error" role="status"></p><div id="backup-folder-list" class="backup-folder-list"></div><div class="backup-folder-actions"><button type="button" class="button primary" id="use-backup-folder">Use this folder</button><button type="button" class="button secondary" id="cancel-backup-folder">Cancel</button></div></div></dialog><div class="backup-actions"><button type="button" class="button primary" id="create-save-backup">Create and save backup</button><button type="button" class="button secondary" id="restore-from-file">Restore from file…</button></div><p class="backup-status" id="backup-status" role="status"></p>${files.length ? `<h3>Backups stored on the shop server</h3><div class="table-scroll"><table><thead><tr><th>Backup file</th><th>Size</th><th>Actions</th></tr></thead><tbody>${files.map(file => `<tr><td>${esc(file.name)}</td><td>${(file.size / 1048576).toFixed(2)} MB</td><td><button type="button" class="user-action" data-save-backup="${esc(file.name)}">Save to location…</button><button type="button" class="user-action danger" data-restore-server-backup="${esc(file.name)}">Restore</button><button type="button" class="user-action danger" data-delete-backup="${esc(file.name)}" aria-label="Delete backup ${esc(file.name)}">Delete</button></td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">No backups are stored on the shop server yet.</p>`}`;
     $("#backup-schedule-form").onsubmit = async event => {
       event.preventDefault();
       const form = new FormData(event.currentTarget), button = event.currentTarget.querySelector('[type="submit"]'), status = $("#backup-schedule-status");
@@ -3404,7 +3902,7 @@ async function deleteStoredBackup(name) {
 }
 $("#fresh-start-button").onclick = async () => {
   if (signedInUser?.username?.toLowerCase() !== "jahangir" || signedInUser?.role !== "admin") return toast("Only the Jahangir administrator can start a fresh setup.");
-  if (!confirm("This removes trial products, customers, suppliers, bills, sales, expenses, purchase history, and team accounts. Jahangir’s login is kept. A backup will be created first. Continue?")) return;
+  if (!confirm("This clears products, customers, suppliers, bills, sales, expenses, and purchase history in the current shop profile only. Team accounts and all other shop profiles are kept. A backup of this profile will be created first. Continue?")) return;
   if (prompt("Type FRESH START to confirm clearing this shop’s trial data.") !== "FRESH START") return toast("Fresh start cancelled. The confirmation text did not match.");
   try {
     const result = await api("/api/fresh-start", { method: "POST", body: JSON.stringify({ confirmation: "FRESH START" }) });
@@ -3543,7 +4041,7 @@ async function openSupplierHub() {
 function openPurchaseEntry(suppliers, editing = null) {
   const supplierOptions = suppliers.map(s => `<option value="${s.id}">${esc(s.name)} · due ${supplierMoney(s.balance)}</option>`).join("");
   const productOptions = (selectedId = 0) => data.products.map(p => `<option value="${p.id}" data-cost="${Number(p.cost)}" ${p.id === Number(selectedId) ? "selected" : ""}>${esc(productLabel(p))} · ${esc(p.unit || "piece")} · stock ${Number(p.qty)}</option>`).join("");
-  const row = (item = {}) => `<tr><td><select class="purchase-product" required><option value="">Select product</option>${productOptions(item.productId)}</select>${data.shopType === "pharmacy" ? `<div class="pharmacy-purchase-batch"><label>Batch / lot<input class="purchase-batch" maxlength="80" value="${esc(item.batchNumber || "")}" required></label><label>Expiry<input class="purchase-expiry" type="date" value="${esc(item.expiryDate || "")}" required></label></div>` : ""}</td><td><input class="purchase-qty" type="number" min="0.001" step="any" value="${Number(item.qty ?? 1)}" required></td><td><input class="purchase-cost" type="number" min="0" step="0.01" value="${Number(item.cost ?? 0)}" required></td><td class="purchase-line-total">৳0.00</td><td><button type="button" class="user-action danger purchase-remove">Remove</button></td></tr>`;
+  const row = (item = {}) => `<tr><td><select class="purchase-product" required><option value="">Select product</option>${productOptions(item.productId)}</select>${data.shopType === "pharmacy" ? `<div class="pharmacy-purchase-batch"><label>Batch / lot<input class="purchase-batch" maxlength="80" value="${esc(item.batchNumber || "")}" required></label><label>Expiry<input class="purchase-expiry" type="date" value="${esc(item.expiryDate || "")}" required></label></div>` : ""}</td><td>${data.shopType === "pharmacy" ? `<select class="purchase-unit" aria-label="Purchase unit" required></select>` : ""}<input class="purchase-qty" type="number" min="0.000001" step="any" value="${Number(item.qty ?? 1)}" required>${data.shopType === "pharmacy" ? `<small class="form-hint purchase-base-qty"></small>` : ""}</td><td><input class="purchase-cost" type="number" min="0" step="any" value="${Number(item.cost ?? 0)}" required></td><td class="purchase-line-total">৳0.00</td><td><button type="button" class="user-action danger purchase-remove">Remove</button></td></tr>`;
   const lines = editing?.items?.length ? editing.items : [{}];
   const supplierField = editing
     ? `<label>Supplier<input value="${esc(editing.supplier_name)}" disabled></label>`
@@ -3551,8 +4049,13 @@ function openPurchaseEntry(suppliers, editing = null) {
   const paymentFields = editing
     ? `<p class="form-hint">Existing payments are kept in payment history. Stock is adjusted for item changes, and the item's current average cost is recalculated where enough stock remains.</p>`
     : `<div class="form-row supplier-purchase-payment"><label>Paid now (৳)<input name="paid" type="number" min="0" step="0.01" value="0" required></label><label>Payment method<select name="method"><option>Cash</option><option>bKash</option><option>Nagad</option><option>Bank</option><option>Other</option></select></label></div>`;
-  supplierModal(editing ? `Edit purchase P-${String(editing.id).padStart(8, "0")}` : "Record supplier purchase", `${supplierField}<div class="form-row"><label>Purchase date<input name="date" type="date" value="${esc(editing?.date || supplierDate())}" required></label><label>Invoice / reference<input name="reference" maxlength="100" value="${esc(editing?.reference || "")}"></label></div><div class="table-scroll purchase-lines"><table><thead><tr><th>Product ${data.shopType === "pharmacy" ? "· Batch / expiry" : ""}</th><th>Quantity</th><th>Cost per unit (৳)</th><th>Line total</th><th></th></tr></thead><tbody id="purchase-lines">${lines.map(row).join("")}</tbody></table></div><button type="button" class="button secondary" id="purchase-line-add">＋ Add item</button>${paymentFields}<label>Note<input name="note" maxlength="500" value="${esc(editing?.note || "")}"></label><div class="bill-total"><span>Purchase total <b id="purchase-total">৳0.00</b></span>${editing ? "" : `<span>Due added <b id="purchase-due">৳0.00</b></span>`}</div>`, async form => {
-    const items = [...document.querySelectorAll("#purchase-lines tr")].map(tr => ({ productId: Number(tr.querySelector(".purchase-product").value), qty: Number(tr.querySelector(".purchase-qty").value), cost: Number(tr.querySelector(".purchase-cost").value), batchNumber: tr.querySelector(".purchase-batch")?.value.trim() || "", expiryDate: tr.querySelector(".purchase-expiry")?.value || "" }));
+  supplierModal(editing ? `Edit purchase P-${String(editing.id).padStart(8, "0")}` : "Record supplier purchase", `${supplierField}<div class="form-row"><label>Purchase date<input name="date" type="date" value="${esc(editing?.date || supplierDate())}" required></label><label>Invoice / reference<input name="reference" maxlength="100" value="${esc(editing?.reference || "")}"></label></div><div class="table-scroll purchase-lines"><table><thead><tr><th>Product ${data.shopType === "pharmacy" ? "· Batch / expiry" : ""}</th><th>${data.shopType === "pharmacy" ? "Purchase unit / quantity" : "Quantity"}</th><th>${data.shopType === "pharmacy" ? "Price per selected unit (৳)" : "Cost per unit (৳)"}</th><th>Line total</th><th></th></tr></thead><tbody id="purchase-lines">${lines.map(row).join("")}</tbody></table></div><button type="button" class="button secondary" id="purchase-line-add">＋ Add item</button>${paymentFields}<label>Note<input name="note" maxlength="500" value="${esc(editing?.note || "")}"></label><div class="bill-total"><span>Purchase total <b id="purchase-total">৳0.00</b></span>${editing ? "" : `<span>Due added <b id="purchase-due">৳0.00</b></span>`}</div>`, async form => {
+    const items = [...document.querySelectorAll("#purchase-lines tr")].map(tr => {
+      const productId = Number(tr.querySelector(".purchase-product").value), product = data.products.find(item => Number(item.id) === productId);
+      const purchaseQuantity = Number(tr.querySelector(".purchase-qty").value), purchasePrice = Number(tr.querySelector(".purchase-cost").value), purchaseUnit = tr.querySelector(".purchase-unit")?.value || "";
+      const selected = data.shopType === "pharmacy" && product ? medicinePurchaseUnits(product).find(unit => unit.name === purchaseUnit) : null, factor = Number(selected?.factor || 1);
+      return { productId, qty: selected ? purchaseQuantity * factor : purchaseQuantity, cost: selected ? purchasePrice / factor : purchasePrice, purchaseUnit, purchaseQuantity, purchasePrice, batchNumber: tr.querySelector(".purchase-batch")?.value.trim() || "", expiryDate: tr.querySelector(".purchase-expiry")?.value || "" };
+    });
     if (items.some(i => !i.productId || !(i.qty > 0) || !(i.cost >= 0))) throw new Error("Choose each product and enter a valid quantity and cost.");
     if (data.shopType === "pharmacy" && items.some(i => !i.batchNumber || !i.expiryDate)) throw new Error("Every Pharmacy purchase needs a batch number and expiry date.");
     const payload = { date: form.get("date"), reference: form.get("reference"), note: form.get("note"), items };
@@ -3564,16 +4067,37 @@ function openPurchaseEntry(suppliers, editing = null) {
     let total = 0;
     document.querySelectorAll("#purchase-lines tr").forEach(tr => {
       const qty = Number(tr.querySelector(".purchase-qty").value) || 0, cost = Number(tr.querySelector(".purchase-cost").value) || 0, line = qty * cost;
+      if (data.shopType === "pharmacy") {
+        const product = data.products.find(item => Number(item.id) === Number(tr.querySelector(".purchase-product").value));
+        const selected = product ? medicinePurchaseUnits(product).find(unit => unit.name === tr.querySelector(".purchase-unit").value) : null;
+        tr.querySelector(".purchase-base-qty").textContent = product && selected ? `= ${+(qty * Number(selected.factor)).toFixed(6)} ${product.unit} · ${supplierMoney(cost / Number(selected.factor))}/${product.unit}` : "Choose a medicine and purchase unit";
+      }
       tr.querySelector(".purchase-line-total").textContent = supplierMoney(line); total += line;
     });
     const paid = Number($("[name=paid]")?.value) || 0;
     $("#purchase-total").textContent = supplierMoney(total);
     if ($("#purchase-due")) $("#purchase-due").textContent = supplierMoney(Math.max(0, total - paid));
   };
+  const syncPurchaseRow = (tr, rebuildUnits = false) => {
+    const product = data.products.find(item => Number(item.id) === Number(tr.querySelector(".purchase-product").value));
+    if (data.shopType !== "pharmacy") {
+      if (product && rebuildUnits) tr.querySelector(".purchase-cost").value = Number(product.cost || 0);
+      return updateTotals();
+    }
+    if (!product) return updateTotals();
+    const select = tr.querySelector(".purchase-unit"), previous = select.value, units = medicinePurchaseUnits(product);
+    if (rebuildUnits || !select.options.length) select.innerHTML = units.map(unit => `<option value="${esc(unit.name)}">${esc(unit.name)} = ${unit.factor} ${esc(product.unit)}</option>`).join("");
+    if (!units.some(unit => unit.name === previous)) select.value = units.at(-1).name;
+    const selected = units.find(unit => unit.name === select.value) || units[0];
+    select.value = selected.name;
+    tr.querySelector(".purchase-cost").value = Number((Number(product.cost || 0) * Number(selected.factor)).toFixed(4));
+    updateTotals();
+  };
   $("#purchase-line-add").onclick = () => { $("#purchase-lines").insertAdjacentHTML("beforeend", row()); updateTotals(); };
   $("#purchase-lines").oninput = event => { if (event.target.matches(".purchase-qty,.purchase-cost")) updateTotals(); };
   $("#purchase-lines").onchange = event => {
-    if (event.target.matches(".purchase-product")) { const cost = event.target.selectedOptions[0]?.dataset.cost; if (cost !== undefined) event.target.closest("tr").querySelector(".purchase-cost").value = cost; updateTotals(); }
+    if (event.target.matches(".purchase-product")) syncPurchaseRow(event.target.closest("tr"), true);
+    if (event.target.matches(".purchase-unit")) syncPurchaseRow(event.target.closest("tr"));
   };
   $("#purchase-lines").onclick = event => { if (event.target.closest(".purchase-remove")) { if (document.querySelectorAll("#purchase-lines tr").length > 1) event.target.closest("tr").remove(); else toast("A purchase needs at least one item."); updateTotals(); } };
   const paidInput = $("[name=paid]");
@@ -3603,6 +4127,7 @@ async function openPharmacyBatchManager() {
     }).join("") : '<tr><td colspan="7" class="empty">No medicine batches recorded. Add a medicine or receive the first batch.</td></tr>';
     openModal("Medicine batches & expiry", `<div class="pharmacy-batch-toolbar"><div><b>${batches.length} recorded batches</b><p class="form-hint">Sales use earliest-expiring eligible stock first. Expired, unknown-expiry, and returned/quarantined units are not sellable.</p></div><button type="button" class="button primary" id="pharmacy-receive-batch">＋ Receive batch</button></div><div class="pharmacy-expiry-summary"><div><b>${expired}</b><span>Expired lots with stock</span></div><div><b>${soon}</b><span>Expiring within 90 days</span></div><div><b>${unknown}</b><span>Need expiry verification</span></div></div><div class="table-scroll supplier-table"><table><thead><tr><th>Medicine</th><th>Batch / lot</th><th>Expiry date</th><th>Remaining</th><th>Sellable</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div>`, async () => {});
     $("#submit-modal").classList.add("hidden");
+    $("#cancel-modal").textContent = t("Close");
     $("#pharmacy-receive-batch").onclick = () => { closeModal(); openPharmacyReceiveBatch(); };
     dialog.querySelectorAll("[data-edit-pharmacy-batch]").forEach(button => button.onclick = () => {
       const batch = batches.find(item => Number(item.id) === Number(button.dataset.editPharmacyBatch));
@@ -3616,12 +4141,41 @@ function openPharmacyReceiveBatch() {
   const products = (data.products || []).filter(product => product.id);
   if (!products.length) return toast("Add a medicine before receiving stock.");
   const options = products.map(product => `<option value="${product.id}">${esc(product.name)} · ${esc(product.unit || "piece")} · current ${Number(product.qty || 0)}</option>`).join("");
-  openModal("Receive medicine batch", `<label>Medicine<select name="productId" required><option value="">Choose medicine</option>${options}</select></label><div class="form-row"><label>Batch / lot number<input name="batchNumber" maxlength="80" required placeholder="As printed on the pack"></label><label>Expiry date<input name="expiryDate" type="date" required></label></div><div class="form-row"><label>Quantity received<input name="quantity" type="number" min="0.001" step="any" required></label><label>Unit purchase cost (${esc(currencySymbol())})<input name="unitCost" type="number" min="0" step="0.01" required></label></div><p class="form-hint">Use the exact batch number and expiry printed by the manufacturer. For repeated receipts of the same batch, use the same batch number and expiry.</p>`, async form => {
-    const result = await api("/api/pharmacy/batches", { method: "POST", body: JSON.stringify({ productId: Number(form.get("productId")), batchNumber: form.get("batchNumber").trim(), expiryDate: form.get("expiryDate"), quantity: Number(form.get("quantity")), unitCost: Number(form.get("unitCost")) }) });
-    data = result;
-    render();
-    toast("Medicine batch received; stock and expiry are recorded.");
+  openModal("Receive medicine batch", `<label>Medicine<select name="productId" required><option value="">Choose medicine</option>${options}</select></label><div class="form-row"><label>Batch / lot number<input name="batchNumber" maxlength="80" required placeholder="As printed on the pack"></label><label>Expiry date<input name="expiryDate" type="date" required></label></div><div class="form-row"><label>Purchase unit<select name="purchaseUnit" required></select></label><label>Quantity received<input name="quantity" type="number" min="0.000001" step="any" value="1" required></label><label>Purchase price per selected unit (${esc(currencySymbol())})<input name="purchasePrice" type="number" min="0" step="any" value="0" required></label></div><div class="pharmacy-purchase-calculator" aria-live="polite"><div><small>Stock to add</small><b id="receive-base-qty">0</b></div><div><small>Total purchase cost</small><b id="receive-total-cost">${money(0)}</b></div><div><small>Cost per base unit</small><b id="receive-base-cost">${money(0)}</b></div></div><p class="form-hint">Use the exact batch number, expiry, packaging, and invoice price. ShopDesk converts the receipt to the medicine's internal stock unit.</p>`, async form => {
+    const product = products.find(item => Number(item.id) === Number(form.get("productId")));
+    if (!product) throw new Error("Choose a medicine before receiving the batch.");
+    const selected = medicinePurchaseUnits(product).find(unit => unit.name === form.get("purchaseUnit"));
+    if (!selected) throw new Error("Choose a configured purchase unit.");
+    const quantity = Number(form.get("quantity")), purchasePrice = Number(form.get("purchasePrice")), baseQuantity = quantity * Number(selected.factor), unitCost = purchasePrice / Number(selected.factor);
+    const result = await api("/api/pharmacy/batches", { method: "POST", body: JSON.stringify({ productId: Number(form.get("productId")), batchNumber: form.get("batchNumber").trim(), expiryDate: form.get("expiryDate"), quantity: baseQuantity, unitCost, purchaseUnit: selected?.name || product.unit, purchaseQuantity: quantity, purchasePrice }) });
+    data = result; render(); toast(`Medicine batch received: ${+baseQuantity.toFixed(6)} ${product.unit} added to stock.`);
   });
+  const productSelect = $("#modal-fields [name=productId]"), unitSelect = $("#modal-fields [name=purchaseUnit]"), priceInput = $("#modal-fields [name=purchasePrice]");
+  const update = () => {
+    const product = products.find(item => Number(item.id) === Number(productSelect.value)), selected = medicinePurchaseUnits(product || { unit: "unit" }).find(unit => unit.name === unitSelect.value) || { factor: 1, name: "unit" };
+    const quantity = Number($("#modal-fields [name=quantity]").value) || 0, price = Number(priceInput.value) || 0, factor = Number(selected.factor || 1), base = product?.unit || "base unit";
+    $("#receive-base-qty").textContent = `${+(quantity * factor).toFixed(6)} ${base}`;
+    $("#receive-total-cost").textContent = money(quantity * price);
+    $("#receive-base-cost").textContent = `${money(factor > 0 ? price / factor : 0)} / ${base}`;
+  };
+  productSelect.onchange = () => {
+    const product = products.find(item => Number(item.id) === Number(productSelect.value));
+    if (!product) { unitSelect.innerHTML = ""; priceInput.value = 0; update(); return; }
+    const units = medicinePurchaseUnits(product);
+    unitSelect.innerHTML = units.map(unit => `<option value="${esc(unit.name)}">${esc(unit.name)} = ${unit.factor} ${esc(product.unit)}</option>`).join("");
+    unitSelect.value = units.at(-1).name;
+    priceInput.value = Number((Number(product.cost || 0) * Number(units.at(-1).factor)).toFixed(4));
+    update();
+  };
+  unitSelect.onchange = () => {
+    const product = products.find(item => Number(item.id) === Number(productSelect.value));
+    if (!product) { update(); return; }
+    const selected = medicinePurchaseUnits(product).find(unit => unit.name === unitSelect.value);
+    if (selected) priceInput.value = Number((Number(product.cost || 0) * Number(selected.factor)).toFixed(4));
+    update();
+  };
+  $("#modal-fields [name=quantity]").oninput = update;
+  priceInput.oninput = update;
 }
 function openPharmacyEditBatch(batch) {
   openModal("Correct medicine batch / expiry", `<p><b>${esc(batch.product_name)}</b></p><label>Batch / lot number<input name="batchNumber" maxlength="80" value="${esc(batch.batch_number)}" required></label><label>Expiry date<input name="expiryDate" type="date" value="${esc(batch.expiry_date || "")}" required></label><p class="form-hint">Confirm the value against the manufacturer's packaging before saving. Unknown-expiry legacy stock stays unavailable until verified.</p>`, async form => {
