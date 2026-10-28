@@ -31,6 +31,15 @@ try {
   ok("header can grow instead of clipping wrapped controls");
 } catch (error) { fail("responsive header: " + error.message); }
 
+console.log("Modal save actions");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8"), start = app.indexOf("function openModal("), end = app.indexOf("function closeModal", start), modal = app.slice(start, end);
+  if (start < 0 || end < 0 || !modal.includes('submit.classList.remove("hidden")') || !modal.includes("submit.disabled = false")) fail("a read-only modal can hide Save on the next Add/Receive form");
+  if (!modal.includes('cancel.textContent = t("Cancel")')) fail("modal Close/Cancel labels can leak into the next form");
+  if (!app.includes('$("#cancel-modal").textContent = t("Close")') || !app.includes('closeModal(); openPharmacyReceiveBatch();')) fail("Pharmacy batch list does not distinguish Close from Receive batch Save");
+  ok("Batches & expiry is a read-only list; Receive batch and Add medicine always restore Save");
+} catch (error) { fail("modal save actions: " + error.message); }
+
 console.log("Translations");
 try {
   const bn = JSON.parse(readFileSync(join(root, "i18n", "bn.json"), "utf8"));

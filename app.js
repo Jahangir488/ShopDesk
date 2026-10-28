@@ -2084,7 +2084,13 @@ function closeDialogElement(element) {
 function openModal(title, markup, onSave) {
   $("#modal-title").textContent = t(title);
   const submit = $("#submit-modal");
-  if (submit) submit.textContent = t("Save");
+  if (submit) {
+    submit.textContent = t("Save");
+    submit.classList.remove("hidden");
+    submit.disabled = false;
+  }
+  const cancel = $("#cancel-modal");
+  if (cancel) cancel.textContent = t("Cancel");
   const errorBanner = $("#modal-error-banner");
   if (errorBanner) {
     errorBanner.textContent = "";
@@ -4086,6 +4092,7 @@ async function openPharmacyBatchManager() {
     }).join("") : '<tr><td colspan="7" class="empty">No medicine batches recorded. Add a medicine or receive the first batch.</td></tr>';
     openModal("Medicine batches & expiry", `<div class="pharmacy-batch-toolbar"><div><b>${batches.length} recorded batches</b><p class="form-hint">Sales use earliest-expiring eligible stock first. Expired, unknown-expiry, and returned/quarantined units are not sellable.</p></div><button type="button" class="button primary" id="pharmacy-receive-batch">＋ Receive batch</button></div><div class="pharmacy-expiry-summary"><div><b>${expired}</b><span>Expired lots with stock</span></div><div><b>${soon}</b><span>Expiring within 90 days</span></div><div><b>${unknown}</b><span>Need expiry verification</span></div></div><div class="table-scroll supplier-table"><table><thead><tr><th>Medicine</th><th>Batch / lot</th><th>Expiry date</th><th>Remaining</th><th>Sellable</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div>`, async () => {});
     $("#submit-modal").classList.add("hidden");
+    $("#cancel-modal").textContent = t("Close");
     $("#pharmacy-receive-batch").onclick = () => { closeModal(); openPharmacyReceiveBatch(); };
     dialog.querySelectorAll("[data-edit-pharmacy-batch]").forEach(button => button.onclick = () => {
       const batch = batches.find(item => Number(item.id) === Number(button.dataset.editPharmacyBatch));
