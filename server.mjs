@@ -323,8 +323,13 @@ CREATE TABLE IF NOT EXISTS medicine_details (
   generic_name TEXT NOT NULL DEFAULT '',
   strength TEXT NOT NULL DEFAULT '',
   dosage_form TEXT NOT NULL DEFAULT '',
-  manufacturer TEXT NOT NULL DEFAULT ''
+  manufacturer TEXT NOT NULL DEFAULT '',
+  sale_units TEXT NOT NULL DEFAULT '[]',
+  allow_loose INTEGER NOT NULL DEFAULT 1
 );`);
+const medicineDetailColumns = new Set(db.prepare("PRAGMA table_info(medicine_details)").all().map(column => column.name));
+if (!medicineDetailColumns.has("sale_units")) db.exec("ALTER TABLE medicine_details ADD COLUMN sale_units TEXT NOT NULL DEFAULT '[]'");
+if (!medicineDetailColumns.has("allow_loose")) db.exec("ALTER TABLE medicine_details ADD COLUMN allow_loose INTEGER NOT NULL DEFAULT 1");
 db.exec(`CREATE TABLE IF NOT EXISTS bills (
   id INTEGER PRIMARY KEY, date TEXT NOT NULL, customer TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '',
   payment TEXT NOT NULL, discount REAL NOT NULL DEFAULT 0 CHECK(discount>=0), total REAL NOT NULL CHECK(total>=0),
@@ -536,7 +541,8 @@ function upgradeRestoredDatabase() {
   );
   CREATE TABLE IF NOT EXISTS medicine_details (
     product_id INTEGER PRIMARY KEY, generic_name TEXT NOT NULL DEFAULT '', strength TEXT NOT NULL DEFAULT '',
-    dosage_form TEXT NOT NULL DEFAULT '', manufacturer TEXT NOT NULL DEFAULT ''
+    dosage_form TEXT NOT NULL DEFAULT '', manufacturer TEXT NOT NULL DEFAULT '',
+    sale_units TEXT NOT NULL DEFAULT '[]', allow_loose INTEGER NOT NULL DEFAULT 1
   );
   `);
   upgradeSalesReturnsSchema();
@@ -583,6 +589,8 @@ function upgradeRestoredDatabase() {
     INSERT OR IGNORE INTO offsite_backup(id) VALUES(1);`);
   // A backup from an older Shop Desk version may not contain Pharmacy tables.
   // Recreate compatible empty tables and preserve its existing product data.
+  ensure("medicine_details", "sale_units", "TEXT NOT NULL DEFAULT '[]'");
+  ensure("medicine_details", "allow_loose", "INTEGER NOT NULL DEFAULT 1");
   ensurePharmacyDetails();
   ensureCategoryShopTypes();
 }
@@ -831,6 +839,61 @@ const addDaysToDate = (date, days) => {
 
 const currentShopType = () => db.prepare("SELECT shop_type FROM settings WHERE id=1").get()?.shop_type || "general";
 const pharmacyMode = () => currentShopType() === "pharmacy";
+
+function parseMedicineUnits(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string" || !value.trim()) return [];
+  try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+}
+
+function normalizeMedicineUnits(input, baseUnit) {
+  const rows = parseMedicineUnits(input);
+  if (rows.length > 2) throw httpError(400, "Configure at most 2 package levels per medicine, such as strip and box.");
+  const seen = new Set([String(baseUnit || "unit").trim().toLocaleLowerCase()]);
+  return rows.map(row => {
+    const name = String(row?.name || "").trim().slice(0, 30), factor = Number(row?.factor), price = Number(row?.price);
+    if (!name || name.toLocaleLowerCase() === String(baseUnit || "").trim().toLocaleLowerCase()) throw httpError(400, "Each package unit needs a name different from the internal stock unit.");
+    if (seen.has(name.toLocaleLowerCase())) throw httpError(400, `Selling unit "${name}" is configured more than once.`);
+    if (!(factor >= 1) || factor > 1000000) throw httpError(400, `Enter how many ${baseUnit || "base units"} are in one ${name} (1 to 1,000,000).`);
+    if (!validAmount(price)) throw httpError(400, `Enter a valid selling price per ${name}.`);
+    seen.add(name.toLocaleLowerCase());
+    return { name, factor: Number(factor.toFixed(6)), price: Number(price.toFixed(4)) };
+  });
+}
+
+function medicineUnitDetails(product) {
+  if (Object.hasOwn(product, "sale_units")) return { sale_units: product.sale_units, allow_loose: product.allow_loose };
+  return db.prepare("SELECT sale_units,allow_loose FROM medicine_details WHERE product_id=?").get(Number(product.id)) || { sale_units: "[]", allow_loose: 1 };
+}
+
+function resolveMedicineSale(item, product) {
+  const selectedName = String(item.saleUnit || "").trim(), details = medicineUnitDetails(product), baseName = String(product.unit || "piece");
+  if (!selectedName) {
+    if (Number(details.allow_loose ?? 1) === 0) throw httpError(409, `${product.name} cannot be sold as individual ${baseName}. Choose a configured package unit.`);
+    return { qty: Number(item.qty), price: Number(item.price), saleUnit: "", saleQty: null, salePrice: null, unitFactor: 1 };
+  }
+  const isBase = selectedName.toLocaleLowerCase() === baseName.toLocaleLowerCase();
+  if (isBase && Number(details.allow_loose ?? 1) === 0) throw httpError(409, `${product.name} cannot be sold as individual ${baseName}. Choose a configured package unit.`);
+  const option = isBase ? { name: baseName, factor: 1 } : parseMedicineUnits(details.sale_units).find(unit => String(unit.name).toLocaleLowerCase() === selectedName.toLocaleLowerCase());
+  if (!option) throw httpError(400, `Selling unit "${selectedName}" is not configured for ${product.name}.`);
+  const saleQty = Number(item.saleQty), salePrice = Number(item.salePrice);
+  if (!(saleQty > 0) || !Number.isFinite(saleQty)) throw httpError(400, `Enter a valid quantity in ${option.name} for ${product.name}.`);
+  if (!validAmount(salePrice)) throw httpError(400, `Enter a valid selling price per ${option.name} for ${product.name}.`);
+  return { qty: Number((saleQty * Number(option.factor)).toFixed(6)), price: salePrice / Number(option.factor), saleUnit: option.name, saleQty, salePrice, unitFactor: Number(option.factor) };
+}
+
+function resolveMedicinePurchase(item, product) {
+  const selectedName = String(item.purchaseUnit || "").trim();
+  if (!selectedName) return { qty: Number(item.qty), cost: Number(item.cost), purchaseUnit: "", purchaseQuantity: null, purchasePrice: null, unitFactor: 1 };
+  const details = medicineUnitDetails(product), baseName = String(product.unit || "piece");
+  const isBase = selectedName.toLocaleLowerCase() === baseName.toLocaleLowerCase();
+  const option = isBase ? { name: baseName, factor: 1 } : parseMedicineUnits(details.sale_units).find(unit => String(unit.name).toLocaleLowerCase() === selectedName.toLocaleLowerCase());
+  if (!option) throw httpError(400, `Purchase unit "${selectedName}" is not configured for ${product.name}.`);
+  const purchaseQuantity = Number(item.purchaseQuantity), purchasePrice = Number(item.purchasePrice);
+  if (!(purchaseQuantity > 0) || !Number.isFinite(purchaseQuantity)) throw httpError(400, `Enter a valid purchase quantity in ${option.name} for ${product.name}.`);
+  if (!validAmount(purchasePrice)) throw httpError(400, `Enter a valid purchase price per ${option.name} for ${product.name}.`);
+  return { qty: Number((purchaseQuantity * Number(option.factor)).toFixed(6)), cost: purchasePrice / Number(option.factor), purchaseUnit: option.name, purchaseQuantity, purchasePrice, unitFactor: Number(option.factor) };
+}
 
 function ensurePharmacyBatches() {
   if (currentShopType() !== "pharmacy") return;
@@ -1088,11 +1151,16 @@ function saveBill(body, user, editId = 0) {
     if (editId) { if (!old) throw httpError(404, "Bill not found."); restoreBillStock(editId, user.username); }
     const used = new Map(), lines = [];
     for (const item of items) {
-      const id = Number(item.productId), qty = Number(item.qty), price = Number(item.price);
+      const id = Number(item.productId);
+      let qty = Number(item.qty), price = Number(item.price), saleUnit = "", saleQty = null, salePrice = null, unitFactor = 1;
       const product = db.prepare("SELECT * FROM products WHERE id=?").get(id);
       if (!product) throw httpError(404, `Product ID #${id} was not found in inventory.`);
+      if (settings.shop_type === "pharmacy") {
+        const resolved = resolveMedicineSale(item, product);
+        ({ qty, price, saleUnit, saleQty, salePrice, unitFactor } = resolved);
+      }
       if (!validQty(qty, product.unit, product.pack_size > 0 ? 0.000001 : 0.001, product.pack_size > 0)) throw httpError(400, `Enter a valid quantity for "${product.name}" in unit "${product.unit}".`);
-      if (!validAmount(item.price)) throw httpError(400, `Enter a valid price for "${product.name}".`);
+      if (!validAmount(price)) throw httpError(400, `Enter a valid price for "${product.name}".`);
       used.set(id, (used.get(id) || 0) + qty);
       const availableStock = settings.shop_type === "pharmacy" ? pharmacyAvailableQty(id) : Number(product.qty);
       if (used.get(id) > availableStock + 0.000001) throw httpError(409, `Not enough ${settings.shop_type === "pharmacy" ? "unexpired, non-quarantined " : ""}stock for "${product.name}". Available: ${availableStock} ${product.unit || "piece"}, requested on bill: ${used.get(id)}.`);
@@ -1102,7 +1170,7 @@ function saveBill(body, user, editId = 0) {
       if (!Number.isInteger(warrantyMonths) || warrantyMonths < 0 || warrantyMonths > 120 ||
           (deviceTracked && (!Number.isInteger(qty) || serials.length !== qty || serials.some(value => value.length < 4 || value.length > 60))) ||
           serials.some(value => value.length > 60)) throw httpError(400, `${product.name} needs one valid IMEI/serial for each whole device sold. Warranty must be 0 to 120 months.`);
-      lines.push({ product, qty, price, serials, warrantyMonths });
+      lines.push({ product, qty, price, saleUnit, saleQty, salePrice, unitFactor, serials, warrantyMonths });
     }
     const allSerials = lines.flatMap(line => line.serials).map(value => value.toLocaleUpperCase());
     if (new Set(allSerials).size !== allSerials.length) throw httpError(400, "The same IMEI/serial was entered more than once on this bill.");
@@ -1124,7 +1192,7 @@ function saveBill(body, user, editId = 0) {
     const paidNow = editId ? 0 : (raw === undefined || raw === null || raw === "" ? total : Number(raw));
     if (!(paidNow >= 0) || paidNow > total + 0.001) throw httpError(400, `Paid amount (${paidNow}) cannot be more than the bill total (${total}).`);
     const date = old ? old.date : today();
-    const snapshot = JSON.stringify(lines.map(({ product, qty, price, serials, warrantyMonths }) => ({ productId: product.id, name: productLabel(product), category: product.category, brand: product.brand || "", color: product.color || "", size: product.size || "", material: product.material || "", unit: product.unit, packName: product.pack_name, packSize: product.pack_size, qty, price, serials, warrantyMonths })));
+    const snapshot = JSON.stringify(lines.map(({ product, qty, price, saleUnit, saleQty, salePrice, unitFactor, serials, warrantyMonths }) => ({ productId: product.id, name: productLabel(product), category: product.category, brand: product.brand || "", color: product.color || "", size: product.size || "", material: product.material || "", unit: product.unit, packName: product.pack_name, packSize: product.pack_size, qty, price, saleUnit, saleQty, salePrice, unitFactor, serials, warrantyMonths })));
     let billId = editId;
     if (editId) {
       db.prepare("UPDATE bills SET customer=?,phone=?,discount=?,total=?,lines=?,tax_amount=?,tax_rate=?,tax_mode=? WHERE id=?").run(customer, phone, discount, total, snapshot, taxAmount, taxRate, taxMode, editId);
@@ -1403,12 +1471,18 @@ function stateFor(user) {
     permissions: publicUser(user).permissions,
     categories: db.prepare("SELECT id,name FROM categories WHERE shop_type=? ORDER BY CASE WHEN name='Other' THEN 1 ELSE 0 END, name COLLATE NOCASE").all(settings?.shop_type || "general"),
     products: (inventory || supplierEditPermission
-      ? db.prepare(`SELECT p.*,md.generic_name,md.strength,md.dosage_form,md.manufacturer FROM products p LEFT JOIN medicine_details md ON md.product_id=p.id ORDER BY p.name`).all()
+      ? db.prepare(`SELECT p.*,md.generic_name,md.strength,md.dosage_form,md.manufacturer,md.sale_units,md.allow_loose FROM products p LEFT JOIN medicine_details md ON md.product_id=p.id ORDER BY p.name`).all()
       : (salesPermission || onlineOrdersPermission)
         ? db.prepare(`SELECT p.id,p.name,p.sku,p.barcode,p.price,p.cost,p.qty,p.min,p.icon,p.unit,p.pack_name,p.pack_size,p.category,p.brand,p.color,p.size,p.material,
-            md.generic_name,md.strength,md.dosage_form,md.manufacturer
+            md.generic_name,md.strength,md.dosage_form,md.manufacturer,md.sale_units,md.allow_loose
           FROM products p LEFT JOIN medicine_details md ON md.product_id=p.id ORDER BY p.name`).all()
-        : []).map(product => pharmacyAvailability ? { ...product, available_to_sell: pharmacyAvailability.get(Number(product.id)) || 0 } : product),
+        : []).map(product => {
+          const result = pharmacyAvailability ? { ...product, available_to_sell: pharmacyAvailability.get(Number(product.id)) || 0 } : { ...product };
+          result.medicine_units = parseMedicineUnits(result.sale_units);
+          result.allow_loose = result.allow_loose === undefined || result.allow_loose === null ? true : Boolean(result.allow_loose);
+          delete result.sale_units;
+          return result;
+        }),
     dues: salesPermission ? duesSummary() : null,
     sales: salesPermission ? db.prepare(`SELECT s.*,
       b.customer AS bill_customer, b.phone AS bill_phone, b.total AS bill_total,
@@ -1944,9 +2018,13 @@ async function handleApi(request, response, url) {
     if (!requirePermission(user,"inventory")) return json(response,403,{error:"Inventory access is required to receive medicine stock."});
     const body = await readJson(request), productId = Number(body.productId);
     const batchNumber = String(body.batchNumber || "").trim().slice(0,80), expiryDate = String(body.expiryDate || "").trim();
-    const quantity = Number(body.quantity), unitCost = Number(body.unitCost);
+    let quantity = Number(body.quantity), unitCost = Number(body.unitCost);
     const product = db.prepare("SELECT * FROM products WHERE id=?").get(productId);
     if (!product) return json(response,404,{error:"Medicine not found."});
+    if (body.purchaseUnit) {
+      const purchase = resolveMedicinePurchase(body, product);
+      quantity = purchase.qty; unitCost = purchase.cost;
+    }
     if (!validText(batchNumber) || !validDate(expiryDate) || !validQty(quantity,product.unit,0.001,Number(product.pack_size)>0) || !validAmount(unitCost)) {
       return json(response,400,{error:"Enter a batch number, valid expiry date, positive quantity, and non-negative unit cost."});
     }
@@ -1960,7 +2038,7 @@ async function handleApi(request, response, url) {
       const after = Number((Number(product.qty)+quantity).toFixed(6));
       const averageCost = after > 0 ? Math.round(((Number(product.qty)*Number(product.cost)+quantity*unitCost)/after)*100)/100 : unitCost;
       db.prepare("UPDATE products SET qty=?,cost=? WHERE id=?").run(after,averageCost,productId);
-      recordStockMovement(product,"pharmacy batch receipt",quantity,after,user.username,batchNumber,`Batch ${batchNumber}; expires ${expiryDate}.`,unitCost);
+      recordStockMovement(product,"pharmacy batch receipt",quantity,after,user.username,batchNumber,`${body.purchaseUnit ? `${Number(body.purchaseQuantity)} ${body.purchaseUnit} = ${quantity} ${product.unit}. ` : ""}Batch ${batchNumber}; expires ${expiryDate}.`,unitCost);
       db.exec("COMMIT");
       return json(response,201,stateFor(user));
     } catch (error) { try { db.exec("ROLLBACK"); } catch {} if (error.status) return json(response,error.status,{error:error.message}); if (String(error.message).includes("UNIQUE")) return json(response,409,{error:"That batch number already exists for this medicine."}); throw error; }
@@ -2040,8 +2118,8 @@ async function handleApi(request, response, url) {
     const category = typeof body.category === "string" && body.category.trim() ? body.category.trim() : "Other";
     const barcode = String(body.barcode || "").trim().slice(0, 120);
     const price = Number(body.price);
-    const cost = Number(body.cost);
-    const qty = Number(body.qty);
+    let cost = Number(body.cost);
+    let qty = Number(body.qty);
     const min = Number(body.min);
     const packSize = Number(body.pack_size || 0), packName = String(body.pack_name || "").trim().slice(0, 20);
     const batchNumber = String(body.batchNumber || "").trim().slice(0,80), expiryDate = String(body.expiryDate || "").trim();
@@ -2052,6 +2130,16 @@ async function handleApi(request, response, url) {
       manufacturer: String(body.manufacturer || "").trim().slice(0,160)
     };
     const pharmacy = pharmacyMode();
+    const saleUnits = pharmacy ? normalizeMedicineUnits(body.sale_units || [], unit) : [];
+    const allowLoose = body.allow_loose === undefined ? true : Boolean(body.allow_loose);
+    if (pharmacy && !allowLoose && !saleUnits.length) return json(response, 400, { error: "Allow individual-unit sales or configure at least one package selling unit." });
+    if (pharmacy && body.purchaseUnit) {
+      if (Number(body.purchaseQuantity || 0) === 0) { qty = 0; cost = 0; }
+      else {
+        const purchase = resolveMedicinePurchase(body, { unit, sale_units: saleUnits, allow_loose: allowLoose ? 1 : 0 });
+        qty = purchase.qty; cost = purchase.cost;
+      }
+    }
     if (pharmacy && qty > 0 && (!validText(batchNumber) || !validDate(expiryDate))) {
       return json(response,400,{error:"For opening stock, enter the medicine batch number and expiry date. You can receive more stock later from Batches & expiry."});
     }
@@ -2061,7 +2149,7 @@ async function handleApi(request, response, url) {
     if (!validAmount(price)) return json(response, 400, { error: "Selling price must be a valid non-negative number." });
     if (!validAmount(cost)) return json(response, 400, { error: "Cost price must be a valid non-negative number." });
     if (!categoryId(category)) return json(response, 400, { error: `Category "${category}" does not exist. Please pick or create a valid category.` });
-    if (!validQty(qty, unit, 0, packSize > 0)) return json(response, 400, { error: `Quantity (${body.qty}) is not valid for unit "${unit}". Whole numbers required unless using fractional units (kg, liter, meter, etc.).` });
+    if (!validQty(qty, unit, 0, packSize > 0)) return json(response, 400, { error: `Quantity (${qty}) is not valid for unit "${unit}". Whole numbers required unless using fractional units (kg, liter, meter, etc.).` });
     if (!validQty(min, unit, 0, packSize > 0)) return json(response, 400, { error: `Low-stock alert (${body.min}) is not valid for unit "${unit}".` });
     if (unit.length > 30) return json(response, 400, { error: "Unit must be 30 characters or fewer." });
     if (!(packSize >= 0) || packSize > 1000000) return json(response, 400, { error: "Pack size must be between 0 and 1,000,000." });
@@ -2077,12 +2165,12 @@ async function handleApi(request, response, url) {
         .run(name, sku, price, cost, qty, min, String(body.icon || "📦").slice(0, 16), unit, category, packName, packSize, barcode, clothing.brand, clothing.color, clothing.size, clothing.material);
       const productId = Number(created.lastInsertRowid);
       if (pharmacy) {
-        db.prepare("INSERT INTO medicine_details(product_id,generic_name,strength,dosage_form,manufacturer) VALUES(?,?,?,?,?)")
-          .run(productId,medicineDetails.generic_name,medicineDetails.strength,medicineDetails.dosage_form,medicineDetails.manufacturer);
+        db.prepare("INSERT INTO medicine_details(product_id,generic_name,strength,dosage_form,manufacturer,sale_units,allow_loose) VALUES(?,?,?,?,?,?,?)")
+          .run(productId,medicineDetails.generic_name,medicineDetails.strength,medicineDetails.dosage_form,medicineDetails.manufacturer,JSON.stringify(saleUnits),allowLoose?1:0);
         if (Number(qty)>0) db.prepare(`INSERT INTO medicine_batches(product_id,batch_number,expiry_date,quantity_received,quantity_remaining,quantity_quarantined,unit_cost,received_date,created_by)
           VALUES(?,?,?,?,?,0,?,?,?)`).run(productId,batchNumber,expiryDate,qty,qty,cost,today(),user.username);
       }
-      if (Number(qty) > 0) recordStockMovement({ id: productId, name, unit, cost }, "opening stock", qty, qty, user.username, "New product", pharmacy ? `Batch ${batchNumber}; expires ${expiryDate}.` : "");
+      if (Number(qty) > 0) recordStockMovement({ id: productId, name, unit, cost }, "opening stock", qty, qty, user.username, "New product", pharmacy ? `${body.purchaseUnit ? `${Number(body.purchaseQuantity)} ${body.purchaseUnit} = ${qty} ${unit}. ` : ""}Batch ${batchNumber}; expires ${expiryDate}.` : "");
       db.exec("COMMIT");
       return json(response, 201, stateFor(user));
     } catch (error) {
@@ -2112,6 +2200,11 @@ async function handleApi(request, response, url) {
     const clothingKeys = ["brand", "color", "size", "material"];
     const clothing = Object.fromEntries(clothingKeys.map(key => [key, typeof body[key] === "string" ? body[key].trim().slice(0, 60) : product[key]]));
     const category = typeof body.category === "string" ? body.category.trim() : product.category;
+    const pharmacy = pharmacyMode();
+    const existingMedicine = pharmacy ? db.prepare("SELECT sale_units,allow_loose FROM medicine_details WHERE product_id=?").get(Number(productMatch[1])) : null;
+    const saleUnits = pharmacy ? normalizeMedicineUnits(Object.hasOwn(body, "sale_units") ? body.sale_units : parseMedicineUnits(existingMedicine?.sale_units), unit) : [];
+    const allowLoose = Object.hasOwn(body, "allow_loose") ? Boolean(body.allow_loose) : existingMedicine ? Boolean(existingMedicine.allow_loose) : true;
+    if (pharmacy && !allowLoose && !saleUnits.length) return json(response, 400, { error: "Allow individual-unit sales or configure at least one package selling unit." });
 
     if (!name) return json(response, 400, { error: "Product name is required." });
     if (name.length > 200) return json(response, 400, { error: "Product name must be 200 characters or fewer." });
@@ -2128,8 +2221,8 @@ async function handleApi(request, response, url) {
     const result = db.prepare("UPDATE products SET name=?,sku=?,barcode=?,price=?,cost=?,qty=?,min=?,unit=?,category=?,pack_name=?,pack_size=?,brand=?,color=?,size=?,material=? WHERE id=?")
       .run(name, sku, barcode, price, cost, qty, min, unit, category, packName, packSize, clothing.brand, clothing.color, clothing.size, clothing.material, Number(productMatch[1]));
     if (!result.changes) return json(response, 404, { error: "Inventory item not found." });
-    if (pharmacyMode()) db.prepare("INSERT INTO medicine_details(product_id,generic_name,strength,dosage_form,manufacturer) VALUES(?,?,?,?,?) ON CONFLICT(product_id) DO UPDATE SET generic_name=excluded.generic_name,strength=excluded.strength,dosage_form=excluded.dosage_form,manufacturer=excluded.manufacturer")
-      .run(Number(productMatch[1]),String(body.genericName||"").trim().slice(0,160),String(body.strength||"").trim().slice(0,80),String(body.dosageForm||"").trim().slice(0,80),String(body.manufacturer||"").trim().slice(0,160));
+    if (pharmacy) db.prepare("INSERT INTO medicine_details(product_id,generic_name,strength,dosage_form,manufacturer,sale_units,allow_loose) VALUES(?,?,?,?,?,?,?) ON CONFLICT(product_id) DO UPDATE SET generic_name=excluded.generic_name,strength=excluded.strength,dosage_form=excluded.dosage_form,manufacturer=excluded.manufacturer,sale_units=excluded.sale_units,allow_loose=excluded.allow_loose")
+      .run(Number(productMatch[1]),String(body.genericName||"").trim().slice(0,160),String(body.strength||"").trim().slice(0,80),String(body.dosageForm||"").trim().slice(0,80),String(body.manufacturer||"").trim().slice(0,160),JSON.stringify(saleUnits),allowLoose?1:0);
     if (Math.abs(qty - product.qty) > 1e-6) recordStockMovement({ ...product, name, unit, cost }, "manual adjustment", qty - product.qty, qty, user.username, "Inventory edit", "Quantity set from item editor.");
     return json(response, 200, stateFor(user));
   }
@@ -2422,11 +2515,16 @@ async function handleApi(request, response, url) {
       if (!supplier) throw httpError(404, "Choose an active supplier.");
       const items = lines.map(line => {
         const product = db.prepare("SELECT * FROM products WHERE id=?").get(Number(line.productId));
-        const qty = Number(line.qty), cost = Number(line.cost);
+        if (!product) throw httpError(400, "A purchase line has no valid inventory product.");
+        let qty = Number(line.qty), cost = Number(line.cost);
+        if (pharmacyPurchase && line.purchaseUnit) {
+          const purchase = resolveMedicinePurchase(line, product);
+          qty = purchase.qty; cost = purchase.cost;
+        }
         const batchNumber = String(line.batchNumber||"").trim().slice(0,80), expiryDate = String(line.expiryDate||"").trim();
-        if (!product || !validQty(qty, product.unit, 0.001, product.pack_size > 0) || !validAmount(cost)) throw httpError(400, "A purchase line is invalid. Check the product, quantity, and buying cost.");
+        if (!validQty(qty, product.unit, 0.001, product.pack_size > 0) || !validAmount(cost)) throw httpError(400, "A purchase line is invalid. Check the product, quantity, and buying cost.");
         if (pharmacyPurchase && (!validText(batchNumber) || !validDate(expiryDate))) throw httpError(400,"Every Pharmacy purchase line needs a batch number and expiry date.");
-        return { product, qty, cost, batchNumber, expiryDate, total: Math.round(qty * cost * 100) / 100 };
+        return { product, qty, cost, batchNumber, expiryDate, purchaseUnit: pharmacyPurchase ? String(line.purchaseUnit || "") : "", purchaseQuantity: Number(line.purchaseQuantity || 0), total: Math.round(qty * cost * 100) / 100 };
       });
       const total = Math.round(items.reduce((sum, item) => sum + item.total, 0) * 100) / 100;
       if (paid > total + 0.001) throw httpError(400, "Payment cannot be more than this purchase total.");
@@ -2447,7 +2545,7 @@ async function handleApi(request, response, url) {
           else db.prepare(`INSERT INTO medicine_batches(product_id,batch_number,expiry_date,quantity_received,quantity_remaining,quantity_quarantined,unit_cost,supplier_id,purchase_id,received_date,created_by)
             VALUES(?,?,?,?,?,0,?,?,?,?,?)`).run(product.id,item.batchNumber,item.expiryDate,qty,qty,cost,supplierId,id,date,user.username);
         }
-        recordStockMovement(current, "purchase", qty, after, user.username, "P-" + String(id).padStart(8, "0"), pharmacyPurchase ? `Supplier: ${supplier.name}; batch ${item.batchNumber}; expiry ${item.expiryDate}` : `Supplier: ${supplier.name}`, cost);
+        recordStockMovement(current, "purchase", qty, after, user.username, "P-" + String(id).padStart(8, "0"), pharmacyPurchase ? `${item.purchaseUnit ? `${item.purchaseQuantity} ${item.purchaseUnit} = ${qty} ${product.unit}. ` : ""}Supplier: ${supplier.name}; batch ${item.batchNumber}; expiry ${item.expiryDate}` : `Supplier: ${supplier.name}`, cost);
       }
       if (paid > 0) db.prepare("INSERT INTO supplier_payments(supplier_id,date,amount,method,note,received_by) VALUES(?,?,?,?,?,?)")
         .run(supplierId, date, paid, method, `Payment on purchase P-${String(id).padStart(8, "0")}`, user.username);
@@ -2970,7 +3068,7 @@ async function handleApi(request, response, url) {
     if (!validAmount(deliveryCharge)) return json(response, 400, { error: "Delivery charge must be a valid non-negative number." });
     if (!validAmount(discount)) return json(response, 400, { error: "Discount must be a valid non-negative number." });
     if (!validAmount(advancePaid)) return json(response, 400, { error: "Advance payment must be a valid non-negative number." });
-    if (!items.length) return json(response, 400, { error: "Please add at least one clothing item to the order." });
+    if (!items.length) return json(response, 400, { error: "Please add at least one product item to the order." });
     if (items.length > 50) return json(response, 400, { error: "An order can contain at most 50 items." });
 
     db.exec("BEGIN IMMEDIATE");
@@ -2981,10 +3079,13 @@ async function handleApi(request, response, url) {
 
       for (const item of items) {
         const productId = Number(item.productId);
-        const qty = Number(item.qty);
-        const price = Number(item.price);
+        let qty = Number(item.qty), price = Number(item.price), saleUnit = "", saleQty = null, salePrice = null, unitFactor = 1;
         const product = db.prepare("SELECT * FROM products WHERE id=?").get(productId);
         if (!product) throw httpError(404, `Product ID #${productId} was not found in inventory.`);
+        if (pharmacyMode()) {
+          const resolved = resolveMedicineSale(item, product);
+          ({ qty, price, saleUnit, saleQty, salePrice, unitFactor } = resolved);
+        }
         if (!validQty(qty, product.unit, 0.001) || qty <= 0) throw httpError(400, `Enter a valid quantity for item "${product.name}".`);
         if (!validAmount(price)) throw httpError(400, `Enter a valid price for item "${product.name}".`);
         const availableStock = pharmacyMode() ? Math.min(Number(product.qty), pharmacyAvailableQty(product.id)) : Number(product.qty);
@@ -3004,6 +3105,10 @@ async function handleApi(request, response, url) {
           unit: product.unit || "piece",
           qty,
           price,
+          saleUnit,
+          saleQty,
+          salePrice,
+          unitFactor,
           lineTotal,
           cost: product.cost || 0
         });
@@ -3057,7 +3162,7 @@ async function handleApi(request, response, url) {
       const paid = Number(order.advance_paid || 0);
       const billId = Number(db.prepare(`INSERT INTO bills(date,customer,phone,payment,discount,total,cashier,lines,tax_amount,tax_rate,tax_mode,delivery_charge)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(order.date, order.customer_name, order.customer_phone, paid > 0 ? order.payment_method : "Due", order.discount, order.total, user.username,
-        JSON.stringify(lines.map(line => ({ productId: line.productId, name: [line.name, line.brand, line.size, line.color, line.material].filter(Boolean).join(" · "), category: line.category, brand: line.brand || "", color: line.color || "", size: line.size || "", material: line.material || "", unit: line.unit || "piece", qty: line.qty, price: line.price, serials: [], warrantyMonths: 0 }))), 0, 0, "none", order.delivery_charge).lastInsertRowid);
+        JSON.stringify(lines.map(line => ({ productId: line.productId, name: [line.name, line.brand, line.size, line.color, line.material].filter(Boolean).join(" · "), category: line.category, brand: line.brand || "", color: line.color || "", size: line.size || "", material: line.material || "", unit: line.unit || "piece", qty: line.qty, price: line.price, saleUnit: line.saleUnit || "", saleQty: line.saleQty ?? null, salePrice: line.salePrice ?? null, unitFactor: line.unitFactor || 1, serials: [], warrantyMonths: 0 }))), 0, 0, "none", order.delivery_charge).lastInsertRowid);
       if (paid > 0) db.prepare("INSERT INTO bill_payments(bill_id,date,amount,method,received_by) VALUES(?,?,?,?,?)").run(billId, order.date, paid, order.payment_method || "Cash", user.username);
       let discountLeft = Number(order.discount || 0);
       const subtotal = Number(order.subtotal || 0);
@@ -3198,10 +3303,13 @@ async function handleApi(request, response, url) {
         subtotal = 0;
         for (const item of body.items) {
           const productId = Number(item.productId);
-          const qty = Number(item.qty);
-          const price = Number(item.price);
+          let qty = Number(item.qty), price = Number(item.price), saleUnit = "", saleQty = null, salePrice = null, unitFactor = 1;
           const product = db.prepare("SELECT * FROM products WHERE id=?").get(productId);
           if (!product) throw httpError(404, `Product ID #${productId} not found in inventory.`);
+          if (pharmacyMode()) {
+            const resolved = resolveMedicineSale(item, product);
+            ({ qty, price, saleUnit, saleQty, salePrice, unitFactor } = resolved);
+          }
           if (!validQty(qty, product.unit, 0.001) || qty <= 0) throw httpError(400, `Enter a valid quantity for item "${product.name}".`);
           if (!validAmount(price)) throw httpError(400, `Enter a valid price for item "${product.name}".`);
           const lineTotal = Math.round(qty * price * 100) / 100;
@@ -3217,6 +3325,10 @@ async function handleApi(request, response, url) {
             unit: product.unit || "piece",
             qty,
             price,
+            saleUnit,
+            saleQty,
+            salePrice,
+            unitFactor,
             lineTotal,
             cost: product.cost || 0
           });

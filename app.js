@@ -896,6 +896,74 @@ function pharmacyFormFields(product = {}, includeOpeningBatch = false) {
   </fieldset>`;
 }
 
+function medicineUnitFormValues(product = {}) {
+  const units = [...(product.medicine_units || [])].sort((a, b) => Number(a.factor) - Number(b.factor));
+  const inner = units.length > 1 ? units[0] : null, supplier = units.length > 1 ? units[1] : units[0] || null;
+  return {
+    supplierUnit: supplier?.name || (product.id ? "" : "box"), innerUnit: inner?.name || (product.id ? "" : "strip"),
+    innerPerSupplier: inner && supplier ? Number((supplier.factor / inner.factor).toFixed(6)) : 10,
+    basePerInner: Number((inner?.factor || supplier?.factor || 10).toFixed(6)),
+    supplierPrice: supplier?.price ?? "", innerPrice: inner?.price ?? "", allowLoose: product.allow_loose !== false
+  };
+}
+
+function pharmacyUnitFormFields(product = {}, includePurchase = false) {
+  const values = medicineUnitFormValues(product), base = product.unit || "tablet";
+  return `<fieldset class="pharmacy-fields pharmacy-unit-fields"><legend>Packaging &amp; selling units</legend>
+    <div class="form-row"><label>Supplier / outer unit<input name="supplierUnit" maxlength="30" value="${esc(values.supplierUnit)}" placeholder="box, bottle, pack"></label><label>Inner selling unit (optional)<input name="innerUnit" maxlength="30" value="${esc(values.innerUnit)}" placeholder="strip, packet"></label></div>
+    <div class="form-row"><label id="inner-per-supplier-wrap"><span id="inner-per-supplier-label">Inner units / outer unit</span><input name="innerPerSupplier" type="number" min="0.000001" step="any" value="${values.innerPerSupplier}"></label><label><span id="base-per-inner-label">Base units / inner unit</span><input name="basePerInner" type="number" min="0.000001" step="any" value="${values.basePerInner}"></label></div>
+    <div class="form-row"><label id="inner-selling-price-wrap">Selling price per <span class="inner-unit-label">${esc(values.innerUnit)}</span> (${esc(currencySymbol())})<input name="innerPrice" type="number" min="0" step="any" value="${esc(values.innerPrice)}" placeholder="Auto from base price"><small class="form-hint" id="inner-price-auto"></small></label><label>Selling price per <span class="supplier-unit-label">${esc(values.supplierUnit)}</span> (${esc(currencySymbol())})<input name="supplierPrice" type="number" min="0" step="any" value="${esc(values.supplierPrice)}" placeholder="Auto from base price"><small class="form-hint" id="supplier-price-auto"></small></label></div>
+    <label class="setting-check"><input type="checkbox" name="allowLoose" ${values.allowLoose ? "checked" : ""}> Allow sales as individual <span class="base-unit-label">${esc(base)}</span> (only when appropriate for this medicine)</label>
+    <p class="form-hint">Stock always stays in the internal base unit. Package prices can be set independently; blank prices use base selling price × conversion.</p>
+    ${includePurchase ? `<div class="pharmacy-batch-opening"><h4>Opening purchase</h4><div class="form-row"><label><span id="purchase-quantity-label">Supplier units purchased</span><input name="purchaseQuantity" type="number" min="0" step="any" value="0" required></label><label><span id="purchase-price-label">Purchase price per supplier unit</span> (${esc(currencySymbol())})<input name="purchasePrice" type="number" min="0" step="any" value="0" required></label></div><div class="pharmacy-purchase-calculator" aria-live="polite"><div><small>Calculated inventory</small><b id="medicine-calculated-stock">0 ${esc(base)}</b><span id="medicine-purchase-calculation"></span></div><div><small>Total purchase cost</small><b id="medicine-total-cost">${money(0)}</b></div><div><small>Cost per <span class="base-unit-label">${esc(base)}</span></small><b id="medicine-base-cost">${money(0)}</b></div></div><small class="form-hint">Verify quantities and packaging against the supplier invoice. The batch and expiry above are saved with this opening stock.</small></div>` : ""}
+  </fieldset>`;
+}
+
+function readPharmacyUnitForm(form) {
+  const baseUnit = String(form.get("unit") || "tablet").trim(), basePrice = Number(form.get("price") || 0);
+  const supplierUnit = String(form.get("supplierUnit") || "").trim(), innerUnit = String(form.get("innerUnit") || "").trim();
+  const innerPerSupplier = Number(form.get("innerPerSupplier") || 0), basePerInner = Number(form.get("basePerInner") || 0);
+  const price = (field, factor) => String(form.get(field) ?? "").trim() === "" ? basePrice * factor : Number(form.get(field));
+  const units = [];
+  if (supplierUnit && innerUnit) {
+    units.push({ name: innerUnit, factor: basePerInner, price: price("innerPrice", basePerInner) });
+    units.push({ name: supplierUnit, factor: basePerInner * innerPerSupplier, price: price("supplierPrice", basePerInner * innerPerSupplier) });
+  } else if (supplierUnit) units.push({ name: supplierUnit, factor: basePerInner, price: price("supplierPrice", basePerInner) });
+  const purchaseQuantity = Number(form.get("purchaseQuantity") || 0), purchasePrice = Number(form.get("purchasePrice") || 0);
+  const purchaseUnit = supplierUnit || baseUnit, purchaseFactor = supplierUnit ? units.find(unit => unit.name === supplierUnit)?.factor || 1 : 1;
+  return { baseUnit, supplierUnit, innerUnit, innerPerSupplier, basePerInner, units, allowLoose: form.get("allowLoose") === "on", purchaseUnit, purchaseQuantity, purchasePrice, qty: purchaseQuantity * purchaseFactor, cost: purchaseQuantity > 0 && purchaseFactor > 0 ? purchasePrice / purchaseFactor : 0 };
+}
+
+function attachPharmacyUnitCalculator(includePurchase = false) {
+  const modalForm = $("#modal-form");
+  if (!modalForm) return;
+  const update = () => {
+    const config = readPharmacyUnitForm(new FormData(modalForm)), base = config.baseUnit || "unit";
+    document.querySelectorAll("#modal-fields .base-unit-label").forEach(label => label.textContent = base);
+    document.querySelectorAll("#modal-fields .inner-unit-label").forEach(label => label.textContent = config.innerUnit || "inner unit");
+    document.querySelectorAll("#modal-fields .supplier-unit-label").forEach(label => label.textContent = config.supplierUnit || base);
+    $("#inner-per-supplier-label").textContent = `${config.innerUnit || "Inner units"} / ${config.supplierUnit || "outer unit"}`;
+    $("#base-per-inner-label").textContent = config.innerUnit ? `${base} / ${config.innerUnit}` : `${base} / ${config.supplierUnit || "supplier unit"}`;
+    $("#inner-per-supplier-wrap")?.classList.toggle("hidden", !config.innerUnit);
+    $("#inner-selling-price-wrap")?.classList.toggle("hidden", !config.innerUnit);
+    if ($("#inner-price-auto")) $("#inner-price-auto").textContent = config.innerUnit ? `Blank = ${money(config.units[0]?.price || 0)} per ${config.innerUnit}` : "";
+    if ($("#supplier-price-auto")) $("#supplier-price-auto").textContent = config.supplierUnit ? `Blank = ${money(config.units.find(unit => unit.name === config.supplierUnit)?.price || 0)} per ${config.supplierUnit}` : "";
+    if (!includePurchase) return;
+    $("#purchase-quantity-label").textContent = `${config.purchaseUnit} purchased`;
+    $("#purchase-price-label").textContent = `Purchase price per ${config.purchaseUnit}`;
+    const qty = Number.isFinite(config.qty) ? config.qty : 0, total = config.purchaseQuantity * config.purchasePrice;
+    $("#medicine-calculated-stock").textContent = `${+qty.toFixed(6)} ${base}`;
+    $("#medicine-purchase-calculation").textContent = config.supplierUnit && config.innerUnit
+      ? `${config.purchaseQuantity} ${config.supplierUnit} × ${config.innerPerSupplier} ${config.innerUnit}/${config.supplierUnit} × ${config.basePerInner} ${base}/${config.innerUnit}`
+      : `${config.purchaseQuantity} ${config.purchaseUnit} × ${config.supplierUnit ? config.basePerInner : 1} ${base}/${config.purchaseUnit}`;
+    $("#medicine-total-cost").textContent = money(Number.isFinite(total) ? total : 0);
+    $("#medicine-base-cost").textContent = `${money(Number.isFinite(config.cost) ? config.cost : 0)} / ${base}`;
+  };
+  modalForm.addEventListener("input", update);
+  modalForm.addEventListener("change", update);
+  update();
+}
+
 function attachClothingChipEvents() {
   $("#modal-fields")?.querySelectorAll(".quick-chips").forEach(box => {
     const targetName = box.dataset.target;
@@ -1138,12 +1206,12 @@ function openOnlineOrderModal(orderId = 0) {
   const couriers = ["Steadfast Courier", "Pathao Courier", "RedX", "Paperfly", "Sundarban Courier", "SA Paribahan", "In-house Delivery", "Other"];
   const paymentMethods = ["Cash on Delivery", "bKash", "Nagad", "Card", "Bank Transfer", "Paid in full"];
 
-  const stockedProducts = data.products.filter(p => p.qty > 0 || (existing && (existing.lines || []).some(l => Number(l.productId) === Number(p.id))));
+  const stockedProducts = data.products.filter(p => productSellableQty(p) > 0 || (existing && (existing.lines || []).some(l => Number(l.productId) === Number(p.id))));
   if (!stockedProducts.length && !existing) return toast("No products in stock to create an online order.");
 
   let cart = existing ? (existing.lines || []).map(l => {
     const p = data.products.find(x => Number(x.id) === Number(l.productId));
-    return {
+    const line = {
       productId: l.productId,
       name: l.name,
       category: l.category || p?.category || "Other",
@@ -1154,8 +1222,14 @@ function openOnlineOrderModal(orderId = 0) {
       price: Number(l.price),
       qty: Number(l.qty),
       cost: Number(l.cost || p?.cost || 0),
-      max: p ? Number((p.qty + (existing.stock_deducted ? l.qty : 0)).toFixed(6)) : l.qty
+      max: p ? Number(((data.shopType === "pharmacy" ? productSellableQty(p) : Number(p.qty)) + (existing.stock_deducted ? Number(l.qty) : 0)).toFixed(6)) : Number(l.qty),
+      ...(p ? pharmacyLineFields(p) : pharmacyLineFields({ price: l.price }))
     };
+    if (data.shopType === "pharmacy" && l.saleUnit) {
+      line.mode = pharmacyModeForUnit(line, l.saleUnit);
+      if (Number.isFinite(Number(l.salePrice))) line.unitPrices[line.mode] = Number(l.salePrice);
+    }
+    return line;
   }) : [];
 
   const title = existing ? `Edit Online Order ${esc(existing.order_no)}` : "New Online Order";
@@ -1214,7 +1288,7 @@ function openOnlineOrderModal(orderId = 0) {
         </thead>
         <tbody id="order-cart-lines"></tbody>
       </table>
-      <div class="empty" id="order-cart-empty">No items added yet. Search and pick clothing items above.</div>
+      <div class="empty" id="order-cart-empty">No items added yet. Search and pick products above.</div>
     </div>
     <div class="form-row">
       <label>Delivery charge (${esc(currencySymbol())})<input name="deliveryCharge" id="order-delivery-charge" type="number" min="0" step="0.01" value="${Number(existing?.delivery_charge ?? 60)}" required></label>
@@ -1266,6 +1340,7 @@ function openOnlineOrderModal(orderId = 0) {
         name: l.name,
         qty: l.qty,
         price: l.price,
+        ...(data.shopType === "pharmacy" ? { saleUnit: unitOf(l).name, saleQty: l.qty / unitOf(l).f, salePrice: l.price * unitOf(l).f } : {}),
         size: l.size,
         color: l.color,
         brand: l.brand,
@@ -1325,10 +1400,11 @@ function openOnlineOrderModal(orderId = 0) {
         line.size ? `<span class="cloth-size-badge">${esc(line.size)}</span>` : "",
         line.color ? `<span class="cloth-color-badge">${esc(line.color)}</span>` : ""
       ].filter(Boolean).join(" ");
+      const selected = unitOf(line), pharmacy = data.shopType === "pharmacy";
       return `<tr>
-        <td class="product-cell"><b>${esc(line.name)}</b>${details ? `<br>${details}` : ""}<br><small class="form-hint">In stock: ${line.max} ${esc(line.unit)}</small></td>
-        <td><input type="number" min="0" step="0.01" class="bill-input" data-i="${i}" data-f="price" value="${Number(line.price)}" style="width:80px"></td>
-        <td><input type="number" min="0.001" step="any" max="${line.max}" class="bill-input" data-i="${i}" data-f="qty" value="${Number(line.qty)}" style="width:65px"></td>
+        <td class="product-cell"><b>${esc(line.name)}</b>${details ? `<br>${details}` : ""}<br><small class="form-hint">Available: ${pharmacy ? `${+(line.max / selected.f).toFixed(3)} ${esc(selected.name)} · ` : ""}${line.max} ${esc(line.unit)}</small></td>
+        <td>${pharmacy ? priceCell(line, i) : `<input type="number" min="0" step="0.01" class="bill-input" data-i="${i}" data-f="price" value="${Number(line.price)}" style="width:80px">`}</td>
+        <td>${pharmacy ? qtyCell(line, i) : `<input type="number" min="0.001" step="any" max="${line.max}" class="bill-input" data-i="${i}" data-f="qty" value="${Number(line.qty)}" style="width:65px">`}</td>
         <td><b>${money(line.price * line.qty)}</b></td>
         <td><button type="button" class="user-action danger" data-remove="${i}">×</button></td>
       </tr>`;
@@ -1341,7 +1417,7 @@ function openOnlineOrderModal(orderId = 0) {
     if (!product) return;
     const existingLine = cart.find(l => Number(l.productId) === Number(product.id));
     if (!existingLine) {
-      cart.push({
+      const line = {
         productId: product.id,
         name: product.name,
         category: product.category || "Other",
@@ -1352,12 +1428,22 @@ function openOnlineOrderModal(orderId = 0) {
         price: Number(product.price),
         cost: Number(product.cost || 0),
         qty: 1,
-        max: Number(product.qty)
-      });
-    } else if (existingLine.qty < existingLine.max) {
-      existingLine.qty++;
+        max: Number(productSellableQty(product)),
+        ...pharmacyLineFields(product)
+      };
+      if (data.shopType === "pharmacy") {
+        const selected = unitOf(line);
+        if (line.max + 0.000001 < selected.f) return toast(`Only ${line.max} ${line.unit} of ${line.name} is available; not enough for one ${selected.name}.`);
+        line.mode = selected.key;
+        line.qty = selected.f;
+        const configured = line.unitPrices?.[selected.key];
+        if (configured !== undefined) line.price = configured / selected.f;
+      }
+      cart.push(line);
     } else {
-      return toast(`Only ${existingLine.max} ${existingLine.unit} of ${existingLine.name} in stock.`);
+      const increment = data.shopType === "pharmacy" ? unitOf(existingLine).f : 1;
+      if (existingLine.qty + increment <= existingLine.max + 0.000001) existingLine.qty = Number((existingLine.qty + increment).toFixed(6));
+      else return toast(`Only ${existingLine.max} ${existingLine.unit} of ${existingLine.name} in stock.`);
     }
     drawCart();
     $("#order-product-search")?.focus();
@@ -1375,11 +1461,32 @@ function openOnlineOrderModal(orderId = 0) {
     const input = e.target;
     const line = cart[input.dataset.i];
     if (!line) return;
-    if (input.dataset.f === "price") line.price = Number(input.value) || 0;
+    if (input.dataset.f === "mode") {
+      const selected = unitOf({ ...line, mode: input.value });
+      if (line.max + 0.000001 < selected.f) { toast(`Only ${line.max} ${line.unit} of ${line.name} is available; not enough for one ${selected.name}.`); return drawCart(); }
+      line.mode = selected.key;
+      line.qty = selected.f;
+      const configured = line.unitPrices?.[selected.key];
+      if (configured !== undefined) line.price = configured / selected.f;
+      return drawCart();
+    }
+    const selected = unitOf(line), value = Number(input.value) || 0;
+    if (data.shopType === "pharmacy" && input.dataset.f === "price") {
+      line.price = value / selected.f;
+      line.unitPrices = line.unitPrices || {};
+      line.unitPrices[selected.key] = value;
+    } else if (input.dataset.f === "price") line.price = value;
     if (input.dataset.f === "qty") {
-      let val = Number(input.value) || 0;
-      if (val > line.max) { val = line.max; input.value = val; toast(`Only ${line.max} ${line.unit} available in stock.`); }
-      line.qty = val;
+      if (data.shopType === "pharmacy") {
+        let qty = Math.round(value * selected.f * 1e6) / 1e6;
+        if (!isFractional(line.unit)) qty = Math.round(qty);
+        if (qty > line.max) { qty = line.max; input.value = +(qty / selected.f).toFixed(6); toast(`Only ${line.max} ${line.unit} available in stock.`); }
+        line.qty = qty;
+      } else {
+        let val = value;
+        if (val > line.max) { val = line.max; input.value = val; toast(`Only ${line.max} ${line.unit} available in stock.`); }
+        line.qty = val;
+      }
     }
     input.closest("tr").cells[3].innerHTML = `<b>${money(line.price * line.qty)}</b>`;
     calculate();
@@ -2205,7 +2312,29 @@ $("#profile-button").onclick = () => {
   };
 };
 
+function openMedicineProductForm(product = null) {
+  const editing = Boolean(product), item = product || { unit: "tablet", min: 5, price: "", cost: 0, category: "Medicines" };
+  const categories = [...new Set([item.category || "Medicines", ...(data.categories || []).map(category => category.name)])];
+  const existingNames = [...new Map(data.products.map(medicine => [medicine.name.toLocaleLowerCase(), medicine])).values()];
+  openModal(editing ? "Edit medicine & units" : "Add medicine", `<label>Medicine name<input name="name" list="medicine-name-suggestions" maxlength="200" autocomplete="off" required value="${esc(item.name || "")}" placeholder="e.g. Napa 500 mg"><datalist id="medicine-name-suggestions">${existingNames.map(medicine => `<option value="${esc(medicine.name)}"></option>`).join("")}</datalist></label><div class="form-row"><label>Category<select name="category">${categories.map(name => `<option ${name === item.category ? "selected" : ""}>${esc(name)}</option>`).join("")}</select></label><label>SKU / item code<input name="sku" maxlength="100" value="${esc(item.sku || "")}" placeholder="Optional"></label></div><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" value="${esc(item.barcode || "")}" placeholder="Scan or enter barcode"></label>${pharmacyFormFields(item, !editing)}<div class="form-row"><label>Internal stock unit<input name="unit" maxlength="30" value="${esc(item.unit || "tablet")}" placeholder="tablet, capsule, ml, gram" required><small class="form-hint">Smallest practical unit used for stock, cost, batch deduction, and returns.</small></label><label>Selling price per <span class="base-unit-label">${esc(item.unit || "tablet")}</span> (${esc(currencySymbol())})<input name="price" type="number" min="0" step="any" value="${esc(item.price)}" required></label></div>${editing ? `<div class="form-row"><label>Purchase cost per <span class="base-unit-label">${esc(item.unit)}</span> (${esc(currencySymbol())})<input name="cost" type="number" min="0" step="any" value="${Number(item.cost)}" required></label><label>Low-stock alert at (<span class="base-unit-label">${esc(item.unit)}</span>)<input name="min" type="number" min="0" step="any" value="${Number(item.min)}" required></label></div><p class="form-hint">Current stock: <b>${Number(item.qty)} ${esc(item.unit)}</b>. Quantity remains batch-controlled; receive stock from Batches &amp; expiry or Supplier purchase.</p>` : `<label>Low-stock alert at (<span class="base-unit-label">${esc(item.unit)}</span>)<input name="min" type="number" min="0" step="any" value="${Number(item.min)}" required></label>`}${pharmacyUnitFormFields(item, !editing)}`, async form => {
+    const config = readPharmacyUnitForm(form);
+    if (!config.baseUnit) throw new Error("Enter the internal stock unit, such as tablet, capsule, ml, or gram.");
+    const payload = {
+      name: String(form.get("name") || "").trim(), category: form.get("category"), sku: String(form.get("sku") || "").trim(), barcode: String(form.get("barcode") || "").trim(),
+      genericName: form.get("genericName") || "", strength: form.get("strength") || "", dosageForm: form.get("dosageForm") || "", manufacturer: form.get("manufacturer") || "",
+      unit: config.baseUnit, price: Number(form.get("price")), min: Number(form.get("min")), sale_units: config.units, allow_loose: config.allowLoose
+    };
+    if (editing) Object.assign(payload, { cost: Number(form.get("cost")), qty: Number(item.qty) });
+    else Object.assign(payload, { cost: config.cost, qty: config.qty, batchNumber: String(form.get("batchNumber") || "").trim(), expiryDate: form.get("expiryDate") || "", purchaseUnit: config.purchaseUnit, purchaseQuantity: config.purchaseQuantity, purchasePrice: config.purchasePrice });
+    const result = await api(editing ? `/api/products/${item.id}` : "/api/products", { method: editing ? "PATCH" : "POST", body: JSON.stringify(payload) });
+    data = result; render(); toast(editing ? "Medicine and selling units updated" : `Medicine added: ${+config.qty.toFixed(6)} ${config.baseUnit} in opening stock`);
+  });
+  attachPharmacyFormMedexEvents();
+  attachPharmacyUnitCalculator(!editing);
+}
+
 $("#add-product").onclick = () => {
+  if (data.shopType === "pharmacy") return openMedicineProductForm();
   const categories = data.categories || [];
   const existingNames = [...new Map(data.products.map(item => [item.name.toLocaleLowerCase(), item])).values()];
   const clothing = clothingFormFields();
@@ -2526,6 +2655,7 @@ $("#products-table").onclick = event => {
   if (button.dataset.action !== "rename-product" || !canEditItems) return;
   const product = data.products.find(item => String(item.id) === String(id));
   if (!product) return toast("Inventory item not found. Refresh and try again.");
+  if (data.shopType === "pharmacy") return openMedicineProductForm(product);
   const oldCategory = product.category || "Other";
   const clothing = clothingFormFields(product);
   const pharmacy = pharmacyFormFields(product, false);
@@ -2773,8 +2903,22 @@ const smallUnit = unit => {
   return null;
 };
 const fmtQty = (qty, unit) => { const small = smallUnit(unit); return small && qty < 1 ? `${+(qty * small.factor).toFixed(1)} ${small.name}` : `${qty} ${unit}`; };
-// Each bill line can be typed in its own unit: the item's unit, a smaller one (kg to gm), or a pack such as a coil.
+function medicinePurchaseUnits(product) {
+  return [{ name: product.unit || "piece", factor: 1 }, ...(product.medicine_units || []).map(unit => ({ name: unit.name, factor: Number(unit.factor) }))];
+}
+function pharmacyLineFields(product) {
+  const medicineUnits = Array.isArray(product.medicine_units) ? product.medicine_units : [];
+  const unitPrices = { base: Number(product.price || 0) };
+  for (const unit of medicineUnits) unitPrices[`medicine:${String(unit.name).toLocaleLowerCase()}`] = Number(unit.price || 0);
+  return { medicineUnits, allowLoose: product.allow_loose !== false, unitPrices };
+}
+// Each bill line can be typed in its own unit: the item's unit, a smaller one (kg to gm), or a configured Pharmacy package.
 const lineUnits = line => {
+  if (data.shopType === "pharmacy") {
+    const list = line.allowLoose === false ? [] : [{ key: "base", name: line.unit, f: 1 }];
+    for (const unit of line.medicineUnits || []) list.push({ key: `medicine:${String(unit.name).toLocaleLowerCase()}`, name: unit.name, f: Number(unit.factor) });
+    return list.length ? list : [{ key: "base", name: line.unit, f: 1 }];
+  }
   const custom = line.packSize > 0, small = custom ? null : smallUnit(line.unit);
   const list = [{ key: "base", name: line.unit, f: 1 }];
   if (custom) list.push({ key: "custom", name: line.packName || "part", f: line.packSize });
@@ -2782,19 +2926,22 @@ const lineUnits = line => {
   return list;
 };
 const unitOf = line => lineUnits(line).find(u => u.key === line.mode) || lineUnits(line)[0];
+const pharmacyModeForUnit = (line, name) => lineUnits(line).find(unit => String(unit.name).toLocaleLowerCase() === String(name || "").toLocaleLowerCase())?.key || "base";
 const qtyCell = (line, i) => {
-  const units = lineUnits(line), u = unitOf(line), packed = line.packSize > 0, frac = isFractional(line.unit) || packed;
-  const step = u.key === "small" ? 1 : packed ? "any" : frac ? "0.001" : 1;
-  const box = units.length > 1 ? `<select class="bill-input qty-unit" data-i="${i}" data-f="mode">${units.map(x => `<option value="${x.key}" ${x.key === u.key ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : esc(line.unit);
-  const min = u.key === "small" || u.key === "base" && !frac ? 1 : 0.0001;
-  return `<input class="bill-input qty-input" data-i="${i}" data-f="qty" type="number" min="${min}" max="${+(line.max * u.f).toFixed(3)}" step="${step}" value="${+(line.qty * u.f).toFixed(3)}" required> ${box}`;
+  const units = lineUnits(line), u = unitOf(line), pharmacy = data.shopType === "pharmacy", packed = !pharmacy && line.packSize > 0, frac = isFractional(line.unit) || packed;
+  const step = pharmacy ? (isFractional(line.unit) ? "any" : 1) : u.key === "small" ? 1 : packed ? "any" : frac ? "0.001" : 1;
+  const box = units.length > 1 ? `<select class="bill-input qty-unit" data-i="${i}" data-f="mode" aria-label="Selling unit">${units.map(x => `<option value="${esc(x.key)}" ${x.key === u.key ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : esc(line.unit);
+  const min = pharmacy ? (isFractional(line.unit) ? 0.000001 : 1) : u.key === "small" || u.key === "base" && !frac ? 1 : 0.0001;
+  const shownQty = pharmacy ? line.qty / u.f : line.qty * u.f, maxQty = pharmacy ? line.max / u.f : line.max * u.f;
+  return `<input class="bill-input qty-input" data-i="${i}" data-f="qty" type="number" min="${min}" max="${+maxQty.toFixed(6)}" step="${step}" value="${+shownQty.toFixed(6)}" required> ${box}`;
 };
 // Price is kept per stock unit (per coil); for a cut length it is shown and typed per metre/foot.
 const priceCell = (line, i) => {
-  const u = unitOf(line), custom = u.key === "custom", shown = custom ? line.price / u.f : line.price;
-  return `<input class="bill-input" data-i="${i}" data-f="price" type="number" min="0" step="any" value="${+shown.toFixed(4)}" required>${custom ? `<br><small>per ${esc(u.name)}</small>` : ""}`;
+  const u = unitOf(line), pharmacy = data.shopType === "pharmacy", custom = !pharmacy && u.key === "custom", shown = pharmacy ? line.price * u.f : custom ? line.price / u.f : line.price;
+  return `<input class="bill-input" data-i="${i}" data-f="price" type="number" min="0" step="any" value="${+shown.toFixed(4)}" required>${pharmacy || custom ? `<br><small>per ${esc(u.name)}</small>` : ""}`;
 };
 const lineDetail = l => {
+  if (l.saleUnit && Number(l.saleQty) > 0) return `${+Number(l.saleQty).toFixed(6)} ${l.saleUnit} × ${money(Number(l.salePrice ?? (l.price * (l.unitFactor || 1))))}/${l.saleUnit} = ${fmtQty(l.qty, l.unit)}`;
   if (l.packSize > 0) {
     const parts = +(l.qty * l.packSize).toFixed(2), name = l.packName || "part";
     return `${l.qty < 1 ? "" : `${+l.qty.toFixed(3)} ${l.unit} = `}${parts} ${name} × ${money(l.price / l.packSize)}/${name}`;
@@ -2899,7 +3046,7 @@ ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive f
     if (below.length && !confirm(`Warning: these items are priced below purchase cost: ${below.map(line => line.name).join(", ")}. Continue anyway?`)) return false;
     const payload = {
       paid: form.get("paid"),
-      items: cart.map(line => ({ productId: line.id, qty: line.qty, price: line.price, serials: line.serials || [], warrantyMonths: line.warrantyMonths || 0 })),
+      items: cart.map(line => ({ productId: line.id, qty: line.qty, price: line.price, ...(data.shopType === "pharmacy" ? { saleUnit: unitOf(line).name, saleQty: line.qty / unitOf(line).f, salePrice: line.price * unitOf(line).f } : {}), serials: line.serials || [], warrantyMonths: line.warrantyMonths || 0 })),
       customer: form.get("customer"),
       phone: form.get("phone"),
       payment: form.get("payment"),
@@ -2968,16 +3115,29 @@ ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive f
     }
   };
   const draw = () => {
-    $("#bill-lines").innerHTML = cart.map((line, i) => `<tr><td class="product-cell">${esc(line.name)}</td><td>${priceCell(line, i)}</td><td>${qtyCell(line, i)}</td><td><b>${money(line.price * line.qty)}</b></td><td>${data.shopType === "mobile" && /smartphone|feature phone|tablet|mobile phone/i.test(line.category) ? `<label class="device-fields"><small>One IMEI/serial per unit</small><textarea data-i="${i}" data-f="serials" rows="2" placeholder="Enter each on a new line">${esc((line.serials || []).join("\n"))}</textarea><small>Warranty months</small><input class="bill-input" data-i="${i}" data-f="warranty" type="number" min="0" max="120" step="1" value="${Number(line.warrantyMonths || 0)}"></label>` : ""}</td><td><button type="button" class="user-action danger" data-remove="${i}">Remove</button></td></tr>`).join("");
+    $("#bill-lines").innerHTML = cart.map((line, i) => `<tr><td class="product-cell">${esc(line.name)}${data.shopType === "pharmacy" ? `<br><small class="form-hint">Available: ${+(line.max / unitOf(line).f).toFixed(3)} ${esc(unitOf(line).name)} · ${line.max} ${esc(line.unit)}</small>` : ""}</td><td>${priceCell(line, i)}</td><td>${qtyCell(line, i)}</td><td><b>${money(line.price * line.qty)}</b></td><td>${data.shopType === "mobile" && /smartphone|feature phone|tablet|mobile phone/i.test(line.category) ? `<label class="device-fields"><small>One IMEI/serial per unit</small><textarea data-i="${i}" data-f="serials" rows="2" placeholder="Enter each on a new line">${esc((line.serials || []).join("\n"))}</textarea><small>Warranty months</small><input class="bill-input" data-i="${i}" data-f="warranty" type="number" min="0" max="120" step="1" value="${Number(line.warrantyMonths || 0)}"></label>` : ""}</td><td><button type="button" class="user-action danger" data-remove="${i}">Remove</button></td></tr>`).join("");
     $("#bill-empty").classList.toggle("hidden", cart.length > 0);
     totals();
   };
   const addProduct = item => {
     if (!item) return;
     const existing = cart.find(line => line.id === item.id);
-    if (!existing) cart.push({ id: item.id, name: productLabel(item), category: item.category || "", serials: [], warrantyMonths: 12, unit: item.unit || "piece", packSize: item.pack_size || 0, packName: item.pack_name, price: item.price, cost: item.cost, qty: 1, max: +(productSellableQty(item) + (extra[item.id] || 0)).toFixed(6) });
-    else if (existing.qty < existing.max) existing.qty++;
-    else { toast(`Only ${existing.max} ${existing.unit} of ${existing.name} in stock.`); return; }
+    if (!existing) {
+      const line = { id: item.id, name: productLabel(item), category: item.category || "", serials: [], warrantyMonths: 12, unit: item.unit || "piece", packSize: item.pack_size || 0, packName: item.pack_name, price: item.price, cost: item.cost, qty: 1, max: +(productSellableQty(item) + (extra[item.id] || 0)).toFixed(6), ...pharmacyLineFields(item) };
+      if (data.shopType === "pharmacy") {
+        const selected = unitOf(line);
+        if (line.max + 0.000001 < selected.f) return toast(`Only ${line.max} ${line.unit} of ${line.name} is available; not enough for one ${selected.name}.`);
+        line.mode = selected.key;
+        line.qty = selected.f;
+        const configured = line.unitPrices?.[selected.key];
+        if (configured !== undefined) line.price = configured / selected.f;
+      }
+      cart.push(line);
+    } else {
+      const increment = data.shopType === "pharmacy" ? unitOf(existing).f : 1;
+      if (existing.qty + increment <= existing.max + 0.000001) existing.qty = Number((existing.qty + increment).toFixed(6));
+      else { toast(`Only ${existing.max} ${existing.unit} of ${existing.name} in stock.`); return; }
+    }
     draw();
     $("#bill-search")?.focus();
   };
@@ -2992,17 +3152,38 @@ ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive f
   $("#bill-lines").oninput = event => {
     const input = event.target, line = cart[input.dataset.i];
     if (!line) return;
-    if (input.dataset.f === "mode") { line.mode = input.value; return draw(); }
+    if (input.dataset.f === "mode") {
+      if (data.shopType === "pharmacy") {
+        const selected = unitOf({ ...line, mode: input.value });
+        if (line.max + 0.000001 < selected.f) { toast(`Only ${fmtQty(line.max, line.unit)} of ${line.name} in stock; not enough for one ${selected.name}.`); return draw(); }
+        line.mode = selected.key;
+        line.qty = selected.f;
+        const configured = line.unitPrices?.[selected.key];
+        if (configured !== undefined) line.price = configured / selected.f;
+      } else line.mode = input.value;
+      return draw();
+    }
     if (input.dataset.f === "serials") { line.serials = input.value.split(/\r?\n/).map(value => value.trim()).filter(Boolean); return; }
     if (input.dataset.f === "warranty") { line.warrantyMonths = Number(input.value); return; }
-    const f = unitOf(line).f, value = Number(input.value) || 0;
+    const selected = unitOf(line), f = selected.f, value = Number(input.value) || 0;
     if (input.dataset.f === "qty") {
-      const prec = line.packSize > 0 ? 1e6 : 1e3;
-      let qty = Math.round(value / f * prec) / prec;
-      if (!isFractional(line.unit) && !(line.packSize > 0)) qty = Math.round(qty);
-      if (qty > line.max) { qty = line.max; input.value = +(qty * f).toFixed(3); toast(`Only ${fmtQty(line.max, line.unit)} of ${line.name} in stock.`); }
-      line.qty = qty;
-    } else { const u = unitOf(line); line.price = u.key === "custom" ? value * u.f : value; }
+      if (data.shopType === "pharmacy") {
+        let qty = Math.round(value * f * 1e6) / 1e6;
+        if (!isFractional(line.unit)) qty = Math.round(qty);
+        if (qty > line.max) { qty = line.max; input.value = +(qty / f).toFixed(6); toast(`Only ${fmtQty(line.max, line.unit)} of ${line.name} in stock.`); }
+        line.qty = qty;
+      } else {
+        const prec = line.packSize > 0 ? 1e6 : 1e3;
+        let qty = Math.round(value / f * prec) / prec;
+        if (!isFractional(line.unit) && !(line.packSize > 0)) qty = Math.round(qty);
+        if (qty > line.max) { qty = line.max; input.value = +(qty * f).toFixed(3); toast(`Only ${fmtQty(line.max, line.unit)} of ${line.name} in stock.`); }
+        line.qty = qty;
+      }
+    } else if (data.shopType === "pharmacy") {
+      line.price = value / f;
+      line.unitPrices = line.unitPrices || {};
+      line.unitPrices[selected.key] = value;
+    } else line.price = selected.key === "custom" ? value * f : value;
     input.closest("tr").cells[3].innerHTML = `<b>${money(line.price * line.qty)}</b>`;
     totals();
   };
@@ -3819,7 +4000,7 @@ async function openSupplierHub() {
 function openPurchaseEntry(suppliers, editing = null) {
   const supplierOptions = suppliers.map(s => `<option value="${s.id}">${esc(s.name)} · due ${supplierMoney(s.balance)}</option>`).join("");
   const productOptions = (selectedId = 0) => data.products.map(p => `<option value="${p.id}" data-cost="${Number(p.cost)}" ${p.id === Number(selectedId) ? "selected" : ""}>${esc(productLabel(p))} · ${esc(p.unit || "piece")} · stock ${Number(p.qty)}</option>`).join("");
-  const row = (item = {}) => `<tr><td><select class="purchase-product" required><option value="">Select product</option>${productOptions(item.productId)}</select>${data.shopType === "pharmacy" ? `<div class="pharmacy-purchase-batch"><label>Batch / lot<input class="purchase-batch" maxlength="80" value="${esc(item.batchNumber || "")}" required></label><label>Expiry<input class="purchase-expiry" type="date" value="${esc(item.expiryDate || "")}" required></label></div>` : ""}</td><td><input class="purchase-qty" type="number" min="0.001" step="any" value="${Number(item.qty ?? 1)}" required></td><td><input class="purchase-cost" type="number" min="0" step="0.01" value="${Number(item.cost ?? 0)}" required></td><td class="purchase-line-total">৳0.00</td><td><button type="button" class="user-action danger purchase-remove">Remove</button></td></tr>`;
+  const row = (item = {}) => `<tr><td><select class="purchase-product" required><option value="">Select product</option>${productOptions(item.productId)}</select>${data.shopType === "pharmacy" ? `<div class="pharmacy-purchase-batch"><label>Batch / lot<input class="purchase-batch" maxlength="80" value="${esc(item.batchNumber || "")}" required></label><label>Expiry<input class="purchase-expiry" type="date" value="${esc(item.expiryDate || "")}" required></label></div>` : ""}</td><td>${data.shopType === "pharmacy" ? `<select class="purchase-unit" aria-label="Purchase unit" required></select>` : ""}<input class="purchase-qty" type="number" min="0.000001" step="any" value="${Number(item.qty ?? 1)}" required>${data.shopType === "pharmacy" ? `<small class="form-hint purchase-base-qty"></small>` : ""}</td><td><input class="purchase-cost" type="number" min="0" step="any" value="${Number(item.cost ?? 0)}" required></td><td class="purchase-line-total">৳0.00</td><td><button type="button" class="user-action danger purchase-remove">Remove</button></td></tr>`;
   const lines = editing?.items?.length ? editing.items : [{}];
   const supplierField = editing
     ? `<label>Supplier<input value="${esc(editing.supplier_name)}" disabled></label>`
@@ -3827,8 +4008,13 @@ function openPurchaseEntry(suppliers, editing = null) {
   const paymentFields = editing
     ? `<p class="form-hint">Existing payments are kept in payment history. Stock is adjusted for item changes, and the item's current average cost is recalculated where enough stock remains.</p>`
     : `<div class="form-row supplier-purchase-payment"><label>Paid now (৳)<input name="paid" type="number" min="0" step="0.01" value="0" required></label><label>Payment method<select name="method"><option>Cash</option><option>bKash</option><option>Nagad</option><option>Bank</option><option>Other</option></select></label></div>`;
-  supplierModal(editing ? `Edit purchase P-${String(editing.id).padStart(8, "0")}` : "Record supplier purchase", `${supplierField}<div class="form-row"><label>Purchase date<input name="date" type="date" value="${esc(editing?.date || supplierDate())}" required></label><label>Invoice / reference<input name="reference" maxlength="100" value="${esc(editing?.reference || "")}"></label></div><div class="table-scroll purchase-lines"><table><thead><tr><th>Product ${data.shopType === "pharmacy" ? "· Batch / expiry" : ""}</th><th>Quantity</th><th>Cost per unit (৳)</th><th>Line total</th><th></th></tr></thead><tbody id="purchase-lines">${lines.map(row).join("")}</tbody></table></div><button type="button" class="button secondary" id="purchase-line-add">＋ Add item</button>${paymentFields}<label>Note<input name="note" maxlength="500" value="${esc(editing?.note || "")}"></label><div class="bill-total"><span>Purchase total <b id="purchase-total">৳0.00</b></span>${editing ? "" : `<span>Due added <b id="purchase-due">৳0.00</b></span>`}</div>`, async form => {
-    const items = [...document.querySelectorAll("#purchase-lines tr")].map(tr => ({ productId: Number(tr.querySelector(".purchase-product").value), qty: Number(tr.querySelector(".purchase-qty").value), cost: Number(tr.querySelector(".purchase-cost").value), batchNumber: tr.querySelector(".purchase-batch")?.value.trim() || "", expiryDate: tr.querySelector(".purchase-expiry")?.value || "" }));
+  supplierModal(editing ? `Edit purchase P-${String(editing.id).padStart(8, "0")}` : "Record supplier purchase", `${supplierField}<div class="form-row"><label>Purchase date<input name="date" type="date" value="${esc(editing?.date || supplierDate())}" required></label><label>Invoice / reference<input name="reference" maxlength="100" value="${esc(editing?.reference || "")}"></label></div><div class="table-scroll purchase-lines"><table><thead><tr><th>Product ${data.shopType === "pharmacy" ? "· Batch / expiry" : ""}</th><th>${data.shopType === "pharmacy" ? "Purchase unit / quantity" : "Quantity"}</th><th>${data.shopType === "pharmacy" ? "Price per selected unit (৳)" : "Cost per unit (৳)"}</th><th>Line total</th><th></th></tr></thead><tbody id="purchase-lines">${lines.map(row).join("")}</tbody></table></div><button type="button" class="button secondary" id="purchase-line-add">＋ Add item</button>${paymentFields}<label>Note<input name="note" maxlength="500" value="${esc(editing?.note || "")}"></label><div class="bill-total"><span>Purchase total <b id="purchase-total">৳0.00</b></span>${editing ? "" : `<span>Due added <b id="purchase-due">৳0.00</b></span>`}</div>`, async form => {
+    const items = [...document.querySelectorAll("#purchase-lines tr")].map(tr => {
+      const productId = Number(tr.querySelector(".purchase-product").value), product = data.products.find(item => Number(item.id) === productId);
+      const purchaseQuantity = Number(tr.querySelector(".purchase-qty").value), purchasePrice = Number(tr.querySelector(".purchase-cost").value), purchaseUnit = tr.querySelector(".purchase-unit")?.value || "";
+      const selected = data.shopType === "pharmacy" && product ? medicinePurchaseUnits(product).find(unit => unit.name === purchaseUnit) : null, factor = Number(selected?.factor || 1);
+      return { productId, qty: selected ? purchaseQuantity * factor : purchaseQuantity, cost: selected ? purchasePrice / factor : purchasePrice, purchaseUnit, purchaseQuantity, purchasePrice, batchNumber: tr.querySelector(".purchase-batch")?.value.trim() || "", expiryDate: tr.querySelector(".purchase-expiry")?.value || "" };
+    });
     if (items.some(i => !i.productId || !(i.qty > 0) || !(i.cost >= 0))) throw new Error("Choose each product and enter a valid quantity and cost.");
     if (data.shopType === "pharmacy" && items.some(i => !i.batchNumber || !i.expiryDate)) throw new Error("Every Pharmacy purchase needs a batch number and expiry date.");
     const payload = { date: form.get("date"), reference: form.get("reference"), note: form.get("note"), items };
@@ -3840,16 +4026,37 @@ function openPurchaseEntry(suppliers, editing = null) {
     let total = 0;
     document.querySelectorAll("#purchase-lines tr").forEach(tr => {
       const qty = Number(tr.querySelector(".purchase-qty").value) || 0, cost = Number(tr.querySelector(".purchase-cost").value) || 0, line = qty * cost;
+      if (data.shopType === "pharmacy") {
+        const product = data.products.find(item => Number(item.id) === Number(tr.querySelector(".purchase-product").value));
+        const selected = product ? medicinePurchaseUnits(product).find(unit => unit.name === tr.querySelector(".purchase-unit").value) : null;
+        tr.querySelector(".purchase-base-qty").textContent = product && selected ? `= ${+(qty * Number(selected.factor)).toFixed(6)} ${product.unit} · ${supplierMoney(cost / Number(selected.factor))}/${product.unit}` : "Choose a medicine and purchase unit";
+      }
       tr.querySelector(".purchase-line-total").textContent = supplierMoney(line); total += line;
     });
     const paid = Number($("[name=paid]")?.value) || 0;
     $("#purchase-total").textContent = supplierMoney(total);
     if ($("#purchase-due")) $("#purchase-due").textContent = supplierMoney(Math.max(0, total - paid));
   };
+  const syncPurchaseRow = (tr, rebuildUnits = false) => {
+    const product = data.products.find(item => Number(item.id) === Number(tr.querySelector(".purchase-product").value));
+    if (data.shopType !== "pharmacy") {
+      if (product && rebuildUnits) tr.querySelector(".purchase-cost").value = Number(product.cost || 0);
+      return updateTotals();
+    }
+    if (!product) return updateTotals();
+    const select = tr.querySelector(".purchase-unit"), previous = select.value, units = medicinePurchaseUnits(product);
+    if (rebuildUnits || !select.options.length) select.innerHTML = units.map(unit => `<option value="${esc(unit.name)}">${esc(unit.name)} = ${unit.factor} ${esc(product.unit)}</option>`).join("");
+    if (!units.some(unit => unit.name === previous)) select.value = units.at(-1).name;
+    const selected = units.find(unit => unit.name === select.value) || units[0];
+    select.value = selected.name;
+    tr.querySelector(".purchase-cost").value = Number((Number(product.cost || 0) * Number(selected.factor)).toFixed(4));
+    updateTotals();
+  };
   $("#purchase-line-add").onclick = () => { $("#purchase-lines").insertAdjacentHTML("beforeend", row()); updateTotals(); };
   $("#purchase-lines").oninput = event => { if (event.target.matches(".purchase-qty,.purchase-cost")) updateTotals(); };
   $("#purchase-lines").onchange = event => {
-    if (event.target.matches(".purchase-product")) { const cost = event.target.selectedOptions[0]?.dataset.cost; if (cost !== undefined) event.target.closest("tr").querySelector(".purchase-cost").value = cost; updateTotals(); }
+    if (event.target.matches(".purchase-product")) syncPurchaseRow(event.target.closest("tr"), true);
+    if (event.target.matches(".purchase-unit")) syncPurchaseRow(event.target.closest("tr"));
   };
   $("#purchase-lines").onclick = event => { if (event.target.closest(".purchase-remove")) { if (document.querySelectorAll("#purchase-lines tr").length > 1) event.target.closest("tr").remove(); else toast("A purchase needs at least one item."); updateTotals(); } };
   const paidInput = $("[name=paid]");
@@ -3892,12 +4099,41 @@ function openPharmacyReceiveBatch() {
   const products = (data.products || []).filter(product => product.id);
   if (!products.length) return toast("Add a medicine before receiving stock.");
   const options = products.map(product => `<option value="${product.id}">${esc(product.name)} · ${esc(product.unit || "piece")} · current ${Number(product.qty || 0)}</option>`).join("");
-  openModal("Receive medicine batch", `<label>Medicine<select name="productId" required><option value="">Choose medicine</option>${options}</select></label><div class="form-row"><label>Batch / lot number<input name="batchNumber" maxlength="80" required placeholder="As printed on the pack"></label><label>Expiry date<input name="expiryDate" type="date" required></label></div><div class="form-row"><label>Quantity received<input name="quantity" type="number" min="0.001" step="any" required></label><label>Unit purchase cost (${esc(currencySymbol())})<input name="unitCost" type="number" min="0" step="0.01" required></label></div><p class="form-hint">Use the exact batch number and expiry printed by the manufacturer. For repeated receipts of the same batch, use the same batch number and expiry.</p>`, async form => {
-    const result = await api("/api/pharmacy/batches", { method: "POST", body: JSON.stringify({ productId: Number(form.get("productId")), batchNumber: form.get("batchNumber").trim(), expiryDate: form.get("expiryDate"), quantity: Number(form.get("quantity")), unitCost: Number(form.get("unitCost")) }) });
-    data = result;
-    render();
-    toast("Medicine batch received; stock and expiry are recorded.");
+  openModal("Receive medicine batch", `<label>Medicine<select name="productId" required><option value="">Choose medicine</option>${options}</select></label><div class="form-row"><label>Batch / lot number<input name="batchNumber" maxlength="80" required placeholder="As printed on the pack"></label><label>Expiry date<input name="expiryDate" type="date" required></label></div><div class="form-row"><label>Purchase unit<select name="purchaseUnit" required></select></label><label>Quantity received<input name="quantity" type="number" min="0.000001" step="any" value="1" required></label><label>Purchase price per selected unit (${esc(currencySymbol())})<input name="purchasePrice" type="number" min="0" step="any" value="0" required></label></div><div class="pharmacy-purchase-calculator" aria-live="polite"><div><small>Stock to add</small><b id="receive-base-qty">0</b></div><div><small>Total purchase cost</small><b id="receive-total-cost">${money(0)}</b></div><div><small>Cost per base unit</small><b id="receive-base-cost">${money(0)}</b></div></div><p class="form-hint">Use the exact batch number, expiry, packaging, and invoice price. ShopDesk converts the receipt to the medicine's internal stock unit.</p>`, async form => {
+    const product = products.find(item => Number(item.id) === Number(form.get("productId")));
+    if (!product) throw new Error("Choose a medicine before receiving the batch.");
+    const selected = medicinePurchaseUnits(product).find(unit => unit.name === form.get("purchaseUnit"));
+    if (!selected) throw new Error("Choose a configured purchase unit.");
+    const quantity = Number(form.get("quantity")), purchasePrice = Number(form.get("purchasePrice")), baseQuantity = quantity * Number(selected.factor), unitCost = purchasePrice / Number(selected.factor);
+    const result = await api("/api/pharmacy/batches", { method: "POST", body: JSON.stringify({ productId: Number(form.get("productId")), batchNumber: form.get("batchNumber").trim(), expiryDate: form.get("expiryDate"), quantity: baseQuantity, unitCost, purchaseUnit: selected?.name || product.unit, purchaseQuantity: quantity, purchasePrice }) });
+    data = result; render(); toast(`Medicine batch received: ${+baseQuantity.toFixed(6)} ${product.unit} added to stock.`);
   });
+  const productSelect = $("#modal-fields [name=productId]"), unitSelect = $("#modal-fields [name=purchaseUnit]"), priceInput = $("#modal-fields [name=purchasePrice]");
+  const update = () => {
+    const product = products.find(item => Number(item.id) === Number(productSelect.value)), selected = medicinePurchaseUnits(product || { unit: "unit" }).find(unit => unit.name === unitSelect.value) || { factor: 1, name: "unit" };
+    const quantity = Number($("#modal-fields [name=quantity]").value) || 0, price = Number(priceInput.value) || 0, factor = Number(selected.factor || 1), base = product?.unit || "base unit";
+    $("#receive-base-qty").textContent = `${+(quantity * factor).toFixed(6)} ${base}`;
+    $("#receive-total-cost").textContent = money(quantity * price);
+    $("#receive-base-cost").textContent = `${money(factor > 0 ? price / factor : 0)} / ${base}`;
+  };
+  productSelect.onchange = () => {
+    const product = products.find(item => Number(item.id) === Number(productSelect.value));
+    if (!product) { unitSelect.innerHTML = ""; priceInput.value = 0; update(); return; }
+    const units = medicinePurchaseUnits(product);
+    unitSelect.innerHTML = units.map(unit => `<option value="${esc(unit.name)}">${esc(unit.name)} = ${unit.factor} ${esc(product.unit)}</option>`).join("");
+    unitSelect.value = units.at(-1).name;
+    priceInput.value = Number((Number(product.cost || 0) * Number(units.at(-1).factor)).toFixed(4));
+    update();
+  };
+  unitSelect.onchange = () => {
+    const product = products.find(item => Number(item.id) === Number(productSelect.value));
+    if (!product) { update(); return; }
+    const selected = medicinePurchaseUnits(product).find(unit => unit.name === unitSelect.value);
+    if (selected) priceInput.value = Number((Number(product.cost || 0) * Number(selected.factor)).toFixed(4));
+    update();
+  };
+  $("#modal-fields [name=quantity]").oninput = update;
+  priceInput.oninput = update;
 }
 function openPharmacyEditBatch(batch) {
   openModal("Correct medicine batch / expiry", `<p><b>${esc(batch.product_name)}</b></p><label>Batch / lot number<input name="batchNumber" maxlength="80" value="${esc(batch.batch_number)}" required></label><label>Expiry date<input name="expiryDate" type="date" value="${esc(batch.expiry_date || "")}" required></label><p class="form-hint">Confirm the value against the manufacturer's packaging before saving. Unknown-expiry legacy stock stays unavailable until verified.</p>`, async form => {

@@ -181,6 +181,57 @@ try {
   ok("Pharmacy Online Orders stay enabled with FEFO allocation, bill transfer, cancellation release, and quarantined returns");
 } catch (error) { fail("Pharmacy Online Sales: " + error.message); }
 
+console.log("Pharmacy packaging, purchase conversion, and POS units");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8"), server = readFileSync(join(root, "server.mjs"), "utf8"), css = readFileSync(join(root, "styles.css"), "utf8");
+  for (const token of ["sale_units TEXT NOT NULL DEFAULT '[]'", "function resolveMedicineSale(", "function resolveMedicinePurchase(", "resolveMedicineSale(item, product)", "resolveMedicinePurchase(body, product)", "Number(body.purchaseQuantity || 0) === 0", "saleUnit: line.saleUnit || \"\""]) {
+    if (!server.includes(token)) fail(`Pharmacy unit server support is missing: ${token}`);
+  }
+  for (const token of ["function openMedicineProductForm(", "function readPharmacyUnitForm(", "function openPharmacyReceiveBatch(", "function medicinePurchaseUnits(", "purchaseUnit: selected?.name || product.unit", "saleQty: line.qty / unitOf(line).f"]) {
+    if (!app.includes(token)) fail(`Pharmacy unit UI support is missing: ${token}`);
+  }
+  if (!css.includes(".pharmacy-purchase-calculator")) fail("Pharmacy purchase calculator styling is missing");
+  if ((app.match(/line\.mode = selected\.key;/g) || []).length < 4) fail("POS unit changes do not consistently initialize one package and its configured price");
+  const helperStart = server.indexOf("function parseMedicineUnits("), helperEnd = server.indexOf("function ensurePharmacyBatches", helperStart);
+  const serverApi = new Function("validAmount", "httpError", `${server.slice(helperStart, helperEnd)}\nreturn { resolveMedicineSale, resolveMedicinePurchase };`)(
+    value => Number.isFinite(Number(value)) && Number(value) >= 0,
+    (status, message) => Object.assign(new Error(message), { status })
+  );
+  const serverProduct = { id: 1, name: "Napa", unit: "tablet", sale_units: JSON.stringify([{ name: "strip", factor: 10, price: 15 }, { name: "box", factor: 100, price: 140 }]), allow_loose: 0 };
+  let looseBlocked = false;
+  try { serverApi.resolveMedicineSale({ qty: 1, price: 2 }, serverProduct); } catch (error) { looseBlocked = error.status === 409; }
+  if (!looseBlocked) fail("API requests without saleUnit bypass the loose-dispensing restriction");
+  const serverSale = serverApi.resolveMedicineSale({ saleUnit: "strip", saleQty: 2, salePrice: 15 }, serverProduct);
+  const serverPurchase = serverApi.resolveMedicinePurchase({ purchaseUnit: "box", purchaseQuantity: 5, purchasePrice: 500 }, { ...serverProduct, allow_loose: 1 });
+  if (serverSale.qty !== 20 || serverSale.price !== 1.5 || serverPurchase.qty !== 500 || serverPurchase.cost !== 5) fail("server-side package sale/purchase conversion is wrong");
+  const formStart = app.indexOf("function medicineUnitFormValues("), formEnd = app.indexOf("function attachPharmacyUnitCalculator", formStart);
+  const formApi = new Function("esc", "money", "currencySymbol", `${app.slice(formStart, formEnd)}\nreturn { readPharmacyUnitForm };`)(String, value => `৳${Number(value)}`, () => "৳");
+  const purchaseForm = new Map(Object.entries({ unit: "tablet", price: "2", supplierUnit: "box", innerUnit: "strip", innerPerSupplier: "10", basePerInner: "10", innerPrice: "15", supplierPrice: "140", allowLoose: "on", purchaseQuantity: "5", purchasePrice: "500" }));
+  const converted = formApi.readPharmacyUnitForm(purchaseForm);
+  if (converted.qty !== 500 || converted.cost !== 5 || converted.purchaseQuantity * converted.purchasePrice !== 2500) fail(`box/strip/tablet purchase conversion is wrong: ${JSON.stringify(converted)}`);
+  if (converted.units[0].factor !== 10 || converted.units[1].factor !== 100 || converted.units[1].price !== 140) fail("package selling prices/factors are wrong");
+  const emptyPurchase = new Map(purchaseForm); emptyPurchase.set("purchaseQuantity", "0");
+  const emptyConfig = formApi.readPharmacyUnitForm(emptyPurchase);
+  if (emptyConfig.qty !== 0 || emptyConfig.cost !== 0) fail("zero-stock medicine setup creates an accidental opening purchase");
+  const syrupForm = new Map(Object.entries({ unit: "ml", price: "1.5", supplierUnit: "bottle", innerUnit: "", innerPerSupplier: "", basePerInner: "100", supplierPrice: "", allowLoose: "on", purchaseQuantity: "2", purchasePrice: "200" }));
+  const syrup = formApi.readPharmacyUnitForm(syrupForm);
+  if (syrup.qty !== 200 || syrup.cost !== 2 || syrup.units[0].price !== 150) fail("single-level bottle/ml conversion is wrong");
+  const posStart = app.indexOf("const FRACTIONAL ="), posEnd = app.indexOf("const baseRender = render;", posStart);
+  if (formStart < 0 || formEnd < 0 || posStart < 0 || posEnd < 0) throw new Error("Pharmacy unit helpers are missing");
+  const posApi = new Function("data", "esc", "money", `${app.slice(posStart, posEnd)}\nreturn { pharmacyLineFields, unitOf, qtyCell, priceCell, lineDetail, lineUnits };`)(
+    { shopType: "pharmacy" }, String, value => `৳${Number(value)}`
+  );
+  const product = { unit: "tablet", price: 2, allow_loose: true, medicine_units: [{ name: "strip", factor: 10, price: 15 }, { name: "box", factor: 100, price: 140 }] };
+  const line = { unit: "tablet", packSize: 0, price: 1.5, qty: 20, max: 480, mode: "medicine:strip", ...posApi.pharmacyLineFields(product) };
+  if (posApi.unitOf(line).f !== 10 || !posApi.qtyCell(line, 0).includes('value="2"') || !posApi.qtyCell(line, 0).includes('max="48"')) fail("POS strip quantity does not convert base tablets correctly");
+  if (!posApi.priceCell(line, 0).includes('value="15"')) fail("POS strip price is not shown per strip");
+  const detail = posApi.lineDetail({ unit: "tablet", qty: 20, price: 1.5, saleUnit: "strip", saleQty: 2, salePrice: 15, unitFactor: 10, packSize: 0 });
+  if (!detail.includes("2 strip") || !detail.includes("20 tablet")) fail(`receipt does not preserve selected unit conversion: ${detail}`);
+  const noLoose = { unit: "tablet", allowLoose: false, medicineUnits: product.medicine_units };
+  if (posApi.lineUnits(noLoose).some(unit => unit.key === "base")) fail("disabled loose sales still appear in the POS unit list");
+  ok("5 boxes calculate to 500 tablets; POS converts strips/boxes, preserves prices, blocks loose units, and supports bottle/ml purchases");
+} catch (error) { fail("Pharmacy unit conversion: " + error.message); }
+
 console.log("Large inventory rendering and completion feedback");
 try {
   const app = readFileSync(join(root, "app.js"), "utf8");
