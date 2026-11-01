@@ -661,7 +661,9 @@ function renderInventoryProducts() {
   const canEditItems = signedInUser?.permissions?.records && data.permissions?.inventory;
   const canDeleteItems = canEditItems;
   const sizeFieldLabel = data.shopType === "restaurant" ? "Portion" : data.shopType === "mobile" ? "Storage" : data.shopType === "hardware" ? "Spec" : data.shopType === "grocery" ? "Pack" : "Size";
-  $("#products-table").innerHTML = visibleProducts.map(item => { const details = (data.shopType === "pharmacy" ? [["Generic",item.generic_name],["Strength",item.strength],["Form",item.dosage_form],["Maker",item.manufacturer]] : data.shopType === "restaurant" ? [["Portion",item.size],["Type",item.material],["Prep",item.color],["Kitchen",item.brand]] : [["Brand", item.brand], ["Color", item.color], [sizeFieldLabel, item.size], ["Material", item.material]]).filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`).join(" · "); const medexAction = data.shopType === "pharmacy" ? `<button class="user-action" type="button" data-action="medex-product" data-id="${item.id}" data-name="${esc(item.name)}">MedEx info</button>` : ""; return `<tr><td class="product-cell">${esc(item.icon || "📦")} &nbsp;${esc(item.name)}${details ? `<small class="form-hint">${esc(details)}</small>` : ""}</td><td>${esc(item.category || "Other")}</td><td class="sku">${esc(item.sku)}</td><td class="sku">${esc(item.barcode || "—")}</td><td>${esc(item.unit || "piece")}</td><td>${money(item.price)}</td><td class="qty">${data.shopType === "pharmacy" ? `${productSellableQty(item)} sellable / ${Number(item.qty||0)} total` : `${item.qty} ${esc(item.unit || "piece")}`}</td><td class="stock-value" title="${item.qty} × ${money(item.price)} per unit"><b>${money(Number(item.qty) * Number(item.price))}</b></td><td><span class="status ${productSellableQty(item) === 0 ? "out" : productSellableQty(item) <= item.min ? "low" : ""}">${productSellableQty(item) === 0 ? (data.shopType === "pharmacy" && Number(item.qty)>0 ? "No safe-to-sell stock" : "Out of stock") : productSellableQty(item) <= item.min ? "Low stock" : "In stock"}</span></td><td>${medexAction}${canEditItems ? `<button class="user-action" data-action="rename-product" data-id="${item.id}" data-name="${esc(item.name)}" data-unit="${esc(item.unit || "piece")}" data-category="${esc(item.category || "Other")}">Edit item</button>` : ""}${canDeleteItems ? `<button class="user-action danger" data-action="delete-product" data-id="${item.id}" data-name="${esc(productLabel(item))}" data-qty="${item.qty}" data-unit="${esc(item.unit || "piece")}">Delete</button>` : ""}</td></tr>`; }).join("");
+  $("#products-table").innerHTML = visibleProducts.map(item => { const details = (data.shopType === "pharmacy" ? [["Generic",item.generic_name],["Strength",item.strength],["Form",item.dosage_form],["Maker",item.manufacturer]] : data.shopType === "restaurant" ? [["Portion",item.size],["Type",item.material],["Prep",item.color],["Kitchen",item.brand]] : [["Brand", item.brand], ["Color", item.color], [sizeFieldLabel, item.size], ["Material", item.material]]).filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`).join(" · "); const medexAction = data.shopType === "pharmacy" ? `<button class="user-action" type="button" data-action="medex-product" data-id="${item.id}" data-name="${esc(item.name)}">MedEx info</button>` : "";
+  const pharmacyStockAction = data.shopType === "pharmacy" && data.permissions?.inventory ? `<button class="user-action" type="button" data-action="receive-product-stock" data-id="${item.id}" title="Receive stock with batch, expiry, and invoice details">Update quantity</button>` : "";
+  return `<tr><td class="product-cell">${esc(item.icon || "📦")} &nbsp;${esc(item.name)}${details ? `<small class="form-hint">${esc(details)}</small>` : ""}</td><td>${esc(item.category || "Other")}</td><td class="sku">${esc(item.sku)}</td><td class="sku">${esc(item.barcode || "—")}</td><td>${esc(item.unit || "piece")}</td><td>${money(item.price)}</td><td class="qty">${data.shopType === "pharmacy" ? `${productSellableQty(item)} sellable / ${Number(item.qty||0)} total` : `${item.qty} ${esc(item.unit || "piece")}`}</td><td class="stock-value" title="${item.qty} × ${money(item.price)} per unit"><b>${money(Number(item.qty) * Number(item.price))}</b></td><td><span class="status ${productSellableQty(item) === 0 ? "out" : productSellableQty(item) <= item.min ? "low" : ""}">${productSellableQty(item) === 0 ? (data.shopType === "pharmacy" && Number(item.qty)>0 ? "No safe-to-sell stock" : "Out of stock") : productSellableQty(item) <= item.min ? "Low stock" : "In stock"}</span></td><td>${pharmacyStockAction}${medexAction}${canEditItems ? `<button class="user-action" data-action="rename-product" data-id="${item.id}" data-name="${esc(item.name)}" data-unit="${esc(item.unit || "piece")}" data-category="${esc(item.category || "Other")}">Edit item</button>` : ""}${canDeleteItems ? `<button class="user-action danger" data-action="delete-product" data-id="${item.id}" data-name="${esc(productLabel(item))}" data-qty="${item.qty}" data-unit="${esc(item.unit || "piece")}">Delete</button>` : ""}</td></tr>`; }).join("");
   $("#products-empty").textContent = data.products.length ? "No inventory items match your search." : "No products yet. Add your first item to get started.";
   $("#products-empty").classList.toggle("hidden", products.length > 0);
   const pagination = $("#inventory-pagination");
@@ -1907,7 +1909,7 @@ function render() {
   const canBulkInventory = signedInUser?.role === "admin" && signedInUser?.permissions?.records && permissions.inventory;
   $("#bulk-inventory-tools").classList.toggle("hidden", !canBulkInventory);
   if ($("#bulk-inventory-help")) {
-    $("#bulk-inventory-help").textContent = `${bulkInventoryTemplateConfig(data.shopType).help} ${BULK_INVENTORY_UPLOAD_HELP}`;
+    $("#bulk-inventory-help").textContent = `${bulkInventoryTemplateConfig(data.shopType).help} ${BULK_INVENTORY_UPLOAD_HELP}${data.shopType === "pharmacy" ? " After upload, use Update quantity on a medicine to receive batch-controlled stock." : ""}`;
     $("#bulk-inventory-help").classList.toggle("hidden", !canBulkInventory);
   }
   $("#manage-categories").classList.toggle("hidden", !(signedInUser?.permissions?.records && permissions.inventory));
@@ -2680,6 +2682,12 @@ $("#products-table").onclick = event => {
   if (button.dataset.action === "medex-product") {
     openPharmacyMedicineLookup(button.dataset.name || "");
     return;
+  }
+  if (button.dataset.action === "receive-product-stock") {
+    if (data.shopType !== "pharmacy" || !data.permissions?.inventory) return;
+    const product = data.products.find(item => String(item.id) === String(id));
+    if (!product) return toast("Medicine not found. Refresh and try again.");
+    return openPharmacyReceiveBatch(product);
   }
   if (button.dataset.action === "delete-product") {
     if (!signedInUser?.permissions?.records || !data.permissions?.inventory) return;
@@ -4137,11 +4145,12 @@ async function openPharmacyBatchManager() {
     });
   } catch (error) { toast(error.message); }
 }
-function openPharmacyReceiveBatch() {
+function openPharmacyReceiveBatch(selectedProduct = null) {
   const products = (data.products || []).filter(product => product.id);
   if (!products.length) return toast("Add a medicine before receiving stock.");
-  const options = products.map(product => `<option value="${product.id}">${esc(product.name)} · ${esc(product.unit || "piece")} · current ${Number(product.qty || 0)}</option>`).join("");
-  openModal("Receive medicine batch", `<label>Medicine<select name="productId" required><option value="">Choose medicine</option>${options}</select></label><div class="form-row"><label>Batch / lot number<input name="batchNumber" maxlength="80" required placeholder="As printed on the pack"></label><label>Expiry date<input name="expiryDate" type="date" required></label></div><div class="form-row"><label>Purchase unit<select name="purchaseUnit" required></select></label><label>Quantity received<input name="quantity" type="number" min="0.000001" step="any" value="1" required></label><label>Purchase price per selected unit (${esc(currencySymbol())})<input name="purchasePrice" type="number" min="0" step="any" value="0" required></label></div><div class="pharmacy-purchase-calculator" aria-live="polite"><div><small>Stock to add</small><b id="receive-base-qty">0</b></div><div><small>Total purchase cost</small><b id="receive-total-cost">${money(0)}</b></div><div><small>Cost per base unit</small><b id="receive-base-cost">${money(0)}</b></div></div><p class="form-hint">Use the exact batch number, expiry, packaging, and invoice price. ShopDesk converts the receipt to the medicine's internal stock unit.</p>`, async form => {
+  const selectedId = Number(selectedProduct?.id || 0);
+  const options = products.map(product => `<option value="${product.id}" ${Number(product.id) === selectedId ? "selected" : ""}>${esc(product.name)} · ${esc(product.unit || "piece")} · current ${Number(product.qty || 0)}</option>`).join("");
+  openModal(selectedProduct ? `Update quantity · ${selectedProduct.name}` : "Receive medicine batch", `<label>Medicine<select name="productId" required><option value="">Choose medicine</option>${options}</select></label><div class="form-row"><label>Batch / lot number<input name="batchNumber" maxlength="80" required placeholder="As printed on the pack"></label><label>Expiry date<input name="expiryDate" type="date" required></label></div><div class="form-row"><label>Purchase unit<select name="purchaseUnit" required></select></label><label>Quantity received<input name="quantity" type="number" min="0.000001" step="any" value="1" required></label><label>Purchase price per selected unit (${esc(currencySymbol())})<input name="purchasePrice" type="number" min="0" step="any" value="0" required></label></div><div class="pharmacy-purchase-calculator" aria-live="polite"><div><small>Stock to add</small><b id="receive-base-qty">0</b></div><div><small>Total purchase cost</small><b id="receive-total-cost">${money(0)}</b></div><div><small>Cost per base unit</small><b id="receive-base-cost">${money(0)}</b></div></div><p class="form-hint">Use the exact batch number, expiry, packaging, and invoice price. ShopDesk converts the receipt to the medicine's internal stock unit.</p>`, async form => {
     const product = products.find(item => Number(item.id) === Number(form.get("productId")));
     if (!product) throw new Error("Choose a medicine before receiving the batch.");
     const selected = medicinePurchaseUnits(product).find(unit => unit.name === form.get("purchaseUnit"));
@@ -4176,6 +4185,10 @@ function openPharmacyReceiveBatch() {
   };
   $("#modal-fields [name=quantity]").oninput = update;
   priceInput.oninput = update;
+  if (selectedId) {
+    productSelect.value = String(selectedId);
+    productSelect.onchange();
+  }
 }
 function openPharmacyEditBatch(batch) {
   openModal("Correct medicine batch / expiry", `<p><b>${esc(batch.product_name)}</b></p><label>Batch / lot number<input name="batchNumber" maxlength="80" value="${esc(batch.batch_number)}" required></label><label>Expiry date<input name="expiryDate" type="date" value="${esc(batch.expiry_date || "")}" required></label><p class="form-hint">Confirm the value against the manufacturer's packaging before saving. Unknown-expiry legacy stock stays unavailable until verified.</p>`, async form => {

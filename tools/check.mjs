@@ -70,6 +70,17 @@ try {
   ok("medicine edits refresh inventory; ৳2.50 and ৳3.25 stay visible in English and Bangla");
 } catch (error) { fail("inventory edit formatting: " + error.message); }
 
+console.log("Pharmacy CSV stock receipt");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8"), server = readFileSync(join(root, "server.mjs"), "utf8");
+  for (const token of ['data-action="receive-product-stock"', "Update quantity", "function openPharmacyReceiveBatch(selectedProduct = null)", "productSelect.value = String(selectedId)", "After upload, use Update quantity"]) {
+    if (!app.includes(token)) fail(`uploaded-medicine stock action is missing: ${token}`);
+  }
+  if (!server.includes('route === "/api/pharmacy/batches" && method === "POST"') || !server.includes("quantity_received=quantity_received+?,quantity_remaining=quantity_remaining+?")) fail("batch-controlled quantity receipt endpoint is missing");
+  if (app.includes('data-action="receive-product-stock"') && !app.includes("openPharmacyReceiveBatch(product)")) fail("Update quantity must preselect the inventory medicine");
+  ok("each uploaded medicine has Update quantity with a preselected, dated batch receipt form");
+} catch (error) { fail("Pharmacy CSV stock receipt: " + error.message); }
+
 console.log("Translations");
 try {
   const bn = JSON.parse(readFileSync(join(root, "i18n", "bn.json"), "utf8"));
