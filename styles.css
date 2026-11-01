@@ -354,10 +354,18 @@ form input:focus,form select:focus{border-color:var(--ink);box-shadow:0 0 0 3px 
 dialog.wide{width:min(880px,calc(100% - 28px));max-height:calc(100vh - 28px);overflow:auto}
 .bill-cart{max-height:260px;border:1px solid var(--line);border-radius:8px}.bill-cart .empty{padding:18px}
 .bill-input{display:inline-block;width:110px;min-height:38px;margin:0;padding:6px 8px}.qty-input{width:84px}
+.bill-quantity-control{display:flex;align-items:flex-start;gap:6px;min-width:0}
+.bill-quantity-control .qty-input{flex:0 0 84px;width:84px}
+.bill-quantity-control .qty-unit{flex:1 1 110px;width:auto;min-width:0;max-width:150px;margin:0}
+.bill-cart td.bill-quantity{min-width:190px}
+.bill-cart .bill-amount,.bill-cart .bill-amount-heading{min-width:100px;text-align:right;white-space:nowrap}
+.bill-cart .bill-amount{color:var(--ink);font-variant-numeric:tabular-nums}
+.bill-cart .bill-amount b{display:inline-block;line-height:1.4}
+.bill-editor .bill-cart td.product-cell{min-width:160px;white-space:normal;overflow-wrap:anywhere}
 .device-fields{display:grid;gap:5px;min-width:190px}.device-fields textarea{width:180px;min-height:52px;font:inherit;font-size:13px}.device-fields small{color:var(--muted)}
 .bill-total{display:flex;justify-content:flex-end;gap:28px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line);color:var(--steel)}
 .bill-total b{margin-left:6px;font:700 26px var(--display);color:var(--ink)}
-@media(max-width:680px){.bill-total{justify-content:space-between;gap:10px}.bill-input{width:92px}}
+@media(max-width:680px){.bill-total{justify-content:space-between;gap:10px}.bill-input{width:92px}.bill-quantity-control{gap:4px}.bill-quantity-control .qty-input{flex-basis:78px;width:78px}.bill-cart td.bill-quantity{min-width:174px}.bill-cart .bill-amount,.bill-cart .bill-amount-heading{min-width:88px}}
 
 /* Supplier purchasing and compact checkout on phones */
 dialog{box-sizing:border-box;max-height:calc(100vh - 24px);overflow-y:auto;overscroll-behavior:contain}
@@ -1146,4 +1154,3 @@ body[data-shop-type] thead th{
   color:var(--muted,#66736d);
   font-weight:400;
 }
-

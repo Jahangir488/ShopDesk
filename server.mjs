@@ -1027,6 +1027,30 @@ function normalizeMedicineUnits(input, baseUnit) {
   });
 }
 
+function bulkPharmacySaleUnits(item, baseUnit, sellingPrice, rowNumber) {
+  const supplier = item.supplierUnit || "", inner = item.innerUnit || "";
+  const rowError = message => httpError(400, `Row ${rowNumber} (${item.name}): ${message}`);
+  if (!supplier && !inner) {
+    if ([item.innerPerSupplier, item.basePerInner, item.innerPrice, item.supplierPrice].some(value => value !== null)) {
+      throw rowError("enter an outer or inner package unit name before entering package conversions or prices.");
+    }
+    return [];
+  }
+  if (!supplier && inner) throw rowError("enter the Supplier / Outer Unit when using an Inner Selling Unit.");
+  const basePerInner = Number(item.basePerInner);
+  if (!(basePerInner > 0)) throw rowError(inner ? "enter Base Units / Inner Unit." : "enter how many base units are in one outer package in Base Units / Inner Unit.");
+  const automaticPrice = (value, factor) => value === null ? Number(sellingPrice) * factor : value;
+  const units = [];
+  if (inner) {
+    const innerPerSupplier = Number(item.innerPerSupplier);
+    if (!(innerPerSupplier > 0)) throw rowError("enter Inner Units / Outer Unit.");
+    units.push({ name: inner, factor: basePerInner, price: automaticPrice(item.innerPrice, basePerInner) });
+    units.push({ name: supplier, factor: basePerInner * innerPerSupplier, price: automaticPrice(item.supplierPrice, basePerInner * innerPerSupplier) });
+  } else units.push({ name: supplier, factor: basePerInner, price: automaticPrice(item.supplierPrice, basePerInner) });
+  try { return normalizeMedicineUnits(units, baseUnit); }
+  catch (error) { throw rowError(error.message); }
+}
+
 function medicineUnitDetails(product) {
   if (Object.hasOwn(product, "sale_units")) return { sale_units: product.sale_units, allow_loose: product.allow_loose };
   return db.prepare("SELECT sale_units,allow_loose FROM medicine_details WHERE product_id=?").get(Number(product.id)) || { sale_units: "[]", allow_loose: 1 };
@@ -2433,6 +2457,14 @@ async function handleApi(request, response, url) {
     const isPharmacy = pharmacyMode();
     const seenIds = new Set();
     const missingNumber = value => value === null || value === undefined || (typeof value === "string" && value.trim() === "");
+    const optionalText = value => value === null || value === undefined ? null : String(value).trim();
+    const optionalNumber = value => missingNumber(value) ? null : Number(value);
+    const optionalBoolean = value => {
+      if (missingNumber(value)) return null;
+      if (value === true || ["yes", "true", "1"].includes(String(value).trim().toLocaleLowerCase())) return true;
+      if (value === false || ["no", "false", "0"].includes(String(value).trim().toLocaleLowerCase())) return false;
+      return "invalid";
+    };
     const rows = body.rows.map((item, index) => {
       if (!item || typeof item !== "object") {
         throw new Error(`Row ${index + 2} is not a valid inventory item.`);
@@ -2452,11 +2484,37 @@ async function handleApi(request, response, url) {
       const manufacturer = item.manufacturer === null || item.manufacturer === undefined ? null : String(item.manufacturer).trim();
       const batchNumber = item.batchNumber === null || item.batchNumber === undefined ? "" : String(item.batchNumber).trim();
       const expiryDate = item.expiryDate === null || item.expiryDate === undefined ? "" : String(item.expiryDate).trim();
+      const supplierUnit = optionalText(item.supplierUnit), innerUnit = optionalText(item.innerUnit);
+      const innerPerSupplier = optionalNumber(item.innerPerSupplier), basePerInner = optionalNumber(item.basePerInner);
+      const innerPrice = optionalNumber(item.innerPrice), supplierPrice = optionalNumber(item.supplierPrice);
+      const allowLooseValue = optionalBoolean(item.allowLoose);
+      const purchaseQuantity = optionalNumber(item.purchaseQuantity), purchasePrice = optionalNumber(item.purchasePrice);
+      const packagingProvided = isPharmacy && [supplierUnit, innerUnit, innerPerSupplier, basePerInner, innerPrice, supplierPrice].some(value => value !== null);
+      const hasOpeningPurchase = isPharmacy && (purchaseQuantity !== null || purchasePrice !== null);
       const newPharmacyItem = isPharmacy && id === null;
       const price = newPharmacyItem && missingNumber(item.price) ? 0 : Number(item.price);
-      const cost = newPharmacyItem && missingNumber(item.cost) ? 0 : Number(item.cost);
-      const qty = newPharmacyItem && missingNumber(item.qty) ? 0 : Number(item.qty);
+      let cost = newPharmacyItem && missingNumber(item.cost) ? 0 : Number(item.cost);
+      let qty = newPharmacyItem && missingNumber(item.qty) ? 0 : Number(item.qty);
       const min = newPharmacyItem && missingNumber(item.min) ? 5 : Number(item.min);
+      if (allowLooseValue === "invalid") throw new Error(`Row ${index + 2} (${name}): Allow Individual Base Unit Sales must be Yes or No.`);
+      const allowLoose = newPharmacyItem ? (allowLooseValue ?? true) : allowLooseValue;
+      let saleUnits = null, purchaseUnit = "";
+      if (newPharmacyItem) {
+        saleUnits = bulkPharmacySaleUnits({ name, supplierUnit, innerUnit, innerPerSupplier, basePerInner, innerPrice, supplierPrice }, unit || "piece", price, index + 2);
+        if (!allowLoose && !saleUnits.length) throw new Error(`Row ${index + 2} (${name}): allow individual-unit sales or configure at least one package selling unit.`);
+      }
+      if (hasOpeningPurchase && !newPharmacyItem) {
+        throw new Error(`Row ${index + 2} (${name}): opening-purchase columns are only for new medicines. Leave them blank for existing medicines and use Update quantity to receive stock.`);
+      }
+      if (newPharmacyItem && hasOpeningPurchase) {
+        if (!(purchaseQuantity > 0) || !Number.isFinite(purchaseQuantity) || purchasePrice === null || !validAmount(purchasePrice)) {
+          throw new Error(`Row ${index + 2} (${name}): enter an Opening Purchase Quantity greater than zero and a valid price per outer package, or leave both opening-purchase columns blank.`);
+        }
+        purchaseUnit = supplierUnit || unit || "piece";
+        const purchase = resolveMedicinePurchase({ purchaseUnit, purchaseQuantity, purchasePrice }, { unit: unit || "piece", sale_units: saleUnits, allow_loose: allowLoose ? 1 : 0 });
+        qty = purchase.qty;
+        cost = purchase.cost;
+      }
       const hasPack = (packSize || 0) > 0;
       if ((!newPharmacyItem && [item.price, item.cost, item.qty, item.min].some(missingNumber)) ||
           (id !== null && (!Number.isInteger(id) || id < 1 || seenIds.has(id))) ||
@@ -2469,6 +2527,8 @@ async function handleApi(request, response, url) {
           (strength !== null && strength.length > 80) ||
           (dosageForm !== null && dosageForm.length > 80) ||
           (manufacturer !== null && manufacturer.length > 160) ||
+          (supplierUnit !== null && supplierUnit.length > 30) || (innerUnit !== null && innerUnit.length > 30) ||
+          [innerPerSupplier, basePerInner, innerPrice, supplierPrice, purchaseQuantity, purchasePrice].some(value => value !== null && !Number.isFinite(value)) ||
           batchNumber.length > 80 ||
           !validQty(qty, typeof unit === "string" ? unit : "", 0, hasPack) || !validQty(min, typeof unit === "string" ? unit : "", 0, hasPack)) {
         throw new Error(`Row ${index + 2} has invalid data. Check the name, SKU, prices, quantity, and low-stock alert.`);
@@ -2482,7 +2542,8 @@ async function handleApi(request, response, url) {
         }
       }
       if (id !== null) seenIds.add(id);
-      return { id, name, sku, barcode, price, cost, qty, min, unit, category, ...apparel, packName, packSize, genericName, strength, dosageForm, manufacturer, batchNumber, expiryDate, rowNumber: index + 2 };
+      return { id, name, sku, barcode, price, cost, qty, min, unit, category, ...apparel, packName, packSize, genericName, strength, dosageForm, manufacturer, batchNumber, expiryDate,
+        supplierUnit, innerUnit, innerPerSupplier, basePerInner, innerPrice, supplierPrice, packagingProvided, saleUnits, allowLoose, purchaseUnit, purchaseQuantity, purchasePrice, rowNumber: index + 2 };
     });
     const incomingBarcodes = new Set();
     for (const item of rows) if (item.barcode) {
@@ -2501,21 +2562,23 @@ async function handleApi(request, response, url) {
             .run(item.name, item.sku, item.price, item.cost, item.qty, item.min, "📦", item.unit || "piece", item.category, item.barcode || "", item.brand || "", item.color || "", item.size || "", item.material || "", item.packName || "", item.packSize || 0);
           const productId = Number(created.lastInsertRowid);
           if (isPharmacy || item.genericName !== null || item.strength !== null || item.dosageForm !== null || item.manufacturer !== null) {
-            db.prepare("INSERT INTO medicine_details(product_id,generic_name,strength,dosage_form,manufacturer) VALUES(?,?,?,?,?) ON CONFLICT(product_id) DO UPDATE SET generic_name=excluded.generic_name,strength=excluded.strength,dosage_form=excluded.dosage_form,manufacturer=excluded.manufacturer")
-              .run(productId, item.genericName || "", item.strength || "", item.dosageForm || "", item.manufacturer || "");
+            db.prepare("INSERT INTO medicine_details(product_id,generic_name,strength,dosage_form,manufacturer,sale_units,allow_loose) VALUES(?,?,?,?,?,?,?) ON CONFLICT(product_id) DO UPDATE SET generic_name=excluded.generic_name,strength=excluded.strength,dosage_form=excluded.dosage_form,manufacturer=excluded.manufacturer")
+              .run(productId, item.genericName || "", item.strength || "", item.dosageForm || "", item.manufacturer || "", JSON.stringify(item.saleUnits || []), item.allowLoose === false ? 0 : 1);
           }
           if (isPharmacy && item.qty > 0) {
             const batchNumber = item.batchNumber || `LEGACY-${productId}`;
             db.prepare(`INSERT INTO medicine_batches(product_id,batch_number,expiry_date,quantity_received,quantity_remaining,quantity_quarantined,unit_cost,received_date,created_by)
               VALUES(?,?,?,?,?,0,?,?,?)`).run(productId, batchNumber, item.expiryDate, item.qty, item.qty, item.cost, today(), user.username);
             const expiryNote = item.expiryDate ? `expires ${item.expiryDate}` : "expiry verification required before sale";
-            recordStockMovement({ id: productId, name: item.name, unit: item.unit || "piece", cost: item.cost }, "opening stock", item.qty, item.qty, user.username, "Bulk inventory upload", `Batch ${batchNumber}; ${expiryNote}.`);
+            const purchaseNote = item.purchaseUnit ? `${item.purchaseQuantity} ${item.purchaseUnit} = ${item.qty} ${item.unit || "piece"}. ` : "";
+            recordStockMovement({ id: productId, name: item.name, unit: item.unit || "piece", cost: item.cost }, "opening stock", item.qty, item.qty, user.username, "Bulk inventory upload", `${purchaseNote}Batch ${batchNumber}; ${expiryNote}.`);
           } else if (item.qty > 0) {
             recordStockMovement({ id: productId, name: item.name, unit: item.unit || "piece", cost: item.cost }, "opening stock", item.qty, item.qty, user.username, "Bulk inventory upload");
           }
         } else {
           const before = db.prepare("SELECT id,name,qty,unit,cost FROM products WHERE id=?").get(item.id);
           if (!before) throw new Error(`Row for Product ID ${item.id} refers to an item that no longer exists. No changes were saved.`);
+          if (isPharmacy && item.packagingProvided) item.saleUnits = bulkPharmacySaleUnits(item, item.unit || before.unit, item.price, item.rowNumber);
           const qtyDelta = Number((item.qty - before.qty).toFixed(6));
           if (isPharmacy && Math.abs(qtyDelta) > 1e-6) {
             if (qtyDelta < 0 || !validText(item.batchNumber) || !validDate(item.expiryDate)) {
@@ -2526,9 +2589,15 @@ async function handleApi(request, response, url) {
             .run(item.name, item.sku, item.price, item.cost, item.qty, item.min, item.unit, item.category, item.barcode, item.brand, item.color, item.size, item.material, item.packName, item.packSize, item.id);
           if (!result.changes) throw new Error(`Row for Product ID ${item.id} refers to an item that no longer exists. No changes were saved.`);
           if (isPharmacy || item.genericName !== null || item.strength !== null || item.dosageForm !== null || item.manufacturer !== null) {
-            const existingMed = db.prepare("SELECT generic_name,strength,dosage_form,manufacturer FROM medicine_details WHERE product_id=?").get(item.id);
+            const existingMed = db.prepare("SELECT generic_name,strength,dosage_form,manufacturer,sale_units,allow_loose FROM medicine_details WHERE product_id=?").get(item.id);
             db.prepare("INSERT INTO medicine_details(product_id,generic_name,strength,dosage_form,manufacturer) VALUES(?,?,?,?,?) ON CONFLICT(product_id) DO UPDATE SET generic_name=excluded.generic_name,strength=excluded.strength,dosage_form=excluded.dosage_form,manufacturer=excluded.manufacturer")
               .run(item.id, item.genericName ?? existingMed?.generic_name ?? "", item.strength ?? existingMed?.strength ?? "", item.dosageForm ?? existingMed?.dosage_form ?? "", item.manufacturer ?? existingMed?.manufacturer ?? "");
+            if (isPharmacy && (item.packagingProvided || item.allowLoose !== null)) {
+              const saleUnits = item.saleUnits === null ? parseMedicineUnits(existingMed?.sale_units) : item.saleUnits;
+              const allowLoose = item.allowLoose === null ? Boolean(existingMed?.allow_loose ?? 1) : item.allowLoose;
+              if (!allowLoose && !saleUnits.length) throw new Error(`Row ${item.rowNumber} (${item.name}): allow individual-unit sales or configure at least one package selling unit.`);
+              db.prepare("UPDATE medicine_details SET sale_units=?,allow_loose=? WHERE product_id=?").run(JSON.stringify(saleUnits), allowLoose ? 1 : 0, item.id);
+            }
           }
           if (isPharmacy && qtyDelta > 1e-6) {
             const existingBatch = db.prepare("SELECT id,expiry_date FROM medicine_batches WHERE product_id=? AND batch_number=? COLLATE NOCASE").get(item.id, item.batchNumber);

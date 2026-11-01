@@ -40,6 +40,18 @@ try {
   ok("Batches & expiry is a read-only list; Receive batch and Add medicine always restore Save");
 } catch (error) { fail("modal save actions: " + error.message); }
 
+console.log("Bill amount layout");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8"), css = readFileSync(join(root, "styles.css"), "utf8");
+  for (const token of ['<span class="bill-quantity-control">', '<td class="bill-quantity">${qtyCell(line, i)}</td>', '<td class="bill-amount"><b>${money(line.price * line.qty)}</b></td>', '<td class="${data.shopType === "mobile" ? "" : "hidden"}">']) {
+    if (!app.includes(token)) fail(`bill amount layout markup is missing: ${token}`);
+  }
+  for (const token of [".bill-quantity-control{display:flex", ".bill-quantity-control .qty-unit{flex:1 1 110px;width:auto;min-width:0", ".bill-cart .bill-amount,.bill-cart .bill-amount-heading{min-width:100px;text-align:right;white-space:nowrap}"]) {
+    if (!css.includes(token)) fail(`bill amount layout styling is missing: ${token}`);
+  }
+  ok("quantity controls cannot cover the right-aligned amount; unused warranty cells stay hidden");
+} catch (error) { fail("bill amount layout: " + error.message); }
+
 console.log("Shop profile separation");
 try {
   const server = readFileSync(join(root, "server.mjs"), "utf8");
@@ -215,7 +227,7 @@ try {
   for (const token of [
     "const newPharmacyItem = isPharmacy && id === null;",
     "const price = newPharmacyItem && missingNumber(item.price) ? 0 : Number(item.price);",
-    "const qty = newPharmacyItem && missingNumber(item.qty) ? 0 : Number(item.qty);",
+    "let qty = newPharmacyItem && missingNumber(item.qty) ? 0 : Number(item.qty);",
     "const min = newPharmacyItem && missingNumber(item.min) ? 5 : Number(item.min);",
     "if (expiryDate && !validDate(expiryDate))",
     "const batchNumber = item.batchNumber || `LEGACY-${productId}`;",
@@ -223,10 +235,24 @@ try {
   ]) if (!server.includes(token)) fail(`Pharmacy catalog import safeguard is missing: ${token}`);
   if (!server.includes("WHERE product_id=? AND expiry_date<>'' AND expiry_date>=?")) fail("blank-expiry Pharmacy stock must remain unavailable for sale");
   if (!server.includes("!validText(item.batchNumber) || !validDate(item.expiryDate)")) fail("existing-medicine stock additions must retain dated-batch validation");
-  if (!app.includes("Blank Selling Price, Cost, and Quantity on new medicines become 0; blank Low Stock Alert becomes 5.")) fail("Pharmacy blank-default confirmation is missing");
+  if (!app.includes("Without opening-purchase conversion, blank Selling Price, Cost, and Quantity on new medicines become 0; blank Low Stock Alert becomes 5.")) fail("Pharmacy blank-default confirmation is missing");
   if (!app.includes("legacyStockCount")) fail("Pharmacy upload must disclose rows held for expiry verification");
   ok("new-medicine blank defaults, generated LEGACY batches, existing-stock validation, and unknown-expiry sale hold present");
 } catch (error) { fail("Pharmacy catalog import: " + error.message); }
+
+console.log("Pharmacy advanced inventory template");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8"), server = readFileSync(join(root, "server.mjs"), "utf8");
+  const columns = ["Supplier / Outer Unit", "Inner Selling Unit", "Inner Units / Outer Unit", "Base Units / Inner Unit", "Inner Unit Selling Price", "Outer Unit Selling Price", "Allow Individual Base Unit Sales", "Opening Purchase Quantity", "Opening Purchase Price / Outer Unit"];
+  for (const column of columns) {
+    if (!app.includes(`"${column}"`)) fail(`Pharmacy template column is missing: ${column}`);
+  }
+  for (const token of ["function bulkPharmacySaleUnits(", "resolveMedicinePurchase({ purchaseUnit, purchaseQuantity, purchasePrice }", "opening-purchase columns are only for new medicines", "JSON.stringify(item.saleUnits || [])", "item.packagingProvided || item.allowLoose !== null"]) {
+    if (!server.includes(token)) fail(`advanced Pharmacy CSV safeguard is missing: ${token}`);
+  }
+  if (!app.includes("calculate base Quantity and Cost automatically") || !app.includes("Blank package selling prices use base Selling Price × conversion")) fail("automatic package conversion guidance is missing");
+  ok("template exports/imports packaging, loose-sales permission, and automatic new-medicine opening purchases");
+} catch (error) { fail("Pharmacy advanced inventory template: " + error.message); }
 
 console.log("Pharmacy Online Sales batch safety");
 try {

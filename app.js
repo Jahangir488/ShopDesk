@@ -1961,6 +1961,7 @@ const BULK_INVENTORY_MAX_FILE_BYTES = 25 * 1024 * 1024;
 const BULK_INVENTORY_MAX_ROWS = 25000;
 const BULK_INVENTORY_UPLOAD_HELP = "The Category column is imported, and missing categories are created for this shop type. Upload up to 25 MB or 25,000 rows at a time.";
 const bulkInventoryCoreHeaders = ["Product ID", "Product Name", "SKU", "Selling Price", "Cost", "Quantity", "Low Stock Alert", "Unit", "Category", "Barcode"];
+const bulkInventoryPharmacyHeaders = ["Supplier / Outer Unit", "Inner Selling Unit", "Inner Units / Outer Unit", "Base Units / Inner Unit", "Inner Unit Selling Price", "Outer Unit Selling Price", "Allow Individual Base Unit Sales", "Opening Purchase Quantity", "Opening Purchase Price / Outer Unit"];
 function bulkInventoryTemplateConfig(shopType = data.shopType) {
   const baseRow = item => [
     item.id,
@@ -1983,11 +1984,18 @@ function bulkInventoryTemplateConfig(shopType = data.shopType) {
     }
     return {
       filename: "pharmacy-inventory-template.csv",
-      headers: [...bulkInventoryCoreHeaders, "Generic Name", "Strength", "Dosage Form", "Manufacturer", "Batch Number", "Expiry Date"],
-      help: "Pharmacy Excel template: includes Generic Name, Strength, Dosage Form, Manufacturer, Batch Number, and Expiry Date (YYYY-MM-DD). Keep Product ID unchanged to update medicine details/prices; leave Product ID blank to add new medicines. For new medicines, blank price/cost/quantity become 0 and blank low-stock alert becomes 5. Dated stock needs Batch Number & Expiry Date; blank expiry holds stock for verification and cannot be sold.",
+      headers: [...bulkInventoryCoreHeaders, "Generic Name", "Strength", "Dosage Form", "Manufacturer", "Batch Number", "Expiry Date", ...bulkInventoryPharmacyHeaders],
+      help: "Pharmacy Excel template: includes all medicine details, packaging, selling units, batch/expiry, and optional opening-purchase fields. Keep Product ID unchanged to update details or packaging; leave it blank to add a medicine. For new medicines, Opening Purchase Quantity and Opening Purchase Price / Outer Unit calculate base Quantity and Cost automatically; leave both blank to use the base-unit Quantity and Cost columns instead. Blank package selling prices use base Selling Price × conversion. Use Yes or No for individual base-unit sales. Example: 10 inner units per box and 10 base units per inner unit means 100 base units per box. Opening-purchase fields are for new medicines only—use Update quantity for existing stock. Blank expiry holds opening stock for verification before sale.",
       toRow: item => {
-        const batch = batchesByProduct.get(item.id);
-        return [...baseRow(item), item.generic_name || "", item.strength || "", item.dosage_form || "", item.manufacturer || "", batch?.batch_number || "", batch?.expiry_date || ""];
+        const batch = batchesByProduct.get(item.id), units = medicineUnitFormValues(item);
+        const hasOuter = Boolean(units.supplierUnit), hasInner = Boolean(hasOuter && units.innerUnit);
+        return [
+          ...baseRow(item), item.generic_name || "", item.strength || "", item.dosage_form || "", item.manufacturer || "", batch?.batch_number || "", batch?.expiry_date || "",
+          units.supplierUnit, units.innerUnit,
+          hasInner ? units.innerPerSupplier : "", hasOuter ? units.basePerInner : "",
+          hasInner ? units.innerPrice : "", hasOuter ? units.supplierPrice : "",
+          item.allow_loose === false ? "No" : "Yes", "", ""
+        ];
       }
     };
   }
@@ -2878,10 +2886,20 @@ $("#bulk-inventory-file").onchange = async event => {
       const manufacturer = getCol(values, "manufacturer");
       const batchNumber = getCol(values, "batch number");
       const expiryDate = getCol(values, "expiry date");
+      const supplierUnit = getCol(values, "supplier / outer unit");
+      const innerUnit = getCol(values, "inner selling unit");
+      const innerPerSupplier = getCol(values, "inner units / outer unit");
+      const basePerInner = getCol(values, "base units / inner unit");
+      const innerPrice = getCol(values, "inner unit selling price");
+      const supplierPrice = getCol(values, "outer unit selling price");
+      const allowLoose = getCol(values, "allow individual base unit sales");
+      const purchaseQuantity = getCol(values, "opening purchase quantity");
+      const purchasePrice = getCol(values, "opening purchase price / outer unit");
       return {
         id, name, sku, price, cost, qty, min, unit, category, barcode,
         brand, color, size, material, pack_name, pack_size,
-        genericName, strength, dosageForm, manufacturer, batchNumber, expiryDate
+        genericName, strength, dosageForm, manufacturer, batchNumber, expiryDate,
+        supplierUnit, innerUnit, innerPerSupplier, basePerInner, innerPrice, supplierPrice, allowLoose, purchaseQuantity, purchasePrice
       };
     });
     if (!rows.length) throw new Error("The template has no inventory rows to upload.");
@@ -2892,10 +2910,13 @@ $("#bulk-inventory-file").onchange = async event => {
     let summary;
     if (data.shopType === "pharmacy") {
       const newRows = rows.filter(row => !row.id);
-      const hasBlankDefaults = newRows.some(row => ["price", "cost", "qty", "min"].some(key => String(row[key] ?? "").trim() === ""));
-      legacyStockCount = newRows.filter(row => Number(row.qty || 0) > 0 && !String(row.expiryDate ?? "").trim()).length;
+      const hasOpeningPurchase = row => ["purchaseQuantity", "purchasePrice"].some(key => String(row[key] ?? "").trim() !== "");
+      const openingPurchaseCount = newRows.filter(hasOpeningPurchase).length;
+      const hasBlankDefaults = newRows.some(row => !hasOpeningPurchase(row) && ["price", "cost", "qty", "min"].some(key => String(row[key] ?? "").trim() === ""));
+      legacyStockCount = newRows.filter(row => (hasOpeningPurchase(row) ? Number(row.purchaseQuantity || 0) : Number(row.qty || 0)) > 0 && !String(row.expiryDate ?? "").trim()).length;
       summary = `${updates} existing medicine(s) will be updated and ${additions} new medicine(s) added. Missing categories will be created automatically.`;
-      if (hasBlankDefaults) summary += " Blank Selling Price, Cost, and Quantity on new medicines become 0; blank Low Stock Alert becomes 5.";
+      if (hasBlankDefaults) summary += " Without opening-purchase conversion, blank Selling Price, Cost, and Quantity on new medicines become 0; blank Low Stock Alert becomes 5.";
+      if (openingPurchaseCount) summary += ` ${openingPurchaseCount} new medicine row(s) will calculate base stock and cost automatically from the outer-package purchase.`;
       if (legacyStockCount) summary += ` ${legacyStockCount} opening-stock row(s) have no expiry date and will be unavailable for sale until verified in Batches & expiry. Missing batch numbers will be generated as LEGACY batch numbers.`;
       summary += " Continue?";
     } else {
@@ -3011,7 +3032,7 @@ const qtyCell = (line, i) => {
   const box = units.length > 1 ? `<select class="bill-input qty-unit" data-i="${i}" data-f="mode" aria-label="Selling unit">${units.map(x => `<option value="${esc(x.key)}" ${x.key === u.key ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : esc(line.unit);
   const min = pharmacy ? (isFractional(line.unit) ? 0.000001 : 1) : u.key === "small" || u.key === "base" && !frac ? 1 : 0.0001;
   const shownQty = pharmacy ? line.qty / u.f : line.qty * u.f, maxQty = pharmacy ? line.max / u.f : line.max * u.f;
-  return `<input class="bill-input qty-input" data-i="${i}" data-f="qty" type="number" min="${min}" max="${+maxQty.toFixed(6)}" step="${step}" value="${+shownQty.toFixed(6)}" required> ${box}`;
+  return `<span class="bill-quantity-control"><input class="bill-input qty-input" data-i="${i}" data-f="qty" type="number" min="${min}" max="${+maxQty.toFixed(6)}" step="${step}" value="${+shownQty.toFixed(6)}" required>${box}</span>`;
 };
 // Price is kept per stock unit (per coil); for a cut length it is shown and typed per metre/foot.
 const priceCell = (line, i) => {
@@ -3108,7 +3129,7 @@ function openBillEditor(editing, initialProduct = null) {
   if (!stocked.length) return toast("No products in stock.");
   let cart = (editing?.lines || []).map(l => { const p = data.products.find(x => x.id === pid(l)); return p && { id: p.id, name: productLabel(p), category: l.category || p.category || "", unit: p.unit || "piece", packSize: p.pack_size || 0, packName: p.pack_name, price: l.price, cost: p.cost, qty: l.qty, max: +(p.qty + l.qty).toFixed(6), serials: l.serials || [], warrantyMonths: Number(l.warrantyMonths || 0) }; }).filter(Boolean);
   openModal(editing ? `Edit ${billNo(editing.id)}` : "New bill", `<div class="item-search"><div class="bill-search-head"><label for="bill-search">Add item <span class="form-hint">Type part of a name, SKU, or barcode. Pick from the list or press Enter to add.</span></label>${data.shopType === "pharmacy" ? `<button type="button" class="button secondary" id="bill-medex-toggle">Medicine info (MedEx)</button>` : data.shopType === "restaurant" ? `<button type="button" class="button secondary" id="bill-manage-food-packages">Food packages</button>` : ""}</div><div class="item-search-wrap"><input id="bill-search" type="search" autocomplete="off" placeholder="Item name, SKU, or barcode"><button type="button" class="item-search-toggle" id="bill-search-toggle" aria-label="Show all in-stock items" title="Show all in-stock items">▾</button><div class="item-search-results hidden" id="bill-search-results" role="listbox" aria-label="Matching in-stock items"></div></div></div>${data.shopType === "pharmacy" ? `<div id="bill-medex-drawer" class="medex-inline-drawer hidden"></div>` : ""}${data.shopType === "restaurant" && (data.foodPackages || []).length ? `<div class="cloth-quick-chips" id="bill-food-packages-bar" style="margin-bottom:10px"><span class="form-hint" style="margin-right:4px">🍱 Quick packages:</span>${(data.foodPackages || []).map(pkg => `<button type="button" class="cloth-chip" data-bill-pkg-product="${pkg.productId || ""}" title="${esc(pkg.itemsSummary || "")}">🍱 ${esc(pkg.name)} (${esc(pkg.portion || "1:1")}) · ${money(pkg.price)}</button>`).join("")}</div>` : ""}
-<div class="table-scroll bill-cart"><table><thead><tr><th>Item</th><th>Price / unit</th><th>Qty</th><th>Amount</th><th class="${data.shopType === "mobile" ? "" : "hidden"}">IMEI / serial &amp; warranty</th><th></th></tr></thead><tbody id="bill-lines"></tbody></table><div class="empty" id="bill-empty">No items yet. Search above to add the first one.</div></div>
+<div class="table-scroll bill-cart"><table><thead><tr><th>Item</th><th>Price / unit</th><th class="bill-quantity-heading">Qty</th><th class="bill-amount-heading">Amount</th><th class="${data.shopType === "mobile" ? "" : "hidden"}">IMEI / serial &amp; warranty</th><th></th></tr></thead><tbody id="bill-lines"></tbody></table><div class="empty" id="bill-empty">No items yet. Search above to add the first one.</div></div>
 <div class="form-row"><label>Customer name${data.requireCustomer ? "" : " (optional)"}<input name="customer" maxlength="80" value="${esc(editing?.customer || "")}" ${data.requireCustomer && !editing ? "required" : ""}></label><label>Phone (optional)<input name="phone" maxlength="30" inputmode="tel" value="${esc(editing?.phone || "")}"></label></div>
 <div class="form-row"><label class="${editing ? "hidden" : ""}">Payment method<select name="payment">${paymentOptions(editing?.payment || "Cash")}</select></label>${data.allowDiscounts ? `<label>Discount (৳)<input id="bill-discount" name="discount" type="number" min="0" step="any" value="${editing ? editing.discount : 0}"></label>` : ""}</div>
 ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive further payments from the Bills list.</p><div id="refund-section" class="hidden" style="background:#fef2f2;padding:12px;border-radius:8px;border:1px solid #dc2626;margin:10px 0"><label style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><input type="checkbox" id="refund-checkbox" name="processRefund"><span style="font-weight:600;color:#dc2626">Process refund to customer</span></label><label>Refund amount (৳)<input id="refund-amount" name="refundAmount" type="number" min="0" step="any" value="0"><small class="form-hint">Auto-calculated but you can adjust if needed (e.g., customer agrees to store credit instead of full refund)</small></label></div>` : `<label>Paid now (৳)<span class="form-hint">Leave as the total if fully paid. A smaller amount becomes a due.</span><input id="bill-paid" name="paid" type="number" min="0" step="any"></label>`}
@@ -3193,7 +3214,7 @@ ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive f
     }
   };
   const draw = () => {
-    $("#bill-lines").innerHTML = cart.map((line, i) => `<tr><td class="product-cell">${esc(line.name)}${data.shopType === "pharmacy" ? `<br><small class="form-hint">Available: ${+(line.max / unitOf(line).f).toFixed(3)} ${esc(unitOf(line).name)} · ${line.max} ${esc(line.unit)}</small>` : ""}</td><td>${priceCell(line, i)}</td><td>${qtyCell(line, i)}</td><td><b>${money(line.price * line.qty)}</b></td><td>${data.shopType === "mobile" && /smartphone|feature phone|tablet|mobile phone/i.test(line.category) ? `<label class="device-fields"><small>One IMEI/serial per unit</small><textarea data-i="${i}" data-f="serials" rows="2" placeholder="Enter each on a new line">${esc((line.serials || []).join("\n"))}</textarea><small>Warranty months</small><input class="bill-input" data-i="${i}" data-f="warranty" type="number" min="0" max="120" step="1" value="${Number(line.warrantyMonths || 0)}"></label>` : ""}</td><td><button type="button" class="user-action danger" data-remove="${i}">Remove</button></td></tr>`).join("");
+    $("#bill-lines").innerHTML = cart.map((line, i) => `<tr><td class="product-cell">${esc(line.name)}${data.shopType === "pharmacy" ? `<br><small class="form-hint">Available: ${+(line.max / unitOf(line).f).toFixed(3)} ${esc(unitOf(line).name)} · ${line.max} ${esc(line.unit)}</small>` : ""}</td><td>${priceCell(line, i)}</td><td class="bill-quantity">${qtyCell(line, i)}</td><td class="bill-amount"><b>${money(line.price * line.qty)}</b></td><td class="${data.shopType === "mobile" ? "" : "hidden"}">${data.shopType === "mobile" && /smartphone|feature phone|tablet|mobile phone/i.test(line.category) ? `<label class="device-fields"><small>One IMEI/serial per unit</small><textarea data-i="${i}" data-f="serials" rows="2" placeholder="Enter each on a new line">${esc((line.serials || []).join("\n"))}</textarea><small>Warranty months</small><input class="bill-input" data-i="${i}" data-f="warranty" type="number" min="0" max="120" step="1" value="${Number(line.warrantyMonths || 0)}"></label>` : ""}</td><td><button type="button" class="user-action danger" data-remove="${i}">Remove</button></td></tr>`).join("");
     $("#bill-empty").classList.toggle("hidden", cart.length > 0);
     totals();
   };
