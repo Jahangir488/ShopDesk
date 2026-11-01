@@ -663,7 +663,7 @@ function renderInventoryProducts() {
   const sizeFieldLabel = data.shopType === "restaurant" ? "Portion" : data.shopType === "mobile" ? "Storage" : data.shopType === "hardware" ? "Spec" : data.shopType === "grocery" ? "Pack" : "Size";
   $("#products-table").innerHTML = visibleProducts.map(item => { const details = (data.shopType === "pharmacy" ? [["Generic",item.generic_name],["Strength",item.strength],["Form",item.dosage_form],["Maker",item.manufacturer]] : data.shopType === "restaurant" ? [["Portion",item.size],["Type",item.material],["Prep",item.color],["Kitchen",item.brand]] : [["Brand", item.brand], ["Color", item.color], [sizeFieldLabel, item.size], ["Material", item.material]]).filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`).join(" · "); const medexAction = data.shopType === "pharmacy" ? `<button class="user-action" type="button" data-action="medex-product" data-id="${item.id}" data-name="${esc(item.name)}">MedEx info</button>` : "";
   const pharmacyStockAction = data.shopType === "pharmacy" && data.permissions?.inventory ? `<button class="user-action" type="button" data-action="receive-product-stock" data-id="${item.id}" title="Receive stock with batch, expiry, and invoice details">Update quantity</button>` : "";
-  return `<tr><td class="product-cell">${esc(item.icon || "📦")} &nbsp;${esc(item.name)}${details ? `<small class="form-hint">${esc(details)}</small>` : ""}</td><td>${esc(item.category || "Other")}</td><td class="sku">${esc(item.sku)}</td><td class="sku">${esc(item.barcode || "—")}</td><td>${esc(item.unit || "piece")}</td><td>${money(item.price)}</td><td class="qty">${data.shopType === "pharmacy" ? `${productSellableQty(item)} sellable / ${Number(item.qty||0)} total` : `${item.qty} ${esc(item.unit || "piece")}`}</td><td class="stock-value" title="${item.qty} × ${money(item.price)} per unit"><b>${money(Number(item.qty) * Number(item.price))}</b></td><td><span class="status ${productSellableQty(item) === 0 ? "out" : productSellableQty(item) <= item.min ? "low" : ""}">${productSellableQty(item) === 0 ? (data.shopType === "pharmacy" && Number(item.qty)>0 ? "No safe-to-sell stock" : "Out of stock") : productSellableQty(item) <= item.min ? "Low stock" : "In stock"}</span></td><td>${pharmacyStockAction}${medexAction}${canEditItems ? `<button class="user-action" data-action="rename-product" data-id="${item.id}" data-name="${esc(item.name)}" data-unit="${esc(item.unit || "piece")}" data-category="${esc(item.category || "Other")}">Edit item</button>` : ""}${canDeleteItems ? `<button class="user-action danger" data-action="delete-product" data-id="${item.id}" data-name="${esc(productLabel(item))}" data-qty="${item.qty}" data-unit="${esc(item.unit || "piece")}">Delete</button>` : ""}</td></tr>`; }).join("");
+  return `<tr><td class="product-cell">${esc(item.icon || "📦")} &nbsp;${esc(item.name)}${details ? `<small class="form-hint">${esc(details)}</small>` : ""}</td><td>${esc(item.category || "Other")}</td><td class="sku">${esc(item.sku)}</td><td class="sku">${esc(item.barcode || "—")}</td><td>${esc(item.unit || "piece")}</td><td>${money(item.price)}</td><td class="qty">${data.shopType === "pharmacy" ? `${productSellableQty(item)} sellable / ${Number(item.qty||0)} total` : `${item.qty} ${esc(item.unit || "piece")}`}</td><td class="stock-value" title="${item.qty} × ${money(item.price)} per unit"><b>${money(Number(item.qty) * Number(item.price))}</b></td><td><span class="status ${productSellableQty(item) === 0 ? "out" : productSellableQty(item) <= item.min ? "low" : ""}">${productSellableQty(item) === 0 ? (data.shopType === "pharmacy" && Number(item.qty)>0 ? "No safe-to-sell stock" : "Out of stock") : productSellableQty(item) <= item.min ? "Low stock" : "In stock"}</span></td><td>${pharmacyStockAction}${medexAction}${canEditItems ? `<button class="user-action" data-action="rename-product" data-id="${item.id}" data-name="${esc(item.name)}" data-unit="${esc(item.unit || "piece")}" data-category="${esc(item.category || "Other")}">${data.shopType === "pharmacy" ? "Edit price / details" : "Edit item"}</button>` : ""}${canDeleteItems ? `<button class="user-action danger" data-action="delete-product" data-id="${item.id}" data-name="${esc(productLabel(item))}" data-qty="${item.qty}" data-unit="${esc(item.unit || "piece")}">Delete</button>` : ""}</td></tr>`; }).join("");
   $("#products-empty").textContent = data.products.length ? "No inventory items match your search." : "No products yet. Add your first item to get started.";
   $("#products-empty").classList.toggle("hidden", products.length > 0);
   const pagination = $("#inventory-pagination");
@@ -966,8 +966,8 @@ function attachPharmacyUnitCalculator(includePurchase = false) {
     $("#medicine-total-cost").textContent = money(Number.isFinite(total) ? total : 0);
     $("#medicine-base-cost").textContent = `${money(Number.isFinite(config.cost) ? config.cost : 0)} / ${base}`;
   };
-  modalForm.addEventListener("input", update);
-  modalForm.addEventListener("change", update);
+  modalForm.oninput = update;
+  modalForm.onchange = update;
   update();
 }
 
@@ -1942,6 +1942,8 @@ function render() {
   $("#sales").classList.remove("sales-has-actions");
   renderExpenses();
   $("#add-product").classList.toggle("hidden", !permissions.inventory);
+  $("#add-product").textContent = data.shopType === "pharmacy" ? "＋ Add medicine" : "＋ Add product";
+  $("#pharmacy-inventory-guide")?.classList.toggle("hidden", data.shopType !== "pharmacy");
   $("#new-sale").classList.toggle("hidden", quickSaleHidden);
   $("#sale-shortcut").classList.toggle("hidden", quickSaleHidden);
   $("#add-expense").classList.toggle("hidden", !permissions.expenses);
@@ -2094,6 +2096,10 @@ function closeDialogElement(element) {
   }
 }
 function openModal(title, markup, onSave) {
+  const modalForm = $("#modal-form");
+  // Modal markup is reused; do not let a previous form's calculator handle new fields.
+  modalForm.oninput = null;
+  modalForm.onchange = null;
   $("#modal-title").textContent = t(title);
   const submit = $("#submit-modal");
   if (submit) {
@@ -2359,9 +2365,25 @@ function openMedicineProductForm(product = null) {
   const editing = Boolean(product), item = product || { unit: "tablet", min: 5, price: "", cost: 0, category: "Medicines" };
   const categories = [...new Set([item.category || "Medicines", ...(data.categories || []).map(category => category.name)])];
   const existingNames = [...new Map(data.products.map(medicine => [medicine.name.toLocaleLowerCase(), medicine])).values()];
-  openModal(editing ? "Edit medicine & units" : "Add medicine", `<label>Medicine name<input name="name" list="medicine-name-suggestions" maxlength="200" autocomplete="off" required value="${esc(item.name || "")}" placeholder="e.g. Napa 500 mg"><datalist id="medicine-name-suggestions">${existingNames.map(medicine => `<option value="${esc(medicine.name)}"></option>`).join("")}</datalist></label><div class="form-row"><label>Category<select name="category">${categories.map(name => `<option ${name === item.category ? "selected" : ""}>${esc(name)}</option>`).join("")}</select></label><label>SKU / item code<input name="sku" maxlength="100" value="${esc(item.sku || "")}" placeholder="Optional"></label></div><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" value="${esc(item.barcode || "")}" placeholder="Scan or enter barcode"></label>${pharmacyFormFields(item, !editing)}<div class="form-row"><label>Internal stock unit<input name="unit" maxlength="30" value="${esc(item.unit || "tablet")}" placeholder="tablet, capsule, ml, gram" required><small class="form-hint">Smallest practical unit used for stock, cost, batch deduction, and returns.</small></label><label>Selling price per <span class="base-unit-label">${esc(item.unit || "tablet")}</span> (${esc(currencySymbol())})<input name="price" type="number" min="0" step="any" value="${esc(item.price)}" required></label></div>${editing ? `<div class="form-row"><label>Purchase cost per <span class="base-unit-label">${esc(item.unit)}</span> (${esc(currencySymbol())})<input name="cost" type="number" min="0" step="any" value="${Number(item.cost)}" required></label><label>Low-stock alert at (<span class="base-unit-label">${esc(item.unit)}</span>)<input name="min" type="number" min="0" step="any" value="${Number(item.min)}" required></label></div><p class="form-hint">Current stock: <b>${Number(item.qty)} ${esc(item.unit)}</b>. Quantity remains batch-controlled; receive stock from Batches &amp; expiry or Supplier purchase.</p>` : `<label>Low-stock alert at (<span class="base-unit-label">${esc(item.unit)}</span>)<input name="min" type="number" min="0" step="any" value="${Number(item.min)}" required></label>`}${pharmacyUnitFormFields(item, !editing)}`, async form => {
+  const baseUnit = item.unit || "tablet";
+  const guidance = editing
+    ? "Update the medicine name or prices here. To change quantity, use <b>Update quantity</b> on the inventory row."
+    : "Add the medicine and its selling price first. You can leave stock at zero and use <b>Update quantity</b> after saving.";
+  const advancedTitle = editing ? "More details, packaging & low-stock settings" : "More details, packaging & opening stock (optional)";
+  const advancedFields = `<details class="pharmacy-advanced"><summary>${advancedTitle}</summary><div class="pharmacy-advanced-content">
+    <div class="form-row"><label>SKU / item code<input name="sku" maxlength="100" value="${esc(item.sku || "")}" placeholder="Optional"></label><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" value="${esc(item.barcode || "")}" placeholder="Scan or enter barcode"></label></div>
+    ${pharmacyFormFields(item, !editing)}
+    <label>Low-stock alert at (<span class="base-unit-label">${esc(baseUnit)}</span>)<input name="min" type="number" min="0" step="any" value="${Number(item.min)}" required></label>
+    ${pharmacyUnitFormFields(item, !editing)}
+  </div></details>`;
+  openModal(editing ? "Edit medicine" : "Add medicine", `<p class="pharmacy-simple-intro">${guidance}</p>
+    <label>Medicine name<input name="name" list="medicine-name-suggestions" maxlength="200" autocomplete="off" required value="${esc(item.name || "")}" placeholder="e.g. Napa 500 mg"><datalist id="medicine-name-suggestions">${existingNames.map(medicine => `<option value="${esc(medicine.name)}"></option>`).join("")}</datalist></label>
+    <label>Category<select name="category">${categories.map(name => `<option ${name === item.category ? "selected" : ""}>${esc(name)}</option>`).join("")}</select></label>
+    <div class="form-row"><label>Stock counted in<input name="unit" maxlength="30" value="${esc(baseUnit)}" placeholder="tablet, capsule, ml" required><small class="form-hint">Usually tablet or capsule. Use ml for liquid medicine.</small></label><label>Selling price per <span class="base-unit-label">${esc(baseUnit)}</span> (${esc(currencySymbol())})<input name="price" type="number" min="0" step="any" value="${esc(item.price)}" required></label></div>
+    ${editing ? `<label>Average purchase cost per <span class="base-unit-label">${esc(baseUnit)}</span> (${esc(currencySymbol())})<input name="cost" type="number" min="0" step="any" value="${Number(item.cost)}" required></label><p class="form-hint">Current stock: <b>${Number(item.qty)} ${esc(baseUnit)}</b>. Use <b>Update quantity</b> on the inventory row to receive stock.</p>` : ""}
+    ${advancedFields}`, async form => {
     const config = readPharmacyUnitForm(form);
-    if (!config.baseUnit) throw new Error("Enter the internal stock unit, such as tablet, capsule, ml, or gram.");
+    if (!config.baseUnit) throw new Error("Enter the stock unit, such as tablet, capsule, ml, or gram.");
     const payload = {
       name: String(form.get("name") || "").trim(), category: form.get("category"), sku: String(form.get("sku") || "").trim(), barcode: String(form.get("barcode") || "").trim(),
       genericName: form.get("genericName") || "", strength: form.get("strength") || "", dosageForm: form.get("dosageForm") || "", manufacturer: form.get("manufacturer") || "",
@@ -2370,10 +2392,17 @@ function openMedicineProductForm(product = null) {
     if (editing) Object.assign(payload, { cost: Number(form.get("cost")), qty: Number(item.qty) });
     else Object.assign(payload, { cost: config.cost, qty: config.qty, batchNumber: String(form.get("batchNumber") || "").trim(), expiryDate: form.get("expiryDate") || "", purchaseUnit: config.purchaseUnit, purchaseQuantity: config.purchaseQuantity, purchasePrice: config.purchasePrice });
     const result = await api(editing ? `/api/products/${item.id}` : "/api/products", { method: editing ? "PATCH" : "POST", body: JSON.stringify(payload) });
-    data = result; render(); toast(editing ? "Medicine and selling units updated" : `Medicine added: ${+config.qty.toFixed(6)} ${config.baseUnit} in opening stock`);
+    data = result; render();
+    if (editing) toast("Medicine updated");
+    else toast(config.qty > 0 ? `Medicine added with ${+config.qty.toFixed(6)} ${config.baseUnit} in opening stock` : "Medicine added. Use Update quantity to receive stock.");
   });
   attachPharmacyFormMedexEvents();
   attachPharmacyUnitCalculator(!editing);
+  $("#submit-modal").textContent = editing ? "Save changes" : "Add medicine";
+  $("#modal-fields").addEventListener("invalid", event => {
+    const section = event.target.closest("details");
+    if (section) section.open = true;
+  }, true);
 }
 
 $("#add-product").onclick = () => {
@@ -4150,7 +4179,7 @@ function openPharmacyReceiveBatch(selectedProduct = null) {
   if (!products.length) return toast("Add a medicine before receiving stock.");
   const selectedId = Number(selectedProduct?.id || 0);
   const options = products.map(product => `<option value="${product.id}" ${Number(product.id) === selectedId ? "selected" : ""}>${esc(product.name)} · ${esc(product.unit || "piece")} · current ${Number(product.qty || 0)}</option>`).join("");
-  openModal(selectedProduct ? `Update quantity · ${selectedProduct.name}` : "Receive medicine batch", `<label>Medicine<select name="productId" required><option value="">Choose medicine</option>${options}</select></label><div class="form-row"><label>Batch / lot number<input name="batchNumber" maxlength="80" required placeholder="As printed on the pack"></label><label>Expiry date<input name="expiryDate" type="date" required></label></div><div class="form-row"><label>Purchase unit<select name="purchaseUnit" required></select></label><label>Quantity received<input name="quantity" type="number" min="0.000001" step="any" value="1" required></label><label>Purchase price per selected unit (${esc(currencySymbol())})<input name="purchasePrice" type="number" min="0" step="any" value="0" required></label></div><div class="pharmacy-purchase-calculator" aria-live="polite"><div><small>Stock to add</small><b id="receive-base-qty">0</b></div><div><small>Total purchase cost</small><b id="receive-total-cost">${money(0)}</b></div><div><small>Cost per base unit</small><b id="receive-base-cost">${money(0)}</b></div></div><p class="form-hint">Use the exact batch number, expiry, packaging, and invoice price. ShopDesk converts the receipt to the medicine's internal stock unit.</p>`, async form => {
+  openModal(selectedProduct ? `Update quantity · ${selectedProduct.name}` : "Receive medicine batch", `<p class="pharmacy-simple-intro">Receive new stock from the supplier pack and invoice. Existing batches remain unchanged.</p><label>Medicine<select name="productId" required><option value="">Choose medicine</option>${options}</select></label><div class="form-row"><label>Batch number (on pack)<input name="batchNumber" maxlength="80" required placeholder="As printed on the pack"></label><label>Expiry date (on pack)<input name="expiryDate" type="date" required></label></div><div class="form-row"><label>Package you bought<select name="purchaseUnit" required></select></label><label>Quantity purchased<input name="quantity" type="number" min="0.000001" step="any" value="1" required></label><label>Invoice price per selected package (${esc(currencySymbol())})<input name="purchasePrice" type="number" min="0" step="any" value="0" required></label></div><div class="pharmacy-purchase-calculator" aria-live="polite"><div><small>Stock to add</small><b id="receive-base-qty">0</b></div><div><small>Total purchase cost</small><b id="receive-total-cost">${money(0)}</b></div><div><small>Cost per base unit</small><b id="receive-base-cost">${money(0)}</b></div></div><p class="form-hint">Check the pack and invoice. Example: 2 boxes × 12 tablets = 24 tablets added. ShopDesk calculates stock and cost automatically.</p>`, async form => {
     const product = products.find(item => Number(item.id) === Number(form.get("productId")));
     if (!product) throw new Error("Choose a medicine before receiving the batch.");
     const selected = medicinePurchaseUnits(product).find(unit => unit.name === form.get("purchaseUnit"));
@@ -4185,6 +4214,7 @@ function openPharmacyReceiveBatch(selectedProduct = null) {
   };
   $("#modal-fields [name=quantity]").oninput = update;
   priceInput.oninput = update;
+  $("#submit-modal").textContent = "Receive stock";
   if (selectedId) {
     productSelect.value = String(selectedId);
     productSelect.onchange();

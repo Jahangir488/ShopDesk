@@ -81,6 +81,20 @@ try {
   ok("each uploaded medicine has Update quantity with a preselected, dated batch receipt form");
 } catch (error) { fail("Pharmacy CSV stock receipt: " + error.message); }
 
+console.log("Simple Pharmacy operation");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8"), html = readFileSync(join(root, "index.html"), "utf8");
+  const start = app.indexOf("function openMedicineProductForm("), end = app.indexOf('$("#add-product")', start), form = app.slice(start, end);
+  for (const token of ['<details class="pharmacy-advanced">', "More details, packaging & opening stock (optional)", "Add the medicine and its selling price first", "Stock counted in", "Update quantity", "readPharmacyUnitForm(form)"]) {
+    if (!form.includes(token)) fail(`simple medicine form is missing: ${token}`);
+  }
+  if (form.includes('<details class="pharmacy-advanced" open>')) fail("advanced medicine fields should start collapsed");
+  if (!app.includes('Edit price / details') || !app.includes('$("#submit-modal").textContent = "Receive stock"')) fail("plain-language Pharmacy actions are missing");
+  if (!app.includes("modalForm.oninput = null;") || !app.includes("modalForm.onchange = null;") || !app.includes("modalForm.oninput = update;")) fail("modal packaging calculators must reset between forms");
+  if (!html.includes("Simple workflow:") || !html.includes("Add medicine")) fail("Pharmacy inventory workflow guide is missing");
+  ok("essential fields stay visible, advanced fields collapse, and stock/calculator actions remain safe");
+} catch (error) { fail("simple Pharmacy operation: " + error.message); }
+
 console.log("Translations");
 try {
   const bn = JSON.parse(readFileSync(join(root, "i18n", "bn.json"), "utf8"));
