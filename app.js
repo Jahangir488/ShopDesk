@@ -1713,7 +1713,7 @@ function closeDialogElement(element) {
 function openModal(title, markup, onSave) {
   $("#modal-title").textContent = t(title);
   const submit = $("#submit-modal");
-  if (submit) submit.textContent = t("Save");
+  if (submit) { submit.textContent = t("Save"); submit.classList.remove("hidden"); }
   const errorBanner = $("#modal-error-banner");
   if (errorBanner) {
     errorBanner.textContent = "";
@@ -3292,14 +3292,14 @@ async function openSupplierHub() {
     const canRecord = !!data.permissions?.inventory;
     const supplierRows = suppliers.length ? suppliers.map(s => `<tr><td><b>${esc(s.name)}</b>${s.phone ? `<br><small>${esc(s.phone)}</small>` : ""}</td><td>${supplierMoney(s.opening_balance)}</td><td>${supplierMoney(s.total_bought)}</td><td>${supplierMoney(s.total_paid)}</td><td><b>${supplierMoney(s.balance)}</b></td><td>${canRecord && Number(s.balance) > 0 ? `<button type="button" class="user-action" data-supplier-pay="${s.id}" data-supplier-name="${esc(s.name)}" data-balance="${s.balance}">Pay supplier</button>` : "—"}${canEdit ? `<button type="button" class="user-action" data-edit-supplier="${s.id}">Edit</button>` : ""}</td></tr>`).join("") : '<tr><td colspan="6" class="empty">Add a supplier to start recording purchases.</td></tr>';
     const purchaseRows = purchases.length ? purchases.map(p => `<tr data-history-supplier="${p.supplier_id}"><td><input type="checkbox" aria-label="Select purchase P-${String(p.id).padStart(8, "0")}" data-select-purchase="${p.id}"></td><td>P-${String(p.id).padStart(8, "0")}</td><td>${esc(p.date)}</td><td>${esc(p.supplier_name)}</td><td>${p.line_count} items <button type="button" class="user-action" aria-expanded="false" data-toggle-purchase="${p.id}">View products</button></td><td><b>${supplierMoney(p.total)}</b></td><td>${esc(p.reference || "—")}</td><td>${esc(p.created_by || "")}</td><td><button type="button" class="user-action" data-print-purchase="${p.id}">Print list</button>${canEdit ? `<button type="button" class="user-action" data-edit-purchase="${p.id}">Edit</button>` : ""}</td></tr><tr class="purchase-detail-row hidden" data-history-supplier="${p.supplier_id}" data-purchase-detail="${p.id}"><td colspan="9"><div class="purchase-detail"><b>Products bought from ${esc(p.supplier_name)}</b>${p.items?.length ? `<div class="table-scroll"><table><thead><tr><th>Product</th><th>Quantity</th><th>Unit cost</th><th>Line total</th>${data.shopType === "pharmacy" && featureEnabled("pharmacy") ? "<th>Batch / lot</th><th>Expiry</th>" : ""}</tr></thead><tbody>${p.items.map(item => `<tr><td>${esc(item.productName)}</td><td>${Number(item.qty)} ${esc(item.unit || "piece")}</td><td>${supplierMoney(item.cost)}</td><td>${supplierMoney(Number(item.qty) * Number(item.cost))}</td>${data.shopType === "pharmacy" && featureEnabled("pharmacy") ? `<td>${esc(item.batchNumber || "Not recorded")}</td><td>${esc(item.expiryDate || "Not recorded")}</td>` : ""}</tr>`).join("")}</tbody></table></div>` : `<p class="form-hint">Product details are unavailable for this older purchase.</p>`}</div></td></tr>`).join("") : '<tr><td colspan="9" class="empty">No purchases recorded yet.</td></tr>';
-    const movementRows = movements.length ? movements.map(m => `<tr><td>${esc(m.at)}</td><td>${esc(m.product_name)}</td><td>${esc(m.kind)}</td><td>${Number(m.quantity_change) > 0 ? "+" : ""}${Number(m.quantity_change)} ${esc(m.unit)}</td><td>${Number(m.quantity_after)} ${esc(m.unit)}</td><td>${esc(m.reference || "—")}</td><td>${esc(m.actor || "")}</td></tr>`).join("") : '<tr><td colspan="7" class="empty">New stock movements will appear here.</td></tr>';
+    const movementRows = movements.length ? movements.map(m => `<tr><td>${esc(m.at)}</td><td>${esc(m.product_name)}</td><td>${esc(m.kind)}</td><td>${Number(m.quantity_change) > 0 ? "+" : ""}${Number(m.quantity_change)} ${esc(m.unit)}</td><td>${Number(m.quantity_after)} ${esc(m.unit)}</td><td>${esc(m.reference || "—")}</td><td>${esc(m.note || "—")}</td><td>${esc(m.actor || "")}</td></tr>`).join("") : '<tr><td colspan="8" class="empty">New stock movements will appear here.</td></tr>';
     const paymentRows = payments.length ? payments.map(p => `<tr data-history-supplier="${p.supplier_id}"><td><input type="checkbox" aria-label="Select supplier payment ${p.id}" data-select-payment="${p.id}"></td><td>${esc(p.date)}</td><td>${esc(p.supplier_name)}</td><td>${esc(p.method)}</td><td><b>${supplierMoney(p.amount)}</b></td><td>${esc(p.note || "—")}</td><td>${esc(p.received_by || "")}</td><td><button type="button" class="user-action" data-print-payment="${p.id}">Print</button>${canEdit ? `<button type="button" class="user-action" data-edit-payment="${p.id}">Edit</button>` : ""}</td></tr>`).join("") : '<tr><td colspan="8" class="empty">No supplier payments recorded yet.</td></tr>';
     supplierModal("Suppliers & purchases", `<div class="supplier-actions">${canRecord ? `<button type="button" class="button secondary" id="supplier-add">＋ Add supplier</button><button type="button" class="button primary" id="purchase-add" ${suppliers.length ? "" : "disabled"}>＋ Record purchase</button>` : ""}</div>
       <h3>Supplier balances</h3><div class="table-scroll supplier-table"><table><thead><tr><th>Supplier</th><th>Opening due</th><th>Purchases</th><th>Paid</th><th>Balance due</th><th></th></tr></thead><tbody>${supplierRows}</tbody></table></div>
       <label class="supplier-history-filter">Filter history by supplier<select id="supplier-history-filter"><option value="all">All suppliers</option>${suppliers.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join("")}</select></label>
       <h3>Purchase history</h3><div class="supplier-actions"><button type="button" class="button secondary" data-print-selected="purchase">Print selected</button><button type="button" class="button secondary" data-print-all="purchase">Print all shown</button></div><div class="table-scroll supplier-table"><table><thead><tr><th><input type="checkbox" id="select-all-purchases" aria-label="Select all purchases"></th><th>Purchase</th><th>Date</th><th>Supplier</th><th>Lines</th><th>Total</th><th>Reference</th><th>Recorded by</th><th>Actions</th></tr></thead><tbody id="supplier-purchase-history">${purchaseRows}</tbody></table></div>
       <h3>Supplier payment history</h3><div class="supplier-actions"><button type="button" class="button secondary" data-print-selected="payment">Print selected</button><button type="button" class="button secondary" data-print-all="payment">Print all shown</button></div><div class="table-scroll supplier-table"><table><thead><tr><th><input type="checkbox" id="select-all-payments" aria-label="Select all supplier payments"></th><th>Date</th><th>Supplier</th><th>Method</th><th>Amount</th><th>Note</th><th>Recorded by</th><th>Actions</th></tr></thead><tbody id="supplier-payment-history">${paymentRows}</tbody></table></div>
-      <h3>Stock movement history</h3><p class="form-hint">New purchases, sales, and stock corrections are recorded here. Older activity is not reconstructed.</p><div class="table-scroll supplier-table movement-table"><table><thead><tr><th>When</th><th>Product</th><th>Reason</th><th>Change</th><th>Stock after</th><th>Reference</th><th>By</th></tr></thead><tbody>${movementRows}</tbody></table></div>`, async () => {});
+      <h3>Stock movement history</h3><p class="form-hint">New purchases, sales, and stock corrections are recorded here. Older activity is not reconstructed.</p><div class="table-scroll supplier-table movement-table"><table><thead><tr><th>When</th><th>Product</th><th>Reason</th><th>Change</th><th>Stock after</th><th>Reference</th><th>Details / reason</th><th>By</th></tr></thead><tbody>${movementRows}</tbody></table></div>`, async () => {});
     $("#submit-modal").classList.add("hidden");
     if (canRecord) $("#supplier-add").onclick = () => supplierModal("Add supplier", `<label>Supplier name<input name="name" maxlength="120" required></label><label>Phone<input name="phone" maxlength="40" inputmode="tel"></label><label>Address or market location<input name="address" maxlength="300"></label><label>Existing balance owed (৳)<input name="openingBalance" type="number" min="0" step="0.01" value="0" required><small class="form-hint">Use this for an unpaid balance from before you started using the app.</small></label>`, async form => {
       await api("/api/suppliers", { method: "POST", body: JSON.stringify({ name: form.get("name"), phone: form.get("phone"), address: form.get("address"), openingBalance: Number(form.get("openingBalance")) }) });
@@ -3410,37 +3410,70 @@ function openPurchaseEntry(suppliers, editing = null) {
   updateTotals();
 }
 async function openPharmacyBatchManager() {
-  if (data.shopType !== "pharmacy" || !featureEnabled("pharmacy")) return toast("Pharmacy batches require a Pharmacy licence.");
+  if (data.shopType !== "pharmacy" || !featureEnabled("pharmacy")) return toast("Pharmacy batches require Pharmacy access.");
   if (!data.permissions?.inventory) return toast("Inventory access is required to manage medicine batches.");
   try {
     data = await api("/api/state");
-    const { today: dateToday, cutoff } = await api("/api/pharmacy/expiry");
+    const { today: dateToday } = await api("/api/pharmacy/expiry");
     const todayValue = dateToday || dateKey(new Date());
     const batches = data.pharmacyBatches || [];
     const expiryState = batch => {
-      if (!batch.expiry_date) return { label: "Expiry needs review", css: "out" };
-      if (batch.expiry_date < todayValue) return { label: "Expired", css: "out" };
-      if (batch.expiry_date <= cutoff) return { label: "Expiring soon", css: "low" };
-      return { label: "In date", css: "" };
+      if (!batch.expiry_date) return "Expiry needs review";
+      if (batch.expiry_date < todayValue) return "Expired";
+      const cutoff = new Date(`${todayValue}T00:00:00Z`); cutoff.setUTCDate(cutoff.getUTCDate() + 90);
+      return batch.expiry_date <= cutoff.toISOString().slice(0,10) ? "Expiring soon" : "In date";
     };
-    const unknown = batches.filter(batch => !batch.expiry_date && Number(batch.quantity_remaining) > 0).length;
-    const expired = batches.filter(batch => batch.expiry_date && batch.expiry_date < todayValue && Number(batch.quantity_remaining) > 0).length;
-    const soon = batches.filter(batch => batch.expiry_date && batch.expiry_date >= todayValue && batch.expiry_date <= cutoff && Number(batch.quantity_remaining) > 0).length;
-    const rows = batches.length ? batches.map(batch => {
-      const status = expiryState(batch);
-      return `<tr><td><b>${esc(batch.product_name)}</b><small class="form-hint">${esc(batch.generic_name || "")}</small></td><td>${esc(batch.batch_number)}</td><td>${batch.expiry_date ? esc(batch.expiry_date) : "Unknown — review lot label"}</td><td>${Number(batch.quantity_remaining)} ${esc(batch.product_unit || "piece")}</td><td>${Number(batch.sellable_quantity || 0)} ${esc(batch.product_unit || "piece")}</td><td><span class="status ${status.css}">${status.label}</span></td><td><button type="button" class="user-action" data-edit-pharmacy-batch="${batch.id}">Correct batch / expiry</button></td></tr>`;
-    }).join("") : '<tr><td colspan="7" class="empty">No medicine batches recorded. Add a medicine or receive the first batch.</td></tr>';
-    openModal("Medicine batches & expiry", `<div class="pharmacy-batch-toolbar"><div><b>${batches.length} recorded batches</b><p class="form-hint">Sales use earliest-expiring eligible stock first. Expired, unknown-expiry, and returned/quarantined units are not sellable.</p></div><button type="button" class="button primary" id="pharmacy-receive-batch">＋ Receive batch</button></div><div class="pharmacy-expiry-summary"><div><b>${expired}</b><span>Expired lots with stock</span></div><div><b>${soon}</b><span>Expiring within 90 days</span></div><div><b>${unknown}</b><span>Need expiry verification</span></div></div><div class="table-scroll supplier-table"><table><thead><tr><th>Medicine</th><th>Batch / lot</th><th>Expiry date</th><th>Remaining</th><th>Sellable</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div>`, async () => {});
+    const count = status => batches.filter(batch => Number(batch.quantity_remaining)>0 && expiryState(batch) === status).length;
+    openModal("Medicine batches & expiry", `<div class="pharmacy-batch-toolbar"><div><b>${batches.length} recorded batches</b><p class="form-hint">Expired, unknown-expiry and quarantined units cannot be sold.</p></div><button type="button" class="button primary" id="pharmacy-receive-batch">＋ Receive batch</button></div><div class="pharmacy-expiry-summary"><div><b>${count("Expired")}</b><span>Expired lots with stock</span></div><div><b>${count("Expiring soon")}</b><span>Expiring within 90 days</span></div><div><b>${count("Expiry needs review")}</b><span>Need expiry verification</span></div></div><div class="batch-filters"><label>Search medicine or batch<input id="batch-search" type="search" placeholder="Name, generic name or batch number"></label><label>Expiry filter<select id="batch-filter"><option value="all">All batches</option><option value="30">Expiring within 30 days</option><option value="60">Expiring within 60 days</option><option value="90">Expiring within 90 days</option><option value="expired">Expired</option><option value="unknown">Expiry needs review</option></select></label><button type="button" class="button secondary" id="batch-print">Print filtered report</button></div><p class="form-hint" id="batch-count"></p><div class="table-scroll supplier-table"><table><thead><tr><th>Medicine</th><th>Batch / lot</th><th>Expiry date</th><th>Remaining</th><th>Sellable</th><th>Status</th><th>Action</th></tr></thead><tbody id="batch-rows"></tbody></table></div><div class="batch-pagination"><button type="button" class="button secondary" id="batch-prev">Previous</button><span id="batch-page"></span><button type="button" class="button secondary" id="batch-next">Next</button></div>`, async () => {});
     $("#submit-modal").classList.add("hidden");
+    let page = 0, filtered = [];
+    const search = $("#batch-search"), filter = $("#batch-filter"), rows = $("#batch-rows");
+    function update(reset = false) {
+      if (reset) page = 0;
+      const q = search.value.trim().toLocaleLowerCase(), f = filter.value;
+      const cutoff = new Date(`${todayValue}T00:00:00Z`);
+      if (/^\d+$/.test(f)) cutoff.setUTCDate(cutoff.getUTCDate()+Number(f));
+      const end = cutoff.toISOString().slice(0,10);
+      filtered = batches.filter(batch => {
+        if (q && ![batch.product_name,batch.generic_name,batch.batch_number].some(v => String(v || "").toLocaleLowerCase().includes(q))) return false;
+        if (f === "all") return true;
+        if (Number(batch.quantity_remaining) <= 0) return false;
+        if (f === "expired") return !!batch.expiry_date && batch.expiry_date < todayValue;
+        if (f === "unknown") return !batch.expiry_date;
+        return !!batch.expiry_date && batch.expiry_date >= todayValue && batch.expiry_date <= end;
+      });
+      const pages = Math.max(1, Math.ceil(filtered.length/100)); page = Math.min(page,pages-1);
+      $("#batch-count").textContent = `${filtered.length} matching batches${f === "all" ? " (including empty batches)" : " with stock"}`;
+      $("#batch-page").textContent = `Page ${page+1} of ${pages}`;
+      $("#batch-prev").disabled = page === 0; $("#batch-next").disabled = page >= pages-1;
+      rows.innerHTML = filtered.slice(page*100,(page+1)*100).map(batch => {
+        const status = expiryState(batch), sellable = status === "Expired" || status === "Expiry needs review" ? 0 : Number(batch.sellable_quantity || 0);
+        return `<tr><td><b>${esc(batch.product_name)}</b><small class="form-hint">${esc(batch.generic_name || "")}</small></td><td>${esc(batch.batch_number)}</td><td>${esc(batch.expiry_date || "Unknown")}</td><td>${Number(batch.quantity_remaining)} ${esc(batch.product_unit || "piece")}</td><td>${sellable} ${esc(batch.product_unit || "piece")}</td><td><span class="status ${status === "Expired" || status === "Expiry needs review" ? "out" : status === "Expiring soon" ? "low" : ""}">${status}</span></td><td><button type="button" class="user-action" data-edit-pharmacy-batch="${batch.id}">Correct batch / expiry</button>${signedInUser?.role === "admin" && Number(batch.quantity_remaining)>0 ? `<button type="button" class="user-action" data-adjust-pharmacy-batch="${batch.id}">Remove stock</button>` : ""}</td></tr>`;
+      }).join("") || '<tr><td colspan="7" class="empty">No matching batches.</td></tr>';
+    }
+    search.addEventListener("input", () => update(true)); filter.addEventListener("change", () => update(true));
+    $("#batch-prev").onclick = () => { page--; update(); }; $("#batch-next").onclick = () => { page++; update(); };
+    $("#batch-print").onclick = () => printSupplierRows(`Medicine expiry report — ${filter.selectedOptions[0].textContent}${search.value.trim() ? ` — search: ${search.value.trim()}` : ""}`, ["Medicine","Generic","Batch","Expiry","Remaining","Status"], filtered.map(batch => [batch.product_name,batch.generic_name || "",batch.batch_number,batch.expiry_date || "Unknown",`${batch.quantity_remaining} ${batch.product_unit || "piece"}`,expiryState(batch)]));
     $("#pharmacy-receive-batch").onclick = () => { closeModal(); openPharmacyReceiveBatch(); };
-    dialog.querySelectorAll("[data-edit-pharmacy-batch]").forEach(button => button.onclick = () => {
-      const batch = batches.find(item => Number(item.id) === Number(button.dataset.editPharmacyBatch));
+    rows.onclick = event => {
+      const button = event.target.closest("[data-edit-pharmacy-batch], [data-adjust-pharmacy-batch]"); if (!button) return;
+      const batch = batches.find(item => Number(item.id) === Number(button.dataset.editPharmacyBatch || button.dataset.adjustPharmacyBatch));
       if (!batch) return toast("Medicine batch not found. Refresh and try again.");
       closeModal();
-      openPharmacyEditBatch(batch);
-    });
+      if (button.dataset.adjustPharmacyBatch) openPharmacyAdjustBatch(batch); else openPharmacyEditBatch(batch);
+    };
+    update();
   } catch (error) { toast(error.message); }
 }
+function openPharmacyAdjustBatch(batch) {
+  const regular = Math.max(0,Number(batch.quantity_remaining)-Number(batch.quantity_quarantined));
+  const quarantine = Number(batch.quantity_quarantined || 0);
+  openModal("Remove medicine batch stock", `<p><b>${esc(batch.product_name)}</b> · Batch ${esc(batch.batch_number)} · Expiry ${esc(batch.expiry_date || "unknown")}</p><p class="form-hint">Regular stock: ${regular}; quarantined stock: ${quarantine} ${esc(batch.product_unit || "piece")}. This removes stock; it does not delete the batch or record a supplier credit. Receive any replacement separately.</p><label>Action<select name="kind" required><option value="">Choose action</option><option value="destroyed">Destroyed</option><option value="returned to supplier">Returned to supplier</option><option value="stock correction">Stock correction (reduce)</option></select></label><label>Stock type<select name="source" required><option value="regular">Regular stock</option><option value="quarantined">Quarantined stock</option></select></label><label>Quantity to remove (${esc(batch.product_unit || "piece")})<input name="quantity" type="number" min="0.001" step="any" required></label><label>Reason<textarea name="reason" maxlength="500" required></textarea></label><p class="form-hint">Confirm the actual quantity and reason before saving. This action cannot be undone here.</p>`, async form => {
+    const result = await api(`/api/pharmacy/batches/${batch.id}/adjust`, { method: "POST", body: JSON.stringify({ kind: form.get("kind"), source: form.get("source"), quantity: Number(form.get("quantity")), reason: form.get("reason").trim() }) });
+    data = result; render(); toast("Batch stock removed and recorded in stock history.");
+  });
+}
+
 function openPharmacyReceiveBatch() {
   const products = (data.products || []).filter(product => product.id);
   if (!products.length) return toast("Add a medicine before receiving stock.");

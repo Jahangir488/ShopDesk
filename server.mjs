@@ -1587,6 +1587,38 @@ async function handleApi(request, response, url) {
       return json(response,201,stateFor(user));
     } catch (error) { try { db.exec("ROLLBACK"); } catch {} if (error.status) return json(response,error.status,{error:error.message}); if (String(error.message).includes("UNIQUE")) return json(response,409,{error:"That batch number already exists for this medicine."}); throw error; }
   }
+  const pharmacyBatchAdjustmentMatch = route.match(/^\/api\/pharmacy\/batches\/(\d+)\/adjust$/);
+  if (pharmacyBatchAdjustmentMatch && method === "POST") {
+    if (!pharmacyMode()) return json(response,403,{error:"Pharmacy inventory is not enabled."});
+    if (user.role !== "admin" || !requirePermission(user,"inventory") || !can(user,"records")) return json(response,403,{error:"Administrator, inventory and edit-record access are required."});
+    const body = await readJson(request);
+    const kind = String(body.kind || ""), reason = String(body.reason || "").trim();
+    const source = String(body.source || ""), quantity = Number(body.quantity);
+    if (!['destroyed','returned to supplier','stock correction'].includes(kind) || !['regular','quarantined'].includes(source) || !reason || reason.length > 500) return json(response,400,{error:"Choose an action and stock type and enter a reason (1–500 characters)."});
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      const batch = db.prepare("SELECT * FROM medicine_batches WHERE id=?").get(Number(pharmacyBatchAdjustmentMatch[1]));
+      if (!batch) throw httpError(404,"Medicine batch not found.");
+      const product = db.prepare("SELECT * FROM products WHERE id=?").get(batch.product_id);
+      if (!product) throw httpError(404,"Medicine not found.");
+      if (!validQty(quantity,product.unit,0.001,Number(product.pack_size)>0)) throw httpError(400,"Enter a valid positive quantity for this medicine's unit.");
+      const available = source === "quarantined" ? Number(batch.quantity_quarantined) : Number(batch.quantity_remaining)-Number(batch.quantity_quarantined);
+      if (quantity > available || quantity > Number(product.qty)) throw httpError(409,"Quantity exceeds the available stock for the selected batch and stock type. Refresh and check again.");
+      const remaining = Number((Number(batch.quantity_remaining)-quantity).toFixed(6));
+      const quarantine = Number((Number(batch.quantity_quarantined)-(source === "quarantined" ? quantity : 0)).toFixed(6));
+      const after = Number((Number(product.qty)-quantity).toFixed(6));
+      db.prepare("UPDATE medicine_batches SET quantity_remaining=?,quantity_quarantined=? WHERE id=?").run(remaining,quarantine,batch.id);
+      db.prepare("UPDATE products SET qty=? WHERE id=?").run(after,product.id);
+      recordStockMovement(product,`pharmacy ${kind}`,-quantity,after,user.username,`Batch #${batch.id}: ${batch.batch_number}`,`Expiry: ${batch.expiry_date || "unknown"}; stock: ${source}; reason: ${reason}`,Number(batch.unit_cost));
+      db.prepare("INSERT INTO activity_log(username,action) VALUES(?,?)").run(user.username,`Pharmacy ${kind}: batch #${batch.id}, ${quantity} ${product.unit}; ${reason}`);
+      db.exec("COMMIT");
+      return json(response,200,stateFor(user));
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch {}
+      if (error.status) return json(response,error.status,{error:error.message});
+      throw error;
+    }
+  }
   const pharmacyBatchMatch = route.match(/^\/api\/pharmacy\/batches\/(\d+)$/);
   if (pharmacyBatchMatch && method === "PATCH") {
     if (!pharmacyMode()) return json(response,403,{error:"Pharmacy inventory is not enabled for this licensed shop."});

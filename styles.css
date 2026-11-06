@@ -698,3 +698,8 @@ body.license-locked .license-banner{background:#fbe6e3;border-color:#e5b1aa;colo
 .pharmacy-purchase-batch label{font-size:11px;color:var(--muted)}
 .pharmacy-purchase-batch input{width:100%;min-width:0;padding:6px;font-size:12px}
 @media(max-width:700px){.pharmacy-batch-toolbar{display:grid}.pharmacy-expiry-summary{grid-template-columns:1fr}.pharmacy-purchase-batch{grid-template-columns:1fr}}
+
+.batch-filters { display:flex; flex-wrap:wrap; gap:10px; align-items:end; margin:12px 0; }
+.batch-filters label { flex:1 1 180px; min-width:0; }
+.batch-filters input, .batch-filters select { width:100%; }
+.batch-pagination { display:flex; gap:12px; align-items:center; justify-content:center; margin-top:12px; }
