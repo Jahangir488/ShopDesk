@@ -95,9 +95,45 @@ try {
   for (const token of ["Medicine &lt;A&gt;", "Generic", "500 mg", "Maker", "Total stock", "Sellable", ">98<", ">0<", "Cost / unit"]) if (!printed.includes(token)) fail(`Pharmacy print missing ${token}`);
   for (const token of ["<th>Brand</th>", "<th>Color</th>", "<th>Size</th>", "<th>Material</th>"]) if (printed.includes(token)) fail(`Pharmacy print contains irrelevant ${token}`);
   if (restricted.includes("Cost / unit") || restricted.includes("৳2")) fail("cost must remain hidden when unavailable");
-  if (!app.includes('if (data.shopType === "pharmacy")') || !app.includes('pharmacyInventoryPrintTable(items, hasCost)')) fail("Pharmacy print must use its own layout");
+  if (!app.includes('if (data.shopType === "pharmacy")') || !app.includes('pharmacyInventoryPrintTable(items, hasCost, part.start)')) fail("Pharmacy print must use its own layout");
   ok("medicine details and total/sellable quantities print without clothing columns or unauthorized cost");
 } catch (error) { fail("Pharmacy inventory print: " + error.message); }
+
+console.log("Large print safety");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8");
+  const helperStart = app.indexOf("const PRINT_PART_SIZE ="), helperEnd = app.indexOf('$("#print-report").onclick', helperStart);
+  if (helperStart < 0 || helperEnd < 0) throw new Error("print part selector missing");
+  let answer = "1", message = "";
+  const win = { prompt: () => answer }, toast = text => { message = text; };
+  const helpers = new Function("window", "toast", `${app.slice(helperStart, helperEnd)}\nreturn { choosePrintPart, printPartLabel };`)(win, toast);
+  const all = Array.from({length:22000}, (_, i) => i);
+  const seen = [];
+  for (let part = 1; part <= 110; part++) {
+    answer = String(part); const selected = helpers.choosePrintPart(all, "test");
+    if (selected.items.length !== 200 || selected.start !== (part-1)*200+1 || selected.end !== part*200) throw new Error(`wrong part ${part}`);
+    seen.push(...selected.items);
+  }
+  if (seen.length !== all.length || seen.some((value, i) => value !== i)) fail("large print parts must include every record exactly once");
+  answer = "111"; if (helpers.choosePrintPart(all, "test") !== null || !message) fail("invalid print part must be rejected");
+  answer = null; if (helpers.choosePrintPart(all, "test") !== null) fail("cancelled print must not print");
+  const readRowsStart = app.indexOf("const inventoryRows ="), readRowsEnd = app.indexOf('$("#inv-download").onclick', readRowsStart);
+  const tableStart = app.indexOf("function pharmacyInventoryPrintTable("), tableEnd = app.indexOf("// Local Sales:", tableStart);
+  if (readRowsStart < 0 || readRowsEnd < 0 || tableStart < 0 || tableEnd < 0) throw new Error("inventory print handler missing");
+  let printed = "", selectedPart = "110";
+  const button = {}, search = {value:""};
+  const get = selector => selector === "#search" ? search : button;
+  const inventory = Array.from({length:22000}, (_, i) => ({id:i+1,name:`Medicine ${i+1}`,sku:`SKU${i+1}`,category:"Other",unit:"tablet",qty:10,available_to_sell:4,min:0,price:2,cost:1}));
+  for (const type of ["pharmacy","general","grocery","restaurant","hardware","clothing","mobile"]) {
+    const data = { products:inventory, shopType:type, shopName:"Test", workspace:"Test" };
+    const helperInstance = new Function("window", "toast", `${app.slice(helperStart, helperEnd)}\nreturn { choosePrintPart, printPartLabel };`)({prompt:()=>selectedPart}, toast);
+    new Function("$","data","money","esc","productSellableQty","printHtml","choosePrintPart","printPartLabel", `${app.slice(readRowsStart, readRowsEnd)}\n${app.slice(tableStart, tableEnd)}`)(get,data,x=>String(x),String,p=>p.available_to_sell,html=>{printed=html;},helperInstance.choosePrintPart,helperInstance.printPartLabel);
+    button.onclick();
+    if (!printed.includes("records 21801–22000 of 22000") || !printed.includes("Medicine 21801") || !printed.includes("Medicine 22000") || printed.includes("Medicine 21800") || (printed.match(/<tr(?:\s|>)/g)||[]).length > 201) fail(`${type} large inventory printing is not bounded or loses the final part`);
+  }
+  for (const token of ['choosePrintPart(currentLocalSaleGroups', 'choosePrintPart(rows, title)', 'choosePrintPart([...sales.map', 'html.length > 1000000']) if (!app.includes(token)) fail(`large print protection missing: ${token}`);
+  ok("22,000 rows print in 200-record parts for every shop type; cancellation, bounds, reports and safety guard covered");
+} catch (error) { fail("large print safety: " + error.message); }
 
 console.log("Pharmacy CSV stock receipt");
 try {

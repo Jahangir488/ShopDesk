@@ -1,15 +1,22 @@
 const $ = selector => document.querySelector(selector);
-const money = amount => {
-  const value = Number(amount) || 0, currency = data.currencyCode || "BDT";
-  const locale = data.banglaDigits ? "bn-BD" : (data.locale || "en-BD");
+const money = (() => {
+  let formatterKey = "", formatter = null;
+  return amount => {
+    const value = Number(amount) || 0, currency = data.currencyCode || "BDT";
+    const locale = data.banglaDigits ? "bn-BD" : (data.locale || "en-BD");
   // Pharmacy base-unit prices often include poisha (for example ৳2.50/tablet).
   // Keep whole amounts compact, but never round an edited decimal price away.
-  try { return new Intl.NumberFormat(locale, { style: "currency", currency, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value); }
+  try {
+    const key = `${locale}:${currency}`;
+    if (formatterKey !== key || !formatter) { formatter = new Intl.NumberFormat(locale, { style: "currency", currency, minimumFractionDigits: 0, maximumFractionDigits: 2 }); formatterKey = key; }
+    return formatter.format(value);
+  }
   catch {
     const rounded = Math.round((value + Number.EPSILON) * 100) / 100;
     return `${currency} ${localizeDigits(rounded.toLocaleString("en-US", { maximumFractionDigits: 2 }))}`;
   }
-};
+  };
+})();
 const currencySymbol = () => {
   try { return new Intl.NumberFormat(data.locale || "en-BD", { style: "currency", currency: data.currencyCode || "BDT", maximumFractionDigits: 0 }).formatToParts(0).find(part => part.type === "currency")?.value || data.currencyCode || "BDT"; }
   catch { return data.currencyCode || "BDT"; }
@@ -467,7 +474,9 @@ function renderReport() {
   $("#report-net").textContent = permissions.sales && permissions.expenses ? money(summary.profitAfterReturns - costs) : "—";
   $("#chart-total").textContent = permissions.sales ? money(summary.netSales) : "—";
   $("#chart-label").textContent = `Net sales after returns · ${range.caption}`;
-  const amounts = range.buckets.map(bucket => sales.filter(item => range.monthly ? item.date.startsWith(bucket.key) : item.date === bucket.key).reduce((sum, item) => sum + Number(item.total || 0), 0));
+  const salesByPeriod = new Map();
+  for (const item of sales) { const key = range.monthly ? item.date.slice(0, 7) : item.date; salesByPeriod.set(key, (salesByPeriod.get(key) || 0) + Number(item.total || 0)); }
+  const amounts = range.buckets.map(bucket => salesByPeriod.get(bucket.key) || 0);
   const max = Math.max(1000, ...amounts);
   $("#chart-max").textContent = money(Math.ceil(max / 4 / 1000) * 1000 || 1000);
   $("#chart").innerHTML = amounts.map((amount, index) => {
@@ -2598,21 +2607,43 @@ $("#download-report").onclick = () => {
   }).join(",")).join("\r\n");
   downloadFile(`shop-report-${range.start}-to-${range.end}.csv`, csv);
 };
+// Large print jobs are divided into explicit parts before building print HTML.
+// Never silently truncate: the user can select every part or download the full data.
+const PRINT_PART_SIZE = 200;
+const lastPrintParts = new Map();
+function choosePrintPart(items, label) {
+  const total = items.length;
+  if (total <= PRINT_PART_SIZE) return { items, start: total ? 1 : 0, end: total, total, part: 1, parts: 1 };
+  const parts = Math.ceil(total / PRINT_PART_SIZE);
+  const previous = Math.min(lastPrintParts.get(label) || 1, parts);
+  const answer = window.prompt(`${label}: ${total} records. To protect your browser, print up to ${PRINT_PART_SIZE} records at a time. Enter a part number from 1 to ${parts}. Run Print again for other parts. You can also use Download where available.`, String(previous));
+  if (answer === null) return null;
+  const part = Number(answer.trim());
+  if (!/^\d+$/.test(answer.trim()) || !Number.isSafeInteger(part) || part < 1 || part > parts) { toast(`Enter a part number from 1 to ${parts}.`); return null; }
+  lastPrintParts.set(label, Math.min(parts, part + 1));
+  const offset = (part - 1) * PRINT_PART_SIZE, end = Math.min(offset + PRINT_PART_SIZE, total);
+  return { items: items.slice(offset, end), start: offset + 1, end, total, part, parts };
+}
+function printPartLabel(part) {
+  return part.parts > 1 ? `Part ${part.part} of ${part.parts} · records ${part.start}–${part.end} of ${part.total}` : `${part.total} records`;
+}
 $("#print-report").onclick = () => {
   const permissions = data.permissions || {}, range = reportRange();
   if (range.start > range.end) return toast("The start date must be on or before the end date.");
   const sales = permissions.sales ? data.sales.filter(item => item.date >= range.start && item.date <= range.end) : [];
   const expenses = permissions.expenses ? data.expenses.filter(item => item.date >= range.start && item.date <= range.end) : [];
+  const part = choosePrintPart([...sales.map(item => ({type:"sale", item})), ...expenses.map(item => ({type:"expense", item}))], "Shop report");
+  if (!part) return;
   const rows = [];
-  if (permissions.sales) for (const item of sales) rows.push(`<tr><td>${esc(item.date)}</td><td>${esc(item.product)}</td><td>${item.qty} ${esc(item.unit || "piece")}</td><td>${esc(item.payment)}</td><td>${money(item.total)}</td><td>${money(item.tax_amount || 0)}</td><td>${money(Number(item.total || 0) - Number(item.cost || 0))}</td></tr>`);
-  if (permissions.expenses) for (const item of expenses) rows.push(`<tr><td>${esc(item.date)}</td><td>${esc(item.category)}${item.note ? ` · ${esc(item.note)}` : ""}</td><td></td><td>Expense</td><td>${money(item.amount)}</td><td></td><td></td></tr>`);
+  for (const entry of part.items) { const item = entry.item; if (entry.type === "sale") rows.push(`<tr><td>${esc(item.date)}</td><td>${esc(item.product)}</td><td>${item.qty} ${esc(item.unit || "piece")}</td><td>${esc(item.payment)}</td><td>${money(item.total)}</td><td>${money(item.tax_amount || 0)}</td><td>${money(Number(item.total || 0) - Number(item.cost || 0))}</td></tr>`);
+  else rows.push(`<tr><td>${esc(item.date)}</td><td>${esc(item.category)}${item.note ? ` · ${esc(item.note)}` : ""}</td><td></td><td>Expense</td><td>${money(item.amount)}</td><td></td><td></td></tr>`); }
   const salesSummary = summarizeSales(sales), spent = expenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const summaryRows = [];
   if (permissions.sales) summaryRows.push(["Gross sales (ex tax)", salesSummary.grossSales], ["Returned value (ex tax)", salesSummary.returnedValue], ["Net sales after returns (ex tax)", salesSummary.netSales], ["Tax collected after returns", salesSummary.netTax], ["Profit after returns", salesSummary.profitAfterReturns]);
   if (permissions.expenses) summaryRows.push(["Expenses", spent]);
   if (permissions.sales && permissions.expenses) summaryRows.push(["Net profit", salesSummary.profitAfterReturns - spent]);
   const summary = summaryRows.map(([label, amount]) => `<tr><th>${label}</th><td>${money(amount)}</td></tr>`).join("");
-  printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Shop report</title><style>@page{margin:12mm}body{font:12px system-ui,"Segoe UI",sans-serif;color:#17212b}h1{margin:0}p{color:#66727d}table{border-collapse:collapse;width:100%;margin:14px 0}th,td{border:1px solid #d2d8dc;padding:6px;text-align:left}thead th{background:#eef2f3}.summary{width:auto;min-width:50%}.summary td{text-align:right}.summary th{background:#f5f6f7}</style></head><body><h1>${esc(data.shopName)}</h1><p>${esc(data.workspace)} · Report from ${esc(range.start)} to ${esc(range.end)}</p><table class="summary"><tbody>${summary}</tbody></table><table><thead><tr><th>Date</th><th>Item / category</th><th>Quantity</th><th>Payment</th><th>Amount</th><th>Tax</th><th>Profit</th></tr></thead><tbody>${rows.join("") || `<tr><td colspan="7">No records in this period.</td></tr>`}</tbody></table></body></html>`);
+  printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Shop report</title><style>@page{margin:12mm}body{font:12px system-ui,"Segoe UI",sans-serif;color:#17212b}h1{margin:0}p{color:#66727d}table{border-collapse:collapse;width:100%;margin:14px 0}th,td{border:1px solid #d2d8dc;padding:6px;text-align:left}thead th{background:#eef2f3}.summary{width:auto;min-width:50%}.summary td{text-align:right}.summary th{background:#f5f6f7}</style></head><body><h1>${esc(data.shopName)}</h1><p>${esc(data.workspace)} · Report from ${esc(range.start)} to ${esc(range.end)} · ${esc(printPartLabel(part))}. Summary covers the full selected date range.</p><table class="summary"><tbody>${summary}</tbody></table><table><thead><tr><th>Date</th><th>Item / category</th><th>Quantity</th><th>Payment</th><th>Amount</th><th>Tax</th><th>Profit</th></tr></thead><tbody>${rows.join("") || `<tr><td colspan="7">No records in this period.</td></tr>`}</tbody></table></body></html>`);
 };
 $("#download-stock-watch").onclick = () => {
   const low = data.products.filter(item => item.qty <= item.min);
@@ -3381,6 +3412,10 @@ dialog.wide{width:min(900px,calc(100% - 28px));max-height:calc(100vh - 28px);ove
 .cust-head{display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap}.cust-head .search{flex:1}.cust-head .search input{width:100%}
 </style>`);
 function printHtml(html) {
+  if (html.length > 1000000 || (html.match(/<tr(?:\s|>)/gi) || []).length > PRINT_PART_SIZE + 15) {
+    toast("This printout is too large for a safe preview. Narrow the filters or download the data instead.");
+    return;
+  }
   const frame = document.createElement("iframe");
   frame.setAttribute("aria-hidden", "true");
   frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
@@ -3421,29 +3456,32 @@ $("#inv-download").onclick = () => {
     ...items.map(p => [p.name, p.sku, p.category || "Other", p.brand || "", p.color || "", p.size || "", p.material || "", p.unit || "piece", p.qty, p.min, p.price, ...(hasCost ? [p.cost, p.cost * p.qty] : [])])];
   downloadFile(`inventory-${today10()}.csv`, "\uFEFF" + rows.map(r => r.map(csvCell).join(",")).join("\r\n"));
 };
-function pharmacyInventoryPrintTable(items, hasCost) {
+function pharmacyInventoryPrintTable(items, hasCost, start = 1) {
   const rows = items.map((p, i) => {
     const details = [p.generic_name, p.strength, p.dosage_form, p.manufacturer].filter(Boolean).map(esc).join(" · ");
-    return `<tr><td>${i + 1}</td><td><b>${esc(p.name)}</b>${details ? `<br><small>${details}</small>` : ""}</td><td>${esc(p.category || "Other")}</td><td>${esc(p.unit || "piece")}</td><td class="r">${Number(p.qty || 0)}</td><td class="r">${productSellableQty(p)}</td><td class="r">${Number(p.min || 0)}</td><td class="r">${money(p.price)}</td>${hasCost ? `<td class="r">${p.cost === undefined ? "—" : money(p.cost)}</td>` : ""}</tr>`;
+    return `<tr><td>${start + i}</td><td><b>${esc(p.name)}</b>${details ? `<br><small>${details}</small>` : ""}</td><td>${esc(p.category || "Other")}</td><td>${esc(p.unit || "piece")}</td><td class="r">${Number(p.qty || 0)}</td><td class="r">${productSellableQty(p)}</td><td class="r">${Number(p.min || 0)}</td><td class="r">${money(p.price)}</td>${hasCost ? `<td class="r">${p.cost === undefined ? "—" : money(p.cost)}</td>` : ""}</tr>`;
   }).join("");
   return `<table><thead><tr><th>#</th><th>Medicine / details</th><th>Category</th><th>Unit</th><th class="r">Total stock</th><th class="r">Sellable</th><th class="r">Min</th><th class="r">Price / unit</th>${hasCost ? '<th class="r">Cost / unit</th>' : ""}</tr></thead><tbody>${rows}</tbody></table>`;
 }
 $("#inv-print").onclick = () => {
-  const items = inventoryRows(), hasCost = items.some(p => p.cost !== undefined);
-  if (!items.length) return toast("No products to print.");
+  const matchingItems = inventoryRows();
+  if (!matchingItems.length) return toast("No products to print.");
+  const part = choosePrintPart(matchingItems, "Inventory list");
+  if (!part) return;
+  const items = part.items, hasCost = items.some(p => p.cost !== undefined);
   const value = items.reduce((sum, p) => sum + (p.cost || 0) * p.qty, 0);
   if (data.shopType === "pharmacy") {
     printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Pharmacy inventory</title><style>
 @page{margin:10mm}body{font:12px/1.4 system-ui,"Segoe UI",sans-serif;color:#000}h1{font-size:20px;margin:0}p{margin:2px 0 10px}table{width:100%;border-collapse:collapse;table-layout:fixed}th,td{border:1px solid #999;padding:5px;text-align:left;overflow-wrap:anywhere}th{background:#eee}.r{text-align:right}tr{page-break-inside:avoid}small{color:#333}th:first-child{width:3%}th:nth-child(2){width:32%}</style></head><body>
-<h1>${esc(data.shopName)} - Pharmacy inventory list</h1><p>${esc(data.workspace)} · ${new Date().toLocaleString("en-BD")} · ${items.length} medicines${hasCost ? ` · Stock value at cost: ${money(value)}` : ""}</p><p>Sellable excludes expired, unverified and quarantined stock. For batch numbers and expiry dates, use Batches &amp; expiry.</p>
-${pharmacyInventoryPrintTable(items, hasCost)}</body></html>`);
+<h1>${esc(data.shopName)} - Pharmacy inventory list</h1><p>${esc(data.workspace)} · ${new Date().toLocaleString("en-BD")} · ${esc(printPartLabel(part))}${hasCost ? ` · ${part.parts > 1 ? "Part stock value at cost" : "Stock value at cost"}: ${money(value)}` : ""}</p><p>Sellable excludes expired, unverified and quarantined stock. For batch numbers and expiry dates, use Batches &amp; expiry.</p>
+${pharmacyInventoryPrintTable(items, hasCost, part.start)}</body></html>`);
     return;
   }
   printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Inventory</title><style>
 @page{margin:10mm}body{font:12px/1.4 system-ui,"Segoe UI",sans-serif;color:#000}h1{font-size:20px;margin:0}p{margin:2px 0 10px}
 table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5px 7px;text-align:left}th{background:#eee}.r{text-align:right}tr{page-break-inside:avoid}</style></head><body>
-<h1>${esc(data.shopName)} - Inventory list</h1><p>${esc(data.workspace)} · ${new Date().toLocaleString("en-BD")} · ${items.length} products${hasCost ? ` · Stock value at cost: ${money(value)}` : ""}</p>
-<table><thead><tr><th>#</th><th>Product</th><th>Brand</th><th>Color</th><th>Size</th><th>Material</th><th>SKU</th><th>Category</th><th class="r">Qty</th><th class="r">Min</th><th class="r">Price</th>${hasCost ? '<th class="r">Cost</th>' : ""}</tr></thead><tbody>${items.map((p, i) => `<tr><td>${i + 1}</td><td>${esc(p.name)}</td><td>${esc(p.brand || "")}</td><td>${esc(p.color || "")}</td><td>${esc(p.size || "")}</td><td>${esc(p.material || "")}</td><td>${esc(p.sku)}</td><td>${esc(p.category || "Other")}</td><td class="r">${p.qty} ${esc(p.unit || "piece")}</td><td class="r">${p.min}</td><td class="r">${money(p.price)}</td>${hasCost ? `<td class="r">${money(p.cost)}</td>` : ""}</tr>`).join("")}</tbody></table></body></html>`);
+<h1>${esc(data.shopName)} - Inventory list</h1><p>${esc(data.workspace)} · ${new Date().toLocaleString("en-BD")} · ${esc(printPartLabel(part))}${hasCost ? ` · ${part.parts > 1 ? "Part stock value at cost" : "Stock value at cost"}: ${money(value)}` : ""}</p>
+<table><thead><tr><th>#</th><th>Product</th><th>Brand</th><th>Color</th><th>Size</th><th>Material</th><th>SKU</th><th>Category</th><th class="r">Qty</th><th class="r">Min</th><th class="r">Price</th>${hasCost ? '<th class="r">Cost</th>' : ""}</tr></thead><tbody>${items.map((p, i) => `<tr><td>${part.start + i}</td><td>${esc(p.name)}</td><td>${esc(p.brand || "")}</td><td>${esc(p.color || "")}</td><td>${esc(p.size || "")}</td><td>${esc(p.material || "")}</td><td>${esc(p.sku)}</td><td>${esc(p.category || "Other")}</td><td class="r">${p.qty} ${esc(p.unit || "piece")}</td><td class="r">${p.min}</td><td class="r">${money(p.price)}</td>${hasCost ? `<td class="r">${money(p.cost)}</td>` : ""}</tr>`).join("")}</tbody></table></body></html>`);
 };
 
 // Local Sales: search whole bills by customer, item, payment, bill no, or date range.
@@ -3484,7 +3522,9 @@ $("#sales-print").onclick = () => {
   const salesGross = currentMatchingSales.reduce((sum, item) => sum + Number(item.original_total ?? item.total ?? 0), 0);
   const salesNet = currentMatchingSales.reduce((sum, item) => sum + Number(item.total || 0), 0);
   const returnsTotal = Math.max(0, salesGross - salesNet);
-  const printRows = currentLocalSaleGroups.map(group => {
+  const part = choosePrintPart(currentLocalSaleGroups, "Local sales");
+  if (!part) return;
+  const printRows = part.items.map(group => {
     const first = group.lines[0] || {}, totals = localSaleGroupTotals(group);
     const items = group.lines.map(sale => {
       const originalQty = Number(sale.original_qty ?? sale.qty ?? 0), gross = Number(sale.original_total ?? sale.total ?? 0), returnedQty = Number(sale.returned_qty || 0);
@@ -3496,7 +3536,7 @@ $("#sales-print").onclick = () => {
 @page{margin:10mm}body{font:12px/1.4 system-ui,"Segoe UI",sans-serif;color:#000}h1{font-size:20px;margin:0}p{margin:2px 0 10px}
 table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5px 7px;text-align:left;vertical-align:top}th{background:#eee}.r{text-align:right}tr{page-break-inside:avoid}
 .summary{margin:15px 0;padding:10px;background:#f5f5f5;border:1px solid #ccc}.summary-row{display:flex;justify-content:space-between;margin:3px 0}</style></head><body>
-<h1>${esc(data.shopName)} - Local Sales</h1><p>${esc(data.workspace)} · ${new Date().toLocaleString("en-BD")} · ${dateRange} · Online-order bills are not included.</p>
+<h1>${esc(data.shopName)} - Local Sales</h1><p>${esc(data.workspace)} · ${new Date().toLocaleString("en-BD")} · ${dateRange} · ${esc(printPartLabel(part))} · Online-order bills are not included. Summary covers all matching sales.</p>
 <div class="summary"><div class="summary-row"><span>Sale lines:</span><b>${currentMatchingSales.length}</b></div><div class="summary-row"><span>Gross sales:</span><b>${money(salesGross)}</b></div><div class="summary-row"><span>Returned value:</span><b>${money(returnsTotal)}</b></div><div class="summary-row"><span>Net sales after returns:</span><b>${money(salesNet)}</b></div></div>
 <table><thead><tr><th>Date</th><th>Bill / Sale</th><th>Customer</th><th>Items</th><th>Payment</th><th class="r">Total</th></tr></thead><tbody>${printRows}</tbody></table></body></html>`);
 };
@@ -3683,7 +3723,7 @@ render = function () {
 const OFFLINE_FONTS = true; // removes the Google Fonts link so screens look the same without internet
 if (OFFLINE_FONTS) document.querySelector('link[href*="fonts.googleapis.com"]')?.remove();
 const saveCsv = (filename, rows) => downloadFile(filename, "\uFEFF" + rows.map(r => r.map(csvCell).join(",")).join("\r\n"));
-const toolTable = (head, rows) => `<div class="table-scroll bill-cart" style="max-height:380px"><table><thead><tr>${head.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+const toolTable = (head, rows) => `<div class="table-scroll bill-cart" style="max-height:380px"><table><thead><tr>${head.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows.slice(0, PRINT_PART_SIZE).map(r => `<tr>${r.map(c => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${rows.length > PRINT_PART_SIZE ? `<p class="form-hint">Showing first ${PRINT_PART_SIZE} of ${rows.length} rows. Download for the full list.</p>` : ""}`;
 const stamp = at => new Date(at.replace(" ", "T") + "Z").toLocaleString("en-BD");
 let toolDays = 90;
 const periodPicker = `<p><label>Period <select id="tool-period">${[30, 90, 180, 365].map(d => `<option value="${d}" ${d === toolDays ? "selected" : ""}>Last ${d} days</option>`).join("")}</select></label></p>`;
@@ -3995,7 +4035,10 @@ async function openTool(key) {
       $("#tool-body").innerHTML = `<div id="tool-print"><h3>${esc(tools[k].label)}</h3>${out.html}</div>`;
       $("#tool-actions").innerHTML = `${out.csv ? '<button type="button" class="button secondary" id="tool-csv">Download</button>' : ""}<button type="button" class="button secondary" id="tool-print-btn">Print</button>${out.extra || ""}`;
       if (out.csv) $("#tool-csv").onclick = () => saveCsv(`${k}-${today10()}.csv`, out.csv);
-      $("#tool-print-btn").onclick = () => printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(tools[k].label)}</title><style>@page{margin:10mm}body{font:12px system-ui,"Segoe UI",sans-serif}table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5px 7px;text-align:left}th{background:#eee}input,select,a{display:none}</style></head><body><h2>${esc(data.shopName)}</h2>${$("#tool-print").innerHTML}</body></html>`);
+      $("#tool-print-btn").onclick = () => {
+        if (out.csv && out.csv.length - 1 > PRINT_PART_SIZE) return printSupplierRows(tools[k].label, out.csv[0], out.csv.slice(1));
+        return printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(tools[k].label)}</title><style>@page{margin:10mm}body{font:12px system-ui,"Segoe UI",sans-serif}table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5px 7px;text-align:left}th{background:#eee}input,select,a{display:none}</style></head><body><h2>${esc(data.shopName)}</h2>${$("#tool-print").innerHTML}</body></html>`);
+      };
       out.after?.();
     } catch (error) { $("#tool-body").innerHTML = `<div class="empty">${esc(error.message)}</div>`; }
   };
@@ -4016,8 +4059,10 @@ const supplierMoney = value => {
 const supplierDate = () => dateKey(new Date());
 const canEditSupplierHistory = () => !!signedInUser?.permissions?.supplier_purchases;
 function printSupplierRows(title, headers, rows) {
-  const tableRows = rows.map(row => `<tr>${row.map(value => `<td>${esc(value)}</td>`).join("")}</tr>`).join("");
-  printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>body{font:14px Arial,sans-serif;color:#222;padding:24px}h1{font-size:20px;margin:0 0 6px}p{color:#555;margin:0 0 18px}table{width:100%;border-collapse:collapse}th,td{text-align:left;border:1px solid #bbb;padding:8px}th{background:#eee}tfoot{font-weight:bold}@media print{body{padding:0}}</style></head><body><h1>${esc(title)}</h1><p>${esc(data.shopName || "Shop Desk")} · Printed ${new Date().toLocaleString("en-BD")}</p>${rows.length ? `<table><thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${tableRows}</tbody></table>` : "<p>No records to print.</p>"}</body></html>`);
+  const part = choosePrintPart(rows, title);
+  if (!part) return;
+  const tableRows = part.items.map(row => `<tr>${row.map(value => `<td>${esc(value)}</td>`).join("")}</tr>`).join("");
+  printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>body{font:14px Arial,sans-serif;color:#222;padding:24px}h1{font-size:20px;margin:0 0 6px}p{color:#555;margin:0 0 18px}table{width:100%;border-collapse:collapse}th,td{text-align:left;border:1px solid #bbb;padding:8px}th{background:#eee}tfoot{font-weight:bold}@media print{body{padding:0}}</style></head><body><h1>${esc(title)}</h1><p>${esc(data.shopName || "Shop Desk")} · Printed ${new Date().toLocaleString("en-BD")} · ${esc(printPartLabel(part))}</p>${part.items.length ? `<table><thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${tableRows}</tbody></table>` : "<p>No records to print.</p>"}</body></html>`);
 }
 function supplierModal(title, markup, onSave) {
   openModal(title, markup, onSave);
