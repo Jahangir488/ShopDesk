@@ -99,6 +99,36 @@ try {
   ok("medicine details and total/sellable quantities print without clothing columns or unauthorized cost");
 } catch (error) { fail("Pharmacy inventory print: " + error.message); }
 
+console.log("Shop-specific inventory download and print");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8");
+  const start = app.indexOf("function inventoryTypeColumns("), end = app.indexOf('$("#inv-download").onclick', start);
+  const printStart = app.indexOf("function otherInventoryPrintTable("), printEnd = app.indexOf("function pharmacyInventoryPrintTable(", printStart);
+  if ([start,end,printStart,printEnd].some(value => value < 0)) throw new Error("shop-specific inventory helpers missing");
+  const escape = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  const api = new Function("esc", "money", "productSellableQty", `${app.slice(start, end)}\n${app.slice(printStart, printEnd)}\nreturn { inventoryListRows, otherInventoryPrintTable };`)(escape, value => `৳${value}`, p => p.available_to_sell || 0);
+  const item = { name:"Test <item>", sku:"S-1", barcode:"123", category:"Other", unit:"piece", qty:8, available_to_sell:3, min:2, price:4, cost:2, generic_name:"Ingredient", strength:"5mg", dosage_form:"Tablet", manufacturer:"Maker", brand:"Acme", color:"Blue", size:"Large", material:"Cotton", pack_name:"piece", pack_size:10 };
+  const expected = {
+    pharmacy:["Generic Name","Strength","Dosage Form","Manufacturer","Sellable Quantity"], restaurant:["Portion / Serving","Food Type","Spice / Prep","Kitchen Section"], clothing:["Brand","Color","Size","Material"], mobile:["Brand","Color","Storage / Variant"], hardware:["Brand","Size / Spec","Smaller Unit","Units per Pack"], grocery:["Brand","Pack / Weight","Smaller Unit","Units per Pack"], general:["Brand","Smaller Unit","Units per Pack"]
+  };
+  for (const [type, fields] of Object.entries(expected)) {
+    const [head, row] = api.inventoryListRows([item],type,true);
+    if (head.length !== row.length || fields.some(field => !head.includes(field)) || !head.includes("Purchase cost")) fail(`${type}: wrong list fields`);
+    const protectedRows = api.inventoryListRows([{...item,cost:undefined}],type,false);
+    if (protectedRows[0].includes("Purchase cost") || protectedRows[0].includes("Stock value (cost)")) fail(`${type}: cost must stay hidden`);
+    if (type !== "clothing" && type !== "mobile" && head.includes("Color")) fail(`${type}: unrelated clothing color column`);
+    if (type !== "clothing" && head.includes("Material")) fail(`${type}: unrelated clothing material column`);
+    if (type !== "pharmacy") {
+      const print = api.otherInventoryPrintTable([item],type,true);
+      for (const field of fields) if (!print.includes(field)) fail(`${type}: print missing ${field}`);
+      if (!print.includes("Test &lt;item&gt;") || !print.includes("Cost / unit") || api.otherInventoryPrintTable([{...item,cost:undefined}],type,false).includes("Cost / unit")) fail(`${type}: print escaping or cost permission`);
+    }
+  }
+  const [pharmacyHeaders, pharmacyRow] = api.inventoryListRows([item],"pharmacy",true);
+  if (pharmacyRow[pharmacyHeaders.indexOf("Sellable Quantity")] !== 3 || pharmacyRow[pharmacyHeaders.indexOf("Quantity")] !== 8) fail("Pharmacy total and sellable stock must be distinct");
+  ok("all seven profiles use their own fields in CSV and print, with cost access preserved");
+} catch (error) { fail("shop-specific inventory download and print: " + error.message); }
+
 console.log("Large print safety");
 try {
   const app = readFileSync(join(root, "app.js"), "utf8");
@@ -118,8 +148,9 @@ try {
   answer = "111"; if (helpers.choosePrintPart(all, "test") !== null || !message) fail("invalid print part must be rejected");
   answer = null; if (helpers.choosePrintPart(all, "test") !== null) fail("cancelled print must not print");
   const readRowsStart = app.indexOf("const inventoryRows ="), readRowsEnd = app.indexOf('$("#inv-download").onclick', readRowsStart);
-  const tableStart = app.indexOf("function pharmacyInventoryPrintTable("), tableEnd = app.indexOf("// Local Sales:", tableStart);
-  if (readRowsStart < 0 || readRowsEnd < 0 || tableStart < 0 || tableEnd < 0) throw new Error("inventory print handler missing");
+  const helpersStart = app.indexOf("function inventoryTypeColumns("), helpersEnd = app.indexOf('$("#inv-download").onclick', helpersStart);
+  const tableStart = app.indexOf("function otherInventoryPrintTable("), tableEnd = app.indexOf("// Local Sales:", tableStart);
+  if (readRowsStart < 0 || readRowsEnd < 0 || helpersStart < 0 || helpersEnd < 0 || tableStart < 0 || tableEnd < 0) throw new Error("inventory print handler missing");
   let printed = "", selectedPart = "110";
   const button = {}, search = {value:""};
   const get = selector => selector === "#search" ? search : button;
@@ -127,7 +158,7 @@ try {
   for (const type of ["pharmacy","general","grocery","restaurant","hardware","clothing","mobile"]) {
     const data = { products:inventory, shopType:type, shopName:"Test", workspace:"Test" };
     const helperInstance = new Function("window", "toast", `${app.slice(helperStart, helperEnd)}\nreturn { choosePrintPart, printPartLabel };`)({prompt:()=>selectedPart}, toast);
-    new Function("$","data","money","esc","productSellableQty","printHtml","choosePrintPart","printPartLabel", `${app.slice(readRowsStart, readRowsEnd)}\n${app.slice(tableStart, tableEnd)}`)(get,data,x=>String(x),String,p=>p.available_to_sell,html=>{printed=html;},helperInstance.choosePrintPart,helperInstance.printPartLabel);
+    new Function("$","data","money","esc","productSellableQty","printHtml","choosePrintPart","printPartLabel", `${app.slice(readRowsStart, readRowsEnd)}\n${app.slice(helpersStart, helpersEnd)}\n${app.slice(tableStart, tableEnd)}`)(get,data,x=>String(x),String,p=>p.available_to_sell,html=>{printed=html;},helperInstance.choosePrintPart,helperInstance.printPartLabel);
     button.onclick();
     if (!printed.includes("records 21801–22000 of 22000") || !printed.includes("Medicine 21801") || !printed.includes("Medicine 22000") || printed.includes("Medicine 21800") || (printed.match(/<tr(?:\s|>)/g)||[]).length > 201) fail(`${type} large inventory printing is not bounded or loses the final part`);
   }

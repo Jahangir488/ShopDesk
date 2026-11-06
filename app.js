@@ -3450,12 +3450,40 @@ const inventoryRows = () => {
   const q = $("#search").value.trim().toLowerCase();
   return data.products.filter(p => !q || [p.name, p.sku, p.barcode, p.unit, p.category, p.brand, p.color, p.size, p.material, p.generic_name, p.strength, p.dosage_form, p.manufacturer].some(v => String(v || "").toLowerCase().includes(q)));
 };
+// The downloadable list and printout use the same shop-specific product fields.
+// These labels follow the inventory template's existing storage mappings.
+function inventoryTypeColumns(shopType) {
+  const field = (label, key) => ({ label, value: item => item[key] ?? "" });
+  const pack = [field("Smaller Unit", "pack_name"), { label: "Units per Pack", value: item => Number(item.pack_size) || "" }];
+  switch (shopType) {
+    case "pharmacy": return [field("Generic Name", "generic_name"), field("Strength", "strength"), field("Dosage Form", "dosage_form"), field("Manufacturer", "manufacturer")];
+    case "restaurant": return [field("Portion / Serving", "size"), field("Food Type", "material"), field("Spice / Prep", "color"), field("Kitchen Section", "brand")];
+    case "clothing": return [field("Brand", "brand"), field("Color", "color"), field("Size", "size"), field("Material", "material")];
+    case "mobile": return [field("Brand", "brand"), field("Color", "color"), field("Storage / Variant", "size")];
+    case "hardware": return [field("Brand", "brand"), field("Size / Spec", "size"), ...pack];
+    case "grocery": return [field("Brand", "brand"), field("Pack / Weight", "size"), ...pack];
+    default: return [field("Brand", "brand"), ...pack];
+  }
+}
+function inventoryListRows(items, shopType, hasCost) {
+  const columns = inventoryTypeColumns(shopType);
+  const headers = ["Product", "SKU", "Barcode", "Category", ...columns.map(column => column.label), "Unit", "Quantity", ...(shopType === "pharmacy" ? ["Sellable Quantity"] : []), "Minimum", "Selling price", ...(hasCost ? ["Purchase cost", "Stock value (cost)"] : [])];
+  const rows = items.map(p => [p.name, p.sku || "", p.barcode || "", p.category || "Other", ...columns.map(column => column.value(p)), p.unit || "piece", p.qty, ...(shopType === "pharmacy" ? [productSellableQty(p)] : []), p.min, p.price, ...(hasCost ? [p.cost ?? "", p.cost === undefined ? "" : Number(p.cost) * Number(p.qty)] : [])]);
+  return [headers, ...rows];
+}
 $("#inv-download").onclick = () => {
   const items = inventoryRows(), hasCost = items.some(p => p.cost !== undefined);
-  const rows = [["Product", "SKU", "Category", "Brand", "Color", "Size", "Material", "Unit", "Quantity", "Minimum", "Selling price", ...(hasCost ? ["Purchase cost", "Stock value (cost)"] : [])],
-    ...items.map(p => [p.name, p.sku, p.category || "Other", p.brand || "", p.color || "", p.size || "", p.material || "", p.unit || "piece", p.qty, p.min, p.price, ...(hasCost ? [p.cost, p.cost * p.qty] : [])])];
+  const rows = inventoryListRows(items, data.shopType, hasCost);
   downloadFile(`inventory-${today10()}.csv`, "\uFEFF" + rows.map(r => r.map(csvCell).join(",")).join("\r\n"));
 };
+function otherInventoryPrintTable(items, shopType, hasCost, start = 1) {
+  const columns = inventoryTypeColumns(shopType);
+  const rows = items.map((p, i) => {
+    const details = columns.map(column => [column.label, column.value(p)]).filter(([, value]) => value !== "" && value !== null && value !== undefined).map(([label, value]) => `${esc(label)}: ${esc(value)}`).join(" · ");
+    return `<tr><td>${start + i}</td><td><b>${esc(p.name)}</b>${details ? `<br><small>${details}</small>` : ""}</td><td>${esc(p.sku || "")}</td><td>${esc(p.category || "Other")}</td><td>${esc(p.unit || "piece")}</td><td class="r">${Number(p.qty || 0)}</td><td class="r">${Number(p.min || 0)}</td><td class="r">${money(p.price)}</td>${hasCost ? `<td class="r">${p.cost === undefined ? "—" : money(p.cost)}</td>` : ""}</tr>`;
+  }).join("");
+  return `<table><thead><tr><th>#</th><th>Product / details</th><th>SKU</th><th>Category</th><th>Unit</th><th class="r">Qty</th><th class="r">Min</th><th class="r">Price / unit</th>${hasCost ? '<th class="r">Cost / unit</th>' : ""}</tr></thead><tbody>${rows}</tbody></table>`;
+}
 function pharmacyInventoryPrintTable(items, hasCost, start = 1) {
   const rows = items.map((p, i) => {
     const details = [p.generic_name, p.strength, p.dosage_form, p.manufacturer].filter(Boolean).map(esc).join(" · ");
@@ -3479,9 +3507,9 @@ ${pharmacyInventoryPrintTable(items, hasCost, part.start)}</body></html>`);
   }
   printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Inventory</title><style>
 @page{margin:10mm}body{font:12px/1.4 system-ui,"Segoe UI",sans-serif;color:#000}h1{font-size:20px;margin:0}p{margin:2px 0 10px}
-table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5px 7px;text-align:left}th{background:#eee}.r{text-align:right}tr{page-break-inside:avoid}</style></head><body>
+table{width:100%;border-collapse:collapse;table-layout:fixed}th,td{border:1px solid #999;padding:5px;text-align:left;overflow-wrap:anywhere}th{background:#eee}.r{text-align:right}tr{page-break-inside:avoid}small{color:#333}th:first-child{width:3%}th:nth-child(2){width:30%}</style></head><body>
 <h1>${esc(data.shopName)} - Inventory list</h1><p>${esc(data.workspace)} · ${new Date().toLocaleString("en-BD")} · ${esc(printPartLabel(part))}${hasCost ? ` · ${part.parts > 1 ? "Part stock value at cost" : "Stock value at cost"}: ${money(value)}` : ""}</p>
-<table><thead><tr><th>#</th><th>Product</th><th>Brand</th><th>Color</th><th>Size</th><th>Material</th><th>SKU</th><th>Category</th><th class="r">Qty</th><th class="r">Min</th><th class="r">Price</th>${hasCost ? '<th class="r">Cost</th>' : ""}</tr></thead><tbody>${items.map((p, i) => `<tr><td>${part.start + i}</td><td>${esc(p.name)}</td><td>${esc(p.brand || "")}</td><td>${esc(p.color || "")}</td><td>${esc(p.size || "")}</td><td>${esc(p.material || "")}</td><td>${esc(p.sku)}</td><td>${esc(p.category || "Other")}</td><td class="r">${p.qty} ${esc(p.unit || "piece")}</td><td class="r">${p.min}</td><td class="r">${money(p.price)}</td>${hasCost ? `<td class="r">${money(p.cost)}</td>` : ""}</tr>`).join("")}</tbody></table></body></html>`);
+${otherInventoryPrintTable(items, data.shopType, hasCost, part.start)}</body></html>`);
 };
 
 // Local Sales: search whole bills by customer, item, payment, bill no, or date range.
