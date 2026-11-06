@@ -225,7 +225,7 @@ td.product-cell{font-weight:600;color:var(--ink)}.sku{color:var(--muted);font-si
 .user-action{border:0;background:transparent;color:var(--ink);font-size:13px;font-weight:700;padding:6px 8px;cursor:pointer;text-decoration:underline;text-underline-offset:3px;min-height:32px}
 .user-action.danger{color:var(--bad)}
 .bulk-inventory-tools:not(.hidden){display:flex;align-items:center;gap:8px;flex-wrap:wrap}.bulk-inventory-tools label{cursor:pointer}
-.bulk-inventory-help{margin:12px 0 0;color:var(--steel);font-size:14px;max-width:75ch}
+.bulk-inventory-help{margin:12px 0 0;color:var(--steel);font-size:14px;line-height:1.5;max-width:100%;overflow-wrap:anywhere}
 footer{font-size:13px;color:var(--muted);padding:6px 2px 20px}footer span{padding:0 5px}
 footer button{float:right;border:0;background:transparent;color:var(--steel);font-size:13px;font-weight:600;cursor:pointer;text-decoration:underline}
 

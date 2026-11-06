@@ -3413,7 +3413,7 @@ const today10 = () => new Date().toISOString().slice(0, 10);
 $("#manage-categories").insertAdjacentHTML("beforebegin", `<button class="button secondary" id="inv-download" type="button">Download list</button><button class="button secondary" id="inv-print" type="button">Print list</button>`);
 const inventoryRows = () => {
   const q = $("#search").value.trim().toLowerCase();
-  return data.products.filter(p => !q || [p.name, p.sku, p.barcode, p.unit, p.category, p.brand, p.color, p.size, p.material].some(v => String(v || "").toLowerCase().includes(q)));
+  return data.products.filter(p => !q || [p.name, p.sku, p.barcode, p.unit, p.category, p.brand, p.color, p.size, p.material, p.generic_name, p.strength, p.dosage_form, p.manufacturer].some(v => String(v || "").toLowerCase().includes(q)));
 };
 $("#inv-download").onclick = () => {
   const items = inventoryRows(), hasCost = items.some(p => p.cost !== undefined);
@@ -3421,10 +3421,24 @@ $("#inv-download").onclick = () => {
     ...items.map(p => [p.name, p.sku, p.category || "Other", p.brand || "", p.color || "", p.size || "", p.material || "", p.unit || "piece", p.qty, p.min, p.price, ...(hasCost ? [p.cost, p.cost * p.qty] : [])])];
   downloadFile(`inventory-${today10()}.csv`, "\uFEFF" + rows.map(r => r.map(csvCell).join(",")).join("\r\n"));
 };
+function pharmacyInventoryPrintTable(items, hasCost) {
+  const rows = items.map((p, i) => {
+    const details = [p.generic_name, p.strength, p.dosage_form, p.manufacturer].filter(Boolean).map(esc).join(" · ");
+    return `<tr><td>${i + 1}</td><td><b>${esc(p.name)}</b>${details ? `<br><small>${details}</small>` : ""}</td><td>${esc(p.category || "Other")}</td><td>${esc(p.unit || "piece")}</td><td class="r">${Number(p.qty || 0)}</td><td class="r">${productSellableQty(p)}</td><td class="r">${Number(p.min || 0)}</td><td class="r">${money(p.price)}</td>${hasCost ? `<td class="r">${p.cost === undefined ? "—" : money(p.cost)}</td>` : ""}</tr>`;
+  }).join("");
+  return `<table><thead><tr><th>#</th><th>Medicine / details</th><th>Category</th><th>Unit</th><th class="r">Total stock</th><th class="r">Sellable</th><th class="r">Min</th><th class="r">Price / unit</th>${hasCost ? '<th class="r">Cost / unit</th>' : ""}</tr></thead><tbody>${rows}</tbody></table>`;
+}
 $("#inv-print").onclick = () => {
   const items = inventoryRows(), hasCost = items.some(p => p.cost !== undefined);
   if (!items.length) return toast("No products to print.");
   const value = items.reduce((sum, p) => sum + (p.cost || 0) * p.qty, 0);
+  if (data.shopType === "pharmacy") {
+    printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Pharmacy inventory</title><style>
+@page{margin:10mm}body{font:12px/1.4 system-ui,"Segoe UI",sans-serif;color:#000}h1{font-size:20px;margin:0}p{margin:2px 0 10px}table{width:100%;border-collapse:collapse;table-layout:fixed}th,td{border:1px solid #999;padding:5px;text-align:left;overflow-wrap:anywhere}th{background:#eee}.r{text-align:right}tr{page-break-inside:avoid}small{color:#333}th:first-child{width:3%}th:nth-child(2){width:32%}</style></head><body>
+<h1>${esc(data.shopName)} - Pharmacy inventory list</h1><p>${esc(data.workspace)} · ${new Date().toLocaleString("en-BD")} · ${items.length} medicines${hasCost ? ` · Stock value at cost: ${money(value)}` : ""}</p><p>Sellable excludes expired, unverified and quarantined stock. For batch numbers and expiry dates, use Batches &amp; expiry.</p>
+${pharmacyInventoryPrintTable(items, hasCost)}</body></html>`);
+    return;
+  }
   printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Inventory</title><style>
 @page{margin:10mm}body{font:12px/1.4 system-ui,"Segoe UI",sans-serif;color:#000}h1{font-size:20px;margin:0}p{margin:2px 0 10px}
 table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5px 7px;text-align:left}th{background:#eee}.r{text-align:right}tr{page-break-inside:avoid}</style></head><body>

@@ -82,6 +82,23 @@ try {
   ok("medicine edits refresh inventory; ৳2.50 and ৳3.25 stay visible in English and Bangla");
 } catch (error) { fail("inventory edit formatting: " + error.message); }
 
+console.log("Pharmacy inventory print");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8");
+  const start = app.indexOf("function pharmacyInventoryPrintTable("), end = app.indexOf('$("#inv-print").onclick', start);
+  if (start < 0 || end < 0) throw new Error("Pharmacy print table missing");
+  const escape = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  const make = new Function("esc", "money", "productSellableQty", `${app.slice(start, end)}\nreturn pharmacyInventoryPrintTable;`);
+  const table = make(escape, value => `৳${value}`, p => p.available_to_sell || 0);
+  const items = [{name:"Medicine <A>",generic_name:"Generic",strength:"500 mg",dosage_form:"Tablet",manufacturer:"Maker",category:"Medicine",unit:"tablet",qty:98,available_to_sell:0,min:5,price:3,cost:2}];
+  const printed = table(items, true), restricted = table(items, false);
+  for (const token of ["Medicine &lt;A&gt;", "Generic", "500 mg", "Maker", "Total stock", "Sellable", ">98<", ">0<", "Cost / unit"]) if (!printed.includes(token)) fail(`Pharmacy print missing ${token}`);
+  for (const token of ["<th>Brand</th>", "<th>Color</th>", "<th>Size</th>", "<th>Material</th>"]) if (printed.includes(token)) fail(`Pharmacy print contains irrelevant ${token}`);
+  if (restricted.includes("Cost / unit") || restricted.includes("৳2")) fail("cost must remain hidden when unavailable");
+  if (!app.includes('if (data.shopType === "pharmacy")') || !app.includes('pharmacyInventoryPrintTable(items, hasCost)')) fail("Pharmacy print must use its own layout");
+  ok("medicine details and total/sellable quantities print without clothing columns or unauthorized cost");
+} catch (error) { fail("Pharmacy inventory print: " + error.message); }
+
 console.log("Pharmacy CSV stock receipt");
 try {
   const app = readFileSync(join(root, "app.js"), "utf8"), server = readFileSync(join(root, "server.mjs"), "utf8");
