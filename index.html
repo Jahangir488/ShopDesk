@@ -32,6 +32,7 @@
       <p class="nav-caption">OVERVIEW</p>
       <a class="nav-link active" data-screen-link="dashboard" href="#dashboard"><i>▦</i> Dashboard</a>
       <a class="nav-link" id="inventory-nav" data-screen-link="inventory" href="#inventory"><i>▤</i> Inventory <span id="nav-stock" class="nav-count">0</span></a>
+      <a class="nav-link hidden" id="pharmacy-support-nav" data-screen-link="pharmacy-support" href="#pharmacy-support"><i aria-hidden="true">✚</i> Symptom help</a>
       <a class="nav-link" id="sales-nav" data-screen-link="sales" href="#sales"><i>↗</i> Local Sales</a>
       <a class="nav-link" id="online-orders-nav" data-screen-link="online-orders" href="#online-orders"><i>🛒</i> Online orders <span id="nav-online-orders" class="nav-count">0</span></a>
       <a class="nav-link" id="repairs-nav" data-screen-link="repairs" href="#repairs"><i>⚒</i> Repairs</a>
@@ -47,6 +48,20 @@
   <main class="main" id="dashboard">
     <header class="topbar"><div><span class="breadcrumb">Shop desk</span><span class="crumb-sep">/</span><b>Dashboard</b></div><div class="top-actions"><div class="topbar-status" aria-label="Date, time, and server status"><span class="today" id="today"></span><span class="topbar-time" id="topbar-time"></span><span class="server-load hidden" id="server-load" title="Server resource status">Server · loading…</span></div><span id="signed-in-as" class="signed-in-as"></span><button class="button secondary hidden" id="pharmacy-medex-button" type="button">Medicine info (MedEx)</button><button class="button secondary hidden" id="restaurant-packages-button" type="button">Food packages</button><button class="button secondary" id="shop-profiles-button" type="button" title="Switch shop profile">Shop profile</button><button class="button secondary" id="supplier-tools" type="button">Supplier history</button><button class="button secondary" id="logout">Sign out</button><button class="avatar profile-button" id="profile-button" aria-label="Edit your profile"><span id="profile-initial">S</span><img id="profile-photo" class="hidden" alt="Profile photo"></button></div></header>
     <div class="content">
+      <div class="app-screen hidden" data-screen="pharmacy-support">
+        <section class="panel symptom-support" aria-labelledby="symptom-support-title">
+          <div class="panel-heading"><div><h1 id="symptom-support-title">Pharmacist symptom support</h1><p>Questions and reference links for common symptoms</p></div></div>
+          <div class="symptom-warning" role="note"><b>Safety first</b><p>For trained pharmacy staff as a reference only. This tool does not diagnose, prescribe, select medicines, or replace professional judgment. Content has not yet been reviewed for Bangladesh; use current local clinical guidance and consult a qualified clinician.</p></div>
+          <div class="symptom-emergency" role="note"><b>Urgent danger? Do not delay referral.</b><p>For severe breathing difficulty, unconsciousness, severe confusion, uncontrolled bleeding, or sudden loss of vision, seek emergency care immediately. In Bangladesh, call <a href="tel:999">999</a> for emergency assistance.</p></div>
+          <div class="symptom-layout"><div>
+            <h2>1. Choose a concern</h2><p class="form-hint">The guide is not a complete assessment. Ask a qualified clinician when unsure.</p>
+            <label for="symptom-choice">Concern</label><select id="symptom-choice"><option value="">Choose a symptom</option><option value="fever">Fever</option><option value="diarrhea">Diarrhea</option><option value="constipation">Constipation / hard stools</option><option value="eye">Itchy or red eyes</option></select>
+            <div class="symptom-card"><h2>2. Ask before advising</h2><ul><li>Who is affected? Check age, pregnancy or breastfeeding, and relevant medical conditions.</li><li>How long has it been happening? Is it getting worse? Are there other symptoms?</li><li>What medicines, supplements or allergies does the person have? Can they drink and keep fluids down?</li><li>Children, pregnant patients, frail people and those with serious conditions should be referred to a qualified clinician.</li></ul></div>
+            <p class="form-hint">No patient answers or identifying information are entered, stored, or sent by this screen.</p>
+          </div><div id="symptom-result" class="symptom-result" aria-live="polite"><h2>3. Review the concern</h2><p>Select a symptom to see questions, warning signs, and reference links.</p></div></div>
+          <div class="symptom-references"><h2>Medicine references</h2><p>Verify suitability, interactions, and local availability with a qualified pharmacist. External links require internet and are not part of ShopDesk’s offline guidance.</p><div class="symptom-links"><button type="button" class="button secondary" id="symptom-medex">Open MedEx lookup</button><a class="button secondary" href="https://reference.medscape.com/drug-interactionchecker" target="_blank" rel="noopener noreferrer">Medscape interaction checker ↗</a><a class="button secondary" href="https://www.nhs.uk/medicines/" target="_blank" rel="noopener noreferrer">NHS medicines information ↗</a></div></div>
+        </section>
+      </div>
       <div class="app-screen" data-screen="dashboard">
       <section class="welcome"><div><p class="eyebrow" id="welcome-date"></p><h1 id="welcome-greeting">Good morning, Shopkeeper <span>✳</span></h1><p>Here’s what’s happening at your shop today.</p></div><button class="button primary" id="new-sale">＋ Record a sale</button></section>
       <section class="metrics">

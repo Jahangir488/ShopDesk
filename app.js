@@ -188,7 +188,7 @@ setInterval(refreshTopbarClock, 1000);
 // The app script is running, so remove the "unsupported browser" notice if it was shown.
 document.querySelectorAll(".browser-warning").forEach(node => node.remove());
 
-const screenTitles = { dashboard: "Dashboard", inventory: "Inventory", sales: "Sales", "online-orders": "Online orders", repairs: "Repairs", devices: "Device sales & warranty", expenses: "Expenses", reports: "Reports", users: "Team access", "backup-tools": "Backup and restore" };
+const screenTitles = { "pharmacy-support": "Symptom help", dashboard: "Dashboard", inventory: "Inventory", sales: "Sales", "online-orders": "Online orders", repairs: "Repairs", devices: "Device sales & warranty", expenses: "Expenses", reports: "Reports", users: "Team access", "backup-tools": "Backup and restore" };
 function showScreen(screen, updateHash = false) {
   const link = document.querySelector(`[data-screen-link="${screen}"]`);
   if (!screenTitles[screen] || link?.classList.contains("hidden")) screen = "dashboard";
@@ -1898,6 +1898,8 @@ function render() {
   $("#inventory-nav").classList.toggle("hidden", !permissions.inventory);
   $("#sales-nav").classList.toggle("hidden", !permissions.sales);
   const pharmacyMedexEnabled = data.shopType === "pharmacy" && Boolean(permissions.sales || permissions.inventory);
+  $("#pharmacy-support-nav").classList.toggle("hidden", !pharmacyMedexEnabled);
+  if (!pharmacyMedexEnabled && location.hash === "#pharmacy-support") showScreen("dashboard", true);
   $("#pharmacy-medex-button")?.classList.toggle("hidden", !pharmacyMedexEnabled);
   $("#pharmacy-medex-inventory-button")?.classList.toggle("hidden", !(permissions.inventory && data.shopType === "pharmacy"));
   $("#pharmacy-medex-sales-button")?.classList.toggle("hidden", !(permissions.sales && data.shopType === "pharmacy"));
@@ -5092,3 +5094,39 @@ setupJoinLink();
 registerServiceWorker();
 
 startApp();
+
+// A conservative reference aid only. No diagnosis, medicine selection, or patient data is stored.
+const symptomSupportGuides = {
+  fever: {
+    title: "Fever", questions: "Ask about duration, measured temperature, other symptoms, and whether the person is worsening.",
+    urgent: "Severe confusion, trouble breathing, a stiff neck with severe headache, or a person who is difficult to wake needs emergency assessment.",
+    advice: "A pharmacist or clinician should assess the whole situation. Do not assume fever is a minor illness; refer if the person is very unwell, getting worse, or you are uncertain.",
+    source: "https://www.nhs.uk/conditions/fever-in-adults/", sourceLabel: "NHS: fever in adults"
+  },
+  diarrhea: {
+    title: "Diarrhea", questions: "Ask about duration, blood or black stool, vomiting, abdominal pain, recent antibiotics, and signs of dehydration such as much less urine.",
+    urgent: "Severe weakness, fainting, severe abdominal pain, blood in stool or vomit, or inability to keep fluids down requires urgent medical assessment.",
+    advice: "Preventing dehydration is important. Consult a pharmacist or clinician about safe rehydration, particularly if fluids cannot be kept down or the person has a medical condition.",
+    source: "https://www.chelwest.nhs.uk/your-visit/patient-leaflets/medicine-services/gastroenteritis", sourceLabel: "NHS: gastroenteritis"
+  },
+  constipation: {
+    title: "Constipation / hard stools", questions: "Ask how long this has lasted and about pain, vomiting, blood in stool, weight loss, and any recent change in bowel habits or medicines.",
+    urgent: "Severe abdominal pain, a swollen abdomen with vomiting, or black or significant bloody stool needs urgent medical assessment.",
+    advice: "A clinician should assess persistent or worsening symptoms and unexplained bleeding or weight loss. Do not assume that every change in bowel habit is simple constipation.",
+    source: "https://www.plymouthhospitals.nhs.uk/display-pil/pil-constipation-in-adults-4069/", sourceLabel: "NHS: constipation in adults"
+  },
+  eye: {
+    title: "Itchy or red eyes", questions: "Ask about pain, injury, contact lenses, light sensitivity, and any change in vision.",
+    urgent: "Sudden vision loss, a serious eye injury, or severe eye pain needs emergency assessment. A painful red eye, sensitivity to light, or changes in vision require urgent assessment.",
+    advice: "Do not assume itching is an allergy. Ask a qualified clinician or eye specialist if symptoms are worsening, persistent, or the cause is unclear.",
+    source: "https://www.nhs.uk/symptoms/eye-pain/", sourceLabel: "NHS: eye pain and urgent signs"
+  }
+};
+function renderSymptomSupport() {
+  const guide = symptomSupportGuides[$("#symptom-choice").value];
+  const result = $("#symptom-result");
+  if (!guide) { result.innerHTML = "<h2>3. Review the concern</h2><p>Select a symptom to see questions, warning signs, and reference links.</p>"; return; }
+  result.innerHTML = `<h2>3. Review: ${esc(guide.title)}</h2><div class="symptom-card"><h3>Ask about</h3><p>${esc(guide.questions)}</p></div><div class="symptom-emergency"><h3>Urgent warning signs</h3><p>${esc(guide.urgent)}</p></div><div class="symptom-card"><h3>Professional assessment</h3><p>${esc(guide.advice)}</p><p><b>If unsure, refer to a qualified clinician.</b> Absence of these listed signs does not guarantee safety.</p></div><p class="form-hint">Reference: <a href="${esc(guide.source)}" target="_blank" rel="noopener noreferrer">${esc(guide.sourceLabel)} ↗</a> (external; may not reflect Bangladesh practice). Not a complete list of risks.</p>`;
+}
+$("#symptom-choice").addEventListener("change", renderSymptomSupport);
+$("#symptom-medex").addEventListener("click", () => openPharmacyMedicineLookup(""));

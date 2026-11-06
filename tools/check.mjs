@@ -191,6 +191,27 @@ try {
   ok("essential fields stay visible, advanced fields collapse, and stock/calculator actions remain safe");
 } catch (error) { fail("simple Pharmacy operation: " + error.message); }
 
+console.log("Pharmacy symptom support");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8"), html = readFileSync(join(root, "index.html"), "utf8"), css = readFileSync(join(root, "styles.css"), "utf8");
+  for (const token of ['id="pharmacy-support-nav"', 'data-screen="pharmacy-support"', 'id="symptom-choice"', 'tel:999', 'does not diagnose, prescribe', 'has not yet been reviewed for Bangladesh', 'No patient answers']) if (!html.includes(token)) fail(`symptom support safeguard missing: ${token}`);
+  for (const token of ['$("#pharmacy-support-nav").classList.toggle("hidden", !pharmacyMedexEnabled)', 'data.shopType === "pharmacy" && Boolean(permissions.sales || permissions.inventory)', 'location.hash === "#pharmacy-support"']) if (!app.includes(token)) fail(`symptom support profile/permission guard missing: ${token}`);
+  if (!css.includes(".symptom-layout{grid-template-columns:1fr}")) fail("symptom support must fit narrow screens");
+  const start = app.indexOf("const symptomSupportGuides ="), end = app.indexOf('$("#symptom-choice").addEventListener', start);
+  if (start < 0 || end < 0) throw new Error("symptom support content or renderer missing");
+  let choice = {value:""}, result = {innerHTML:""};
+  const select = query => query === "#symptom-choice" ? choice : result;
+  const render = new Function("$", "esc", `${app.slice(start, end)}\nreturn renderSymptomSupport;`)(select, value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"));
+  render(); if (!result.innerHTML.includes("Select a symptom")) fail("empty choice must not present a diagnosis");
+  for (const topic of ["fever", "diarrhea", "constipation", "eye"]) {
+    choice.value = topic; render();
+    for (const word of ["Urgent warning signs", "qualified clinician", "does not guarantee safety", "https://"]) if (!result.innerHTML.includes(word)) fail(`${topic} missing ${word}`);
+    if (/<form|<input|\/api\//i.test(result.innerHTML)) fail(`${topic} must not collect patient answers or make requests`);
+  }
+  choice.value = ""; render(); if (result.innerHTML.includes("Urgent warning signs")) fail("clearing selection must clear previous topic");
+  ok("four conservative, referenced guides; urgent warnings, privacy, profile gating and mobile layout");
+} catch (error) { fail("pharmacy symptom support: " + error.message); }
+
 console.log("Translations");
 try {
   const bn = JSON.parse(readFileSync(join(root, "i18n", "bn.json"), "utf8"));
