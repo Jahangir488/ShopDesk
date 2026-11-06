@@ -2,8 +2,13 @@ const $ = selector => document.querySelector(selector);
 const money = amount => {
   const value = Number(amount) || 0, currency = data.currencyCode || "BDT";
   const locale = data.banglaDigits ? "bn-BD" : (data.locale || "en-BD");
-  try { return new Intl.NumberFormat(locale, { style: "currency", currency, maximumFractionDigits: 0 }).format(value); }
-  catch { return `${currency} ${localizeDigits(Math.round(value).toLocaleString())}`; }
+  // Pharmacy base-unit prices often include poisha (for example ৳2.50/tablet).
+  // Keep whole amounts compact, but never round an edited decimal price away.
+  try { return new Intl.NumberFormat(locale, { style: "currency", currency, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value); }
+  catch {
+    const rounded = Math.round((value + Number.EPSILON) * 100) / 100;
+    return `${currency} ${localizeDigits(rounded.toLocaleString("en-US", { maximumFractionDigits: 2 }))}`;
+  }
 };
 const currencySymbol = () => {
   try { return new Intl.NumberFormat(data.locale || "en-BD", { style: "currency", currency: data.currencyCode || "BDT", maximumFractionDigits: 0 }).formatToParts(0).find(part => part.type === "currency")?.value || data.currencyCode || "BDT"; }
@@ -19,7 +24,6 @@ const dateKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).pad
 const dateLabel = value => new Date(`${value}T12:00:00`).toLocaleDateString(data.banglaDigits || hasBangla() ? "bn-BD" : (data.locale || "en-BD"), { day: "numeric", month: "short" });
 const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 let data = { shopName: "Shop Desk", workspace: "", contactNumber: "", website: "", email: "", facebookPage: "", whatsappNumber: "", contactAddress: "", shopType: "general", currencyCode: "BDT", locale: "en-BD", taxRate: 0, taxMode: "none", requireCustomer: false, allowDiscounts: true, paymentMethods: ["Cash", "bKash", "Nagad", "Card", "Due"], products: [], sales: [], onlineOrders: [], serviceJobs: [], devices: [], expenses: [], categories: [], permissions: {} };
-const featureEnabled = feature => !Array.isArray(data.licenseFeatures) || data.licenseFeatures.includes(feature);
 const productSellableQty = product => data.shopType === "pharmacy" ? Number(product.available_to_sell || 0) : Number(product.qty || 0);
 let signedInUser = null;
 let toastTimer;
@@ -124,30 +128,6 @@ async function loadLanguage(code) {
   document.body.classList.toggle("lang-bn", language === "bn");
   if (language === "bn") { startI18nObserver(); translateDom(document.body); }
 }
-function renderLicenseBanner() {
-  const license = data.license;
-  const main = document.querySelector(".main");
-  if (!main || !license) return;
-  const show = license.readOnly || (license.state !== "active" && license.warning) || (license.state === "active" && license.warning);
-  let banner = $("#license-banner");
-  if (!show) { banner?.remove(); return; }
-  if (!banner) {
-    banner = document.createElement("div");
-    banner.id = "license-banner";
-    banner.className = "license-banner";
-    banner.setAttribute("role", "status");
-    main.prepend(banner);
-  }
-  const days = Math.max(0, Number(license.daysLeft) || 0);
-  let message;
-  if (license.readOnly) message = `${t("Read-only mode")} — ${t("Billing is paused. Your data, reports, exports and backups are still available.")}`;
-  else if (license.state === "trial") message = `${t("Trial")} · ${t("Trial ends")}: ${days} ${t("days left")}`;
-  else message = `${t("Your licence expires soon")}: ${days} ${t("days left")}`;
-  const canActivate = signedInUser?.role === "admin";
-  banner.innerHTML = `<span class="license-banner-text">${esc(message)}</span>${canActivate
-    ? `<button type="button" class="button primary" data-open-license>${esc(t("Enter licence key"))}</button>`
-    : `<span class="license-banner-hint">${esc(t("Ask an administrator to enter a licence key."))}</span>`}`;
-}
 let backupWarningCheckedAt = 0;
 async function renderBackupWarning() {
   if (!data.permissions?.backups || !document.querySelector(".main")) return;
@@ -165,56 +145,8 @@ async function renderBackupWarning() {
   banner.setAttribute("role", "status");
   banner.innerHTML = `<span>${esc(t("Your last offsite backup is more than 48 hours old. Restore protection before the computer is lost or damaged."))}</span><button type="button" class="button secondary">${esc(t("Open backup settings"))}</button>`;
   banner.querySelector("button").onclick = () => showScreen("backup-tools", true);
-  if (!existing) {
-    const licenseBanner = $("#license-banner");
-    if (licenseBanner) licenseBanner.after(banner); else main.prepend(banner);
-  }
+  if (!existing) main.prepend(banner);
 }
-function openLicenseModal() {
-  const license = data.license || {};
-  const rows = [
-    [t("Plan"), license.plan || "—"],
-    [t("Status"), license.state === "active" ? t("Activated") : license.state === "trial" ? t("Trial") : t("Read-only mode")],
-    [t("Days left"), String(license.daysLeft ?? 0)],
-    [t("Expires"), license.expiresAt ? new Date(license.expiresAt).toLocaleDateString() : "—"],
-    [t("Licensed to"), license.licensedTo || "—"]
-  ];
-  if (license.state === "trial") rows.push([t("Trial ends"), license.trialEndsAt ? new Date(license.trialEndsAt).toLocaleDateString() : "—"]);
-  openModal(t("Licence & plan"), `<div class="license-summary">${rows.map(([label, value]) => `<div><small>${esc(label)}</small><b>${esc(value)}</b></div>`).join("")}</div>
-    <label>${esc(t("Licence key"))}<textarea name="licenseKey" rows="4" autocomplete="off" spellcheck="false" placeholder="${esc(t("Paste the licence key you received"))}"></textarea></label>
-    <p class="form-hint">${esc(t("Send this ID to your supplier when asking for a licence."))} <code id="license-install-id">${esc(license.installId || "")}</code> <button type="button" class="user-action" id="copy-install-id">${esc(t("Copy"))}</button></p>`,
-    async form => {
-      const token = String(form.get("licenseKey") || "").trim();
-      if (!token) throw new Error(t("Paste the licence key you received."));
-      await api("/api/license/activate", { method: "POST", body: JSON.stringify({ token }) });
-      // Activation can change the signed shop type and granted modules, so reload the full state.
-      data = await api("/api/state");
-      render();
-      toast(t("Activated"));
-    });
-  const submit = $("#submit-modal");
-  if (submit) submit.textContent = t("Activate");
-  const copyButton = $("#copy-install-id");
-  if (copyButton) copyButton.onclick = async () => {
-    try {
-      await navigator.clipboard.writeText(license.installId || "");
-      toast(t("Installation ID copied"));
-    } catch {
-      const field = $("#license-install-id");
-      if (field) {
-        const range = document.createRange();
-        range.selectNodeContents(field);
-        const selection = window.getSelection();
-        selection.removeAllRanges();
-        selection.addRange(range);
-      }
-      toast(t("Select the ID and copy it."));
-    }
-  };
-}
-document.addEventListener("click", event => {
-  if (event.target.closest("[data-open-license]")) { event.preventDefault(); openLicenseModal(); }
-});
 
 function refreshTopbarClock() {
   const now = new Date(), locale = data.banglaDigits || hasBangla() ? "bn-BD" : (data.locale || "en-BD");
@@ -293,7 +225,6 @@ async function api(path, options = {}) {
     throw new Error(t("Your session ended. Please sign in again."));
   }
   if (!response.ok) {
-    if (response.status === 402 && payload?.code === "license_expired") { data.license = payload.license; renderLicenseBanner(); }
     throw new Error(tt(payload?.error || "The request could not be completed."));
   }
   return payload;
@@ -302,12 +233,12 @@ async function updateState(path, body, method = "POST") {
   data = await api(path, { method, body: JSON.stringify(body) });
   render();
 }
-function toast(message) {
+function toast(message, duration = 3000) {
   const element = $("#toast");
   element.textContent = tt(message);
   element.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => element.classList.remove("show"), 3000);
+  toastTimer = setTimeout(() => element.classList.remove("show"), duration);
 }
 function showAuth() {
   signedInUser = null;
@@ -477,23 +408,65 @@ function reportRange() {
   }
   return { start, end, buckets, monthly, caption: start > end ? "Invalid date range" : start + " to " + end };
 }
+function summarizeSales(sales) {
+  return (sales || []).reduce((summary, item) => {
+    const grossSales = Number(item.original_total ?? item.total ?? 0);
+    const netSales = Number(item.total || 0);
+    const grossCost = Number(item.original_cost ?? item.cost ?? 0);
+    const netCost = Number(item.cost || 0);
+    const grossTax = Number(item.original_tax_amount ?? item.tax_amount ?? 0);
+    const netTax = Number(item.tax_amount || 0);
+    summary.grossSales += grossSales;
+    summary.returnedValue += Math.max(0, grossSales - netSales);
+    summary.netSales += netSales;
+    summary.grossCost += grossCost;
+    summary.netCost += netCost;
+    summary.profitBeforeReturns += grossSales - grossCost;
+    summary.returnedProfit += Math.max(0, grossSales - netSales) - Math.max(0, grossCost - netCost);
+    summary.profitAfterReturns += netSales - netCost;
+    summary.returnedTax += Math.max(0, grossTax - netTax);
+    summary.netTax += netTax;
+    return summary;
+  }, { grossSales: 0, returnedValue: 0, netSales: 0, grossCost: 0, netCost: 0, profitBeforeReturns: 0, returnedProfit: 0, profitAfterReturns: 0, returnedTax: 0, netTax: 0 });
+}
+function summarizeOnlineDashboard(orders, sales, today) {
+  const allOrders = orders || [];
+  const onlineBillIds = new Set(allOrders.map(order => Number(order.bill_id || 0)).filter(id => id > 0));
+  const onlineSalesToday = (sales || []).filter(sale => sale.date === today && onlineBillIds.has(Number(sale.bill_id || 0)));
+  const todayOrders = allOrders.filter(order => order.date === today);
+  const activeOrders = allOrders.filter(order => ["Pending", "Confirmed", "Processing", "Shipped"].includes(order.order_status));
+  const count = statuses => allOrders.filter(order => statuses.includes(order.order_status)).length;
+  return {
+    todayOrderCount: todayOrders.length,
+    todayOrderValue: todayOrders.reduce((sum, order) => sum + Number(order.total || 0), 0),
+    activeOrderCount: activeOrders.length,
+    activeCod: activeOrders.reduce((sum, order) => sum + Number(order.due_cod || 0), 0),
+    pendingCount: count(["Pending"]),
+    processingCount: count(["Confirmed", "Processing"]),
+    shippedCount: count(["Shipped"]),
+    deliveredCount: count(["Delivered"]),
+    returnedCount: count(["Returned"]),
+    cancelledCount: count(["Cancelled"]),
+    sales: summarizeSales(onlineSalesToday)
+  };
+}
 function renderReport() {
   const permissions = data.permissions || {};
   const range = reportRange();
   const sales = data.sales.filter(item => item.date >= range.start && item.date <= range.end);
   const expenses = data.expenses.filter(item => item.date >= range.start && item.date <= range.end);
-  const gross = sales.reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const profit = sales.reduce((sum, item) => sum + Number(item.total || 0) - Number(item.cost || 0), 0);
-  const tax = sales.reduce((sum, item) => sum + Number(item.tax_amount || 0), 0);
+  const summary = summarizeSales(sales);
   const costs = expenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  $("#report-caption").textContent = `${range.caption} · Sales, costs, and estimated profit`;
-  $("#report-sales").textContent = permissions.sales ? money(gross) : "—";
-  $("#report-profit").textContent = permissions.sales ? money(profit) : "—";
-  $("#report-tax").textContent = permissions.sales ? money(tax) : "—";
+  $("#report-caption").textContent = `${range.caption} · Sales, returns, costs, and estimated profit`;
+  $("#report-sales").textContent = permissions.sales ? money(summary.grossSales) : "—";
+  $("#report-returns").textContent = permissions.sales ? money(summary.returnedValue) : "—";
+  $("#report-net-sales").textContent = permissions.sales ? money(summary.netSales) : "—";
+  $("#report-profit").textContent = permissions.sales ? money(summary.profitAfterReturns) : "—";
+  $("#report-tax").textContent = permissions.sales ? money(summary.netTax) : "—";
   $("#report-expenses").textContent = permissions.expenses ? money(costs) : "—";
-  $("#report-net").textContent = permissions.sales && permissions.expenses ? money(profit - costs) : "—";
-  $("#chart-total").textContent = permissions.sales ? money(gross) : "—";
-  $("#chart-label").textContent = `Gross sales · ${range.caption}`;
+  $("#report-net").textContent = permissions.sales && permissions.expenses ? money(summary.profitAfterReturns - costs) : "—";
+  $("#chart-total").textContent = permissions.sales ? money(summary.netSales) : "—";
+  $("#chart-label").textContent = `Net sales after returns · ${range.caption}`;
   const amounts = range.buckets.map(bucket => sales.filter(item => range.monthly ? item.date.startsWith(bucket.key) : item.date === bucket.key).reduce((sum, item) => sum + Number(item.total || 0), 0));
   const max = Math.max(1000, ...amounts);
   $("#chart-max").textContent = money(Math.ceil(max / 4 / 1000) * 1000 || 1000);
@@ -528,7 +501,16 @@ function renderDashboardTrend() {
   $("#dashboard-trend").classList.toggle("trend-no-access", !hasAccess);
 }
 function productLabel(product) {
-  const details = [["Brand", product.brand], ["Color", product.color], ["Size", product.size], ["Material", product.material]].filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`);
+  const pairs = data.shopType === "restaurant"
+    ? [["Portion", product.size], ["Type", product.material], ["Prep", product.color], ["Kitchen", product.brand]]
+    : data.shopType === "mobile"
+      ? [["Brand", product.brand], ["Color", product.color], ["Storage", product.size]]
+      : data.shopType === "hardware"
+        ? [["Brand", product.brand], ["Spec", product.size]]
+        : data.shopType === "grocery"
+          ? [["Brand", product.brand], ["Pack", product.size]]
+          : [["Brand", product.brand], ["Color", product.color], ["Size", product.size], ["Material", product.material]];
+  const details = pairs.filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`);
   return details.length ? `${product.name} (${details.join(" · ")})` : product.name;
 }
 // Shared product picker used by New bill, Record sale and Online orders.
@@ -667,14 +649,30 @@ document.addEventListener("click", event => {
     field.querySelector("input")?.setAttribute("aria-expanded", "false");
   });
 });
+const INVENTORY_PAGE_SIZE = 250;
+let inventoryPage = 1;
 function renderInventoryProducts() {
   const query = $("#search").value.trim().toLocaleLowerCase();
   const products = data.products.filter(item => [item.name, item.sku, item.barcode, item.unit, item.category, item.brand, item.color, item.size, item.material, item.generic_name, item.strength, item.dosage_form, item.manufacturer].some(value => String(value || "").toLocaleLowerCase().includes(query)));
+  const pageCount = Math.max(1, Math.ceil(products.length / INVENTORY_PAGE_SIZE));
+  inventoryPage = Math.min(Math.max(1, inventoryPage), pageCount);
+  const pageStart = (inventoryPage - 1) * INVENTORY_PAGE_SIZE;
+  const visibleProducts = products.slice(pageStart, pageStart + INVENTORY_PAGE_SIZE);
   const canEditItems = signedInUser?.permissions?.records && data.permissions?.inventory;
   const canDeleteItems = canEditItems;
-  $("#products-table").innerHTML = products.map(item => { const details = (data.shopType === "pharmacy" ? [["Generic",item.generic_name],["Strength",item.strength],["Form",item.dosage_form],["Maker",item.manufacturer]] : [["Brand", item.brand], ["Color", item.color], ["Size", item.size], ["Material", item.material]]).filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`).join(" · "); return `<tr><td class="product-cell">${esc(item.icon || "📦")} &nbsp;${esc(item.name)}${details ? `<small class="form-hint">${esc(details)}</small>` : ""}</td><td>${esc(item.category || "Other")}</td><td class="sku">${esc(item.sku)}</td><td class="sku">${esc(item.barcode || "—")}</td><td>${esc(item.unit || "piece")}</td><td>${money(item.price)}</td><td class="qty">${data.shopType === "pharmacy" ? `${productSellableQty(item)} sellable / ${Number(item.qty||0)} total` : `${item.qty} ${esc(item.unit || "piece")}`}</td><td class="stock-value" title="${item.qty} × ${money(item.price)} per unit"><b>${money(Number(item.qty) * Number(item.price))}</b></td><td><span class="status ${productSellableQty(item) === 0 ? "out" : productSellableQty(item) <= item.min ? "low" : ""}">${productSellableQty(item) === 0 ? (data.shopType === "pharmacy" && Number(item.qty)>0 ? "No safe-to-sell stock" : "Out of stock") : productSellableQty(item) <= item.min ? "Low stock" : "In stock"}</span></td><td>${canEditItems ? `<button class="user-action" data-action="rename-product" data-id="${item.id}" data-name="${esc(item.name)}" data-unit="${esc(item.unit || "piece")}" data-category="${esc(item.category || "Other")}">Edit item</button>` : ""}${canDeleteItems ? `<button class="user-action danger" data-action="delete-product" data-id="${item.id}" data-name="${esc(productLabel(item))}" data-qty="${item.qty}" data-unit="${esc(item.unit || "piece")}">Delete</button>` : ""}</td></tr>`; }).join("");
+  const sizeFieldLabel = data.shopType === "restaurant" ? "Portion" : data.shopType === "mobile" ? "Storage" : data.shopType === "hardware" ? "Spec" : data.shopType === "grocery" ? "Pack" : "Size";
+  $("#products-table").innerHTML = visibleProducts.map(item => { const details = (data.shopType === "pharmacy" ? [["Generic",item.generic_name],["Strength",item.strength],["Form",item.dosage_form],["Maker",item.manufacturer]] : data.shopType === "restaurant" ? [["Portion",item.size],["Type",item.material],["Prep",item.color],["Kitchen",item.brand]] : [["Brand", item.brand], ["Color", item.color], [sizeFieldLabel, item.size], ["Material", item.material]]).filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`).join(" · "); const medexAction = data.shopType === "pharmacy" ? `<button class="user-action" type="button" data-action="medex-product" data-id="${item.id}" data-name="${esc(item.name)}">MedEx info</button>` : "";
+  const pharmacyStockAction = data.shopType === "pharmacy" && data.permissions?.inventory ? `<button class="user-action" type="button" data-action="receive-product-stock" data-id="${item.id}" title="Receive stock with batch, expiry, and invoice details">Update quantity</button>` : "";
+  return `<tr><td class="product-cell">${esc(item.icon || "📦")} &nbsp;${esc(item.name)}${details ? `<small class="form-hint">${esc(details)}</small>` : ""}</td><td>${esc(item.category || "Other")}</td><td class="sku">${esc(item.sku)}</td><td class="sku">${esc(item.barcode || "—")}</td><td>${esc(item.unit || "piece")}</td><td>${money(item.price)}</td><td class="qty">${data.shopType === "pharmacy" ? `${productSellableQty(item)} sellable / ${Number(item.qty||0)} total` : `${item.qty} ${esc(item.unit || "piece")}`}</td><td class="stock-value" title="${item.qty} × ${money(item.price)} per unit"><b>${money(Number(item.qty) * Number(item.price))}</b></td><td><span class="status ${productSellableQty(item) === 0 ? "out" : productSellableQty(item) <= item.min ? "low" : ""}">${productSellableQty(item) === 0 ? (data.shopType === "pharmacy" && Number(item.qty)>0 ? "No safe-to-sell stock" : "Out of stock") : productSellableQty(item) <= item.min ? "Low stock" : "In stock"}</span></td><td>${pharmacyStockAction}${medexAction}${canEditItems ? `<button class="user-action" data-action="rename-product" data-id="${item.id}" data-name="${esc(item.name)}" data-unit="${esc(item.unit || "piece")}" data-category="${esc(item.category || "Other")}">${data.shopType === "pharmacy" ? "Edit price / details" : "Edit item"}</button>` : ""}${canDeleteItems ? `<button class="user-action danger" data-action="delete-product" data-id="${item.id}" data-name="${esc(productLabel(item))}" data-qty="${item.qty}" data-unit="${esc(item.unit || "piece")}">Delete</button>` : ""}</td></tr>`; }).join("");
   $("#products-empty").textContent = data.products.length ? "No inventory items match your search." : "No products yet. Add your first item to get started.";
   $("#products-empty").classList.toggle("hidden", products.length > 0);
+  const pagination = $("#inventory-pagination");
+  if (pagination) {
+    const showingStart = products.length ? pageStart + 1 : 0;
+    const showingEnd = pageStart + visibleProducts.length;
+    pagination.classList.toggle("hidden", pageCount <= 1);
+    pagination.innerHTML = pageCount <= 1 ? "" : `<button class="button secondary" type="button" data-inventory-page="${inventoryPage - 1}" ${inventoryPage === 1 ? "disabled" : ""}>← Previous</button><span>Page ${inventoryPage} of ${pageCount} · Showing ${showingStart}–${showingEnd} of ${products.length}</span><button class="button secondary" type="button" data-inventory-page="${inventoryPage + 1}" ${inventoryPage === pageCount ? "disabled" : ""}>Next →</button>`;
+  }
   const cost = products.reduce((sum, item) => sum + Number(item.cost || 0) * Number(item.qty || 0), 0);
   const retail = products.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.qty || 0), 0);
   const low = products.filter(item => Number(item.qty || 0) <= Number(item.min || 0)).length;
@@ -689,15 +687,45 @@ function renderInventoryProducts() {
   const totalInStock = [...stockByUnit.values()].map(item => `${Number(item.qty.toFixed(3)).toLocaleString("en-BD")} ${item.label}`).join(" · ") || "0";
   $("#inventory-summary").innerHTML = `<div class="list-summary-heading"><b>Inventory totals</b><small>${products.length} product${products.length === 1 ? "" : "s"}${query ? " matching your search" : " in this inventory"}</small></div><div class="list-summary-cards"><div><small>Total in stock</small><b title="${esc(totalInStock)}">${esc(totalInStock)}</b></div><div><small>Stock at cost</small><b>${money(cost)}</b></div><div><small>Stock at selling price</small><b>${money(retail)}</b></div><div><small>Potential gross profit</small><b>${money(retail - cost)}</b></div><div><small>Low / out of stock</small><b>${low}</b></div></div>`;
 }
+const LARGE_LIST_PAGE_SIZE = 250;
+const largeListPages = { sales: 1, onlineOrders: 1, repairs: 1, devices: 1, stockWatch: 1, dashboardOnline: 1, expenses: 1 };
+function largeListPage(key, items) {
+  const pageCount = Math.max(1, Math.ceil(items.length / LARGE_LIST_PAGE_SIZE));
+  const page = Math.min(Math.max(1, Number(largeListPages[key]) || 1), pageCount);
+  largeListPages[key] = page;
+  const start = (page - 1) * LARGE_LIST_PAGE_SIZE;
+  const visible = items.slice(start, start + LARGE_LIST_PAGE_SIZE);
+  return { page, pageCount, start, visible, showingStart: items.length ? start + 1 : 0, showingEnd: start + visible.length };
+}
+function showLargeListPagination(selector, key, page, total) {
+  const element = $(selector);
+  if (!element) return;
+  element.classList.toggle("hidden", page.pageCount <= 1);
+  element.innerHTML = page.pageCount <= 1 ? "" : `<button class="button secondary" type="button" data-large-list="${key}" data-page="${page.page - 1}" ${page.page === 1 ? "disabled" : ""}>← Previous</button><span>Page ${page.page} of ${page.pageCount} · Showing ${page.showingStart}–${page.showingEnd} of ${total}</span><button class="button secondary" type="button" data-large-list="${key}" data-page="${page.page + 1}" ${page.page === page.pageCount ? "disabled" : ""}>Next →</button>`;
+}
+document.addEventListener("click", event => {
+  const button = event.target.closest("button[data-large-list]");
+  if (!button || button.disabled) return;
+  const key = button.dataset.largeList;
+  largeListPages[key] = Number(button.dataset.page) || 1;
+  if (key === "sales") filterSales();
+  else if (key === "onlineOrders") renderOnlineOrders();
+  else if (key === "repairs") renderRepairJobs();
+  else if (key === "devices") renderDevices();
+  else if (key === "stockWatch") renderStockWatch();
+  else if (key === "dashboardOnline") renderOnlineDashboard(dateKey(new Date()), data.permissions || {});
+  else if (key === "expenses") renderExpenses();
+});
 const repairStatuses = ["Received", "Diagnosing", "Waiting for parts", "In repair", "Ready", "Delivered", "Cancelled"];
 function renderRepairJobs() {
   const query = (document.querySelector("#repair-search")?.value || "").trim().toLocaleLowerCase();
   const status = document.querySelector("#repair-status-filter")?.value || "";
   const jobs = (data.serviceJobs || []).filter(job => (!status || job.status === status) &&
     [job.job_no, job.customer, job.phone, job.brand, job.model, job.device_serial, job.issue].some(value => String(value || "").toLocaleLowerCase().includes(query)));
+  const page = largeListPage("repairs", jobs);
   const tbody = document.querySelector("#repairs-table");
   if (!tbody) return;
-  tbody.innerHTML = jobs.map(job => {
+  tbody.innerHTML = page.visible.map(job => {
     const warranty = Number(job.repair_warranty_days || 0), expiry = job.repair_warranty_expires || "";
     const warrantyText = job.status === "Delivered" && warranty ? `${expiry && expiry >= dateKey(new Date()) ? "Active" : "Expired"} · ${dateLabel(expiry)}` : warranty ? `${warranty} days on delivery` : "—";
     const repairAdmin = signedInUser?.role === "admin";
@@ -706,22 +734,25 @@ function renderRepairJobs() {
     return `<tr><td><b>${esc(job.job_no)}</b></td><td>${dateLabel(job.received_date)}</td><td>${esc(job.customer)}<small class="form-hint">${esc(job.phone)}</small></td><td>${esc([job.brand, job.model].filter(Boolean).join(" "))}<small class="form-hint">${esc(job.device_serial || "No IMEI/serial")}</small></td><td>${esc(job.issue)}</td><td><span class="status ${job.status === "Delivered" ? "" : job.status === "Cancelled" ? "out" : "low"}">${esc(job.status)}</span></td><td>${esc(warrantyText)}</td><td>${money(job.status === "Delivered" ? job.final_charge : job.estimate)}<small class="form-hint">Due ${money(job.due)}</small></td><td>${canEdit ? `<button type="button" class="user-action" data-repair-action="open" data-id="${job.id}">Open</button>` : `<button type="button" class="user-action" disabled title="Only an administrator can reopen a cancelled job. Delivered edits need assigned access.">Locked</button>`}<button type="button" class="user-action" data-repair-action="print" data-id="${job.id}">Print ticket</button>${canDelete ? `<button type="button" class="user-action danger" data-repair-action="delete" data-id="${job.id}">Delete</button>` : ""}</td></tr>`;
   }).join("");
   document.querySelector("#repairs-empty")?.classList.toggle("hidden", jobs.length > 0);
+  showLargeListPagination("#repairs-pagination", "repairs", page, jobs.length);
 }
-document.querySelector("#repair-search")?.addEventListener("input", renderRepairJobs);
-document.querySelector("#repair-status-filter")?.addEventListener("change", renderRepairJobs);
+document.querySelector("#repair-search")?.addEventListener("input", () => { largeListPages.repairs = 1; renderRepairJobs(); });
+document.querySelector("#repair-status-filter")?.addEventListener("change", () => { largeListPages.repairs = 1; renderRepairJobs(); });
 function renderDevices() {
   const query = (document.querySelector("#device-search")?.value || "").trim().toLocaleLowerCase();
   const rows = (data.devices || []).filter(device => [device.serial, device.product_name, device.customer, device.phone].some(value => String(value || "").toLocaleLowerCase().includes(query)));
+  const page = largeListPage("devices", rows);
   const body = document.querySelector("#devices-table");
   if (!body) return;
-  body.innerHTML = rows.map(device => {
+  body.innerHTML = page.visible.map(device => {
     const expired = device.warranty_expires && device.warranty_expires < dateKey(new Date());
     const status = device.status === "Returned" ? "Returned" : !device.warranty_months ? "No warranty" : expired ? "Warranty expired" : "Warranty active";
     return `<tr><td><b>${esc(device.serial)}</b></td><td>${esc(device.product_name)}</td><td>${dateLabel(device.sold_date)}</td><td>${esc(device.customer || "—")}<small class="form-hint">${esc(device.phone || "")}</small></td><td>${device.warranty_expires ? dateLabel(device.warranty_expires) : "—"}</td><td><span class="status ${device.status === "Returned" || expired ? "out" : "low"}">${status}</span></td></tr>`;
   }).join("");
   document.querySelector("#devices-empty")?.classList.toggle("hidden", rows.length > 0);
+  showLargeListPagination("#devices-pagination", "devices", page, rows.length);
 }
-document.querySelector("#device-search")?.addEventListener("input", renderDevices);
+document.querySelector("#device-search")?.addEventListener("input", () => { largeListPages.devices = 1; renderDevices(); });
 function repairPartRow(productId = "", qty = 1, index = 0) {
   const options = data.products.map(product => `<option value="${product.id}" ${Number(product.id) === Number(productId) ? "selected" : ""}>${esc(productLabel(product))} · ${product.qty} ${esc(product.unit || "piece")} · cost ${money(product.cost)}</option>`).join("");
   return `<div class="form-row repair-part-row" data-part-row="${index}"><label>Stock part<select name="partProduct" required><option value="">Choose a part</option>${options}</select></label><label>Qty<input name="partQty" type="number" min="0.001" step="any" value="${Number(qty)}" required></label><button class="user-action danger" type="button" data-remove-part aria-label="Remove part">Remove</button></div>`;
@@ -778,14 +809,67 @@ document.querySelector("#repairs-table")?.addEventListener("click", async event 
     if (remove) remove.closest("[data-part-row]").remove();
   };
 });
-$("#search").addEventListener("input", renderInventoryProducts);
+$("#inventory-pagination").onclick = event => {
+  const button = event.target.closest("button[data-inventory-page]");
+  if (!button || button.disabled) return;
+  inventoryPage = Number(button.dataset.inventoryPage) || 1;
+  renderInventoryProducts();
+};
+$("#search").addEventListener("input", () => { inventoryPage = 1; renderInventoryProducts(); });
 
 const clothSizes = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "28", "30", "32", "34", "36", "38", "40", "Free Size"];
 const clothColors = ["Black", "White", "Navy Blue", "Maroon", "Olive Green", "Sky Blue", "Pink", "Grey", "Mustard", "Beige"];
 const clothMaterials = ["100% Cotton", "Linen", "Denim", "Silk", "Georgette", "Twill", "Polyester", "Rayon"];
+const foodPortions = ["Full", "Half", "Quarter", "Single (1:1)", "Couple (1:2)", "Family (1:4)", "Regular", "Large", "Small", "Piece", "Plate"];
+const foodTypes = ["Chicken", "Beef", "Mutton", "Fish", "Vegetable", "Egg", "Dairy", "Sweet"];
+const foodPreps = ["Regular", "Spicy", "Mild", "Extra Crispy", "Hot", "Cold", "Parcel"];
 
 function clothingFormFields(product = {}) {
-  if (data.shopType !== "clothing" || !featureEnabled("clothing")) return "";
+  if (data.shopType === "pharmacy") return "";
+  if (data.shopType === "restaurant") {
+    return `<div class="clothing-presets">
+      <div class="form-row">
+        <label>Portion / Serving size<input name="size" maxlength="60" value="${esc(product.size || "")}" placeholder="e.g. Full, Half, 1:1, Family"></label>
+        <label>Food type / Ingredient<input name="material" maxlength="60" value="${esc(product.material || "")}" placeholder="e.g. Chicken, Beef, Vegetable"></label>
+      </div>
+      <div class="quick-chips" data-target="size">
+        ${foodPortions.map(s => `<button type="button" class="quick-chip" data-val="${esc(s)}">${esc(s)}</button>`).join("")}
+      </div>
+      <div class="quick-chips" data-target="material">
+        ${foodTypes.map(m => `<button type="button" class="quick-chip" data-val="${esc(m)}">${esc(m)}</button>`).join("")}
+      </div>
+      <div class="form-row">
+        <label>Spice / Preparation<input name="color" maxlength="60" value="${esc(product.color || "")}" placeholder="e.g. Regular, Spicy, Hot, Cold"></label>
+        <label>Kitchen section / Counter<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="e.g. Main Kitchen, Grill, Beverage"></label>
+      </div>
+      <div class="quick-chips" data-target="color">
+        ${foodPreps.map(c => `<button type="button" class="quick-chip" data-val="${esc(c)}">${esc(c)}</button>`).join("")}
+      </div>
+      <small class="form-hint">Track menu items by portion size (Full, Half, 1:1) and preparation type with daily prepared quantity or stock.</small>
+    </div>`;
+  }
+  if (data.shopType === "mobile") {
+    return `<div class="form-row">
+      <label>Brand<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="e.g. Samsung, Apple, Xiaomi"></label>
+      <label>Color<input name="color" maxlength="60" value="${esc(product.color || "")}" placeholder="e.g. Black, Titanium Gray"></label>
+      <label>Storage / Variant<input name="size" maxlength="60" value="${esc(product.size || "")}" placeholder="e.g. 8GB/128GB, 256GB"></label>
+    </div>`;
+  }
+  if (data.shopType === "hardware") {
+    return `<div class="form-row">
+      <label>Brand / Maker<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="e.g. BSRM, RFL, Berger"></label>
+      <label>Size / Specification<input name="size" maxlength="60" value="${esc(product.size || "")}" placeholder="e.g. 10mm, 1 inch, 2.5 sq mm"></label>
+    </div>`;
+  }
+  if (data.shopType === "grocery") {
+    return `<div class="form-row">
+      <label>Brand<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="e.g. PRAN, Teer, Radhuni"></label>
+      <label>Pack / Weight<input name="size" maxlength="60" value="${esc(product.size || "")}" placeholder="e.g. 500g, 1L, 5kg"></label>
+    </div>`;
+  }
+  if (data.shopType !== "clothing") {
+    return `<label>Brand (optional)<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="Brand or manufacturer"></label>`;
+  }
   return `<div class="clothing-presets">
     <div class="form-row">
       <label>Brand / Label<input name="brand" maxlength="60" value="${esc(product.brand || "")}" placeholder="Brand or designer label"></label>
@@ -809,12 +893,82 @@ function clothingFormFields(product = {}) {
 }
 
 function pharmacyFormFields(product = {}, includeOpeningBatch = false) {
-  if (data.shopType !== "pharmacy" || !featureEnabled("pharmacy")) return "";
+  if (data.shopType !== "pharmacy") return "";
   return `<fieldset class="pharmacy-fields"><legend>Medicine details</legend>
+    <div class="bill-search-head"><small class="form-hint">Need medicine details? Search MedEx.com.bd to check or auto-fill generic name, strength, dosage form, and company.</small><button type="button" class="button secondary" id="form-medex-toggle">Check MedEx.com.bd</button></div>
+    <div id="form-medex-drawer" class="medex-inline-drawer hidden"></div>
     <div class="form-row"><label>Generic name<input name="genericName" maxlength="160" value="${esc(product.generic_name || "")}" placeholder="Active ingredient"></label><label>Strength<input name="strength" maxlength="80" value="${esc(product.strength || "")}" placeholder="e.g. 500 mg"></label></div>
     <div class="form-row"><label>Dosage form<input name="dosageForm" maxlength="80" value="${esc(product.dosage_form || "")}" placeholder="Tablet, capsule, syrup, cream"></label><label>Manufacturer<input name="manufacturer" maxlength="160" value="${esc(product.manufacturer || "")}" placeholder="Manufacturer / company"></label></div>
     ${includeOpeningBatch ? `<div class="pharmacy-batch-opening"><h4>Opening stock batch</h4><div class="form-row"><label>Batch number<input name="batchNumber" maxlength="80" placeholder="Printed batch / lot number"></label><label>Expiry date<input name="expiryDate" type="date"></label></div><small class="form-hint">Required when opening stock quantity is greater than zero. Unknown-expiry stock cannot be dispensed.</small></div>` : ""}
   </fieldset>`;
+}
+
+function medicineUnitFormValues(product = {}) {
+  const units = [...(product.medicine_units || [])].sort((a, b) => Number(a.factor) - Number(b.factor));
+  const inner = units.length > 1 ? units[0] : null, supplier = units.length > 1 ? units[1] : units[0] || null;
+  return {
+    supplierUnit: supplier?.name || (product.id ? "" : "box"), innerUnit: inner?.name || (product.id ? "" : "strip"),
+    innerPerSupplier: inner && supplier ? Number((supplier.factor / inner.factor).toFixed(6)) : 10,
+    basePerInner: Number((inner?.factor || supplier?.factor || 10).toFixed(6)),
+    supplierPrice: supplier?.price ?? "", innerPrice: inner?.price ?? "", allowLoose: product.allow_loose !== false
+  };
+}
+
+function pharmacyUnitFormFields(product = {}, includePurchase = false) {
+  const values = medicineUnitFormValues(product), base = product.unit || "tablet";
+  return `<fieldset class="pharmacy-fields pharmacy-unit-fields"><legend>Packaging &amp; selling units</legend>
+    <div class="form-row"><label>Supplier / outer unit<input name="supplierUnit" maxlength="30" value="${esc(values.supplierUnit)}" placeholder="box, bottle, pack"></label><label>Inner selling unit (optional)<input name="innerUnit" maxlength="30" value="${esc(values.innerUnit)}" placeholder="strip, packet"></label></div>
+    <div class="form-row"><label id="inner-per-supplier-wrap"><span id="inner-per-supplier-label">Inner units / outer unit</span><input name="innerPerSupplier" type="number" min="0.000001" step="any" value="${values.innerPerSupplier}"></label><label><span id="base-per-inner-label">Base units / inner unit</span><input name="basePerInner" type="number" min="0.000001" step="any" value="${values.basePerInner}"></label></div>
+    <div class="form-row"><label id="inner-selling-price-wrap">Selling price per <span class="inner-unit-label">${esc(values.innerUnit)}</span> (${esc(currencySymbol())})<input name="innerPrice" type="number" min="0" step="any" value="${esc(values.innerPrice)}" placeholder="Auto from base price"><small class="form-hint" id="inner-price-auto"></small></label><label>Selling price per <span class="supplier-unit-label">${esc(values.supplierUnit)}</span> (${esc(currencySymbol())})<input name="supplierPrice" type="number" min="0" step="any" value="${esc(values.supplierPrice)}" placeholder="Auto from base price"><small class="form-hint" id="supplier-price-auto"></small></label></div>
+    <label class="setting-check"><input type="checkbox" name="allowLoose" ${values.allowLoose ? "checked" : ""}> Allow sales as individual <span class="base-unit-label">${esc(base)}</span> (only when appropriate for this medicine)</label>
+    <p class="form-hint">Stock always stays in the internal base unit. Package prices can be set independently; blank prices use base selling price × conversion.</p>
+    ${includePurchase ? `<div class="pharmacy-batch-opening"><h4>Opening purchase</h4><div class="form-row"><label><span id="purchase-quantity-label">Supplier units purchased</span><input name="purchaseQuantity" type="number" min="0" step="any" value="0" required></label><label><span id="purchase-price-label">Purchase price per supplier unit</span> (${esc(currencySymbol())})<input name="purchasePrice" type="number" min="0" step="any" value="0" required></label></div><div class="pharmacy-purchase-calculator" aria-live="polite"><div><small>Calculated inventory</small><b id="medicine-calculated-stock">0 ${esc(base)}</b><span id="medicine-purchase-calculation"></span></div><div><small>Total purchase cost</small><b id="medicine-total-cost">${money(0)}</b></div><div><small>Cost per <span class="base-unit-label">${esc(base)}</span></small><b id="medicine-base-cost">${money(0)}</b></div></div><small class="form-hint">Verify quantities and packaging against the supplier invoice. The batch and expiry above are saved with this opening stock.</small></div>` : ""}
+  </fieldset>`;
+}
+
+function readPharmacyUnitForm(form) {
+  const baseUnit = String(form.get("unit") || "tablet").trim(), basePrice = Number(form.get("price") || 0);
+  const supplierUnit = String(form.get("supplierUnit") || "").trim(), innerUnit = String(form.get("innerUnit") || "").trim();
+  const innerPerSupplier = Number(form.get("innerPerSupplier") || 0), basePerInner = Number(form.get("basePerInner") || 0);
+  const price = (field, factor) => String(form.get(field) ?? "").trim() === "" ? basePrice * factor : Number(form.get(field));
+  const units = [];
+  if (supplierUnit && innerUnit) {
+    units.push({ name: innerUnit, factor: basePerInner, price: price("innerPrice", basePerInner) });
+    units.push({ name: supplierUnit, factor: basePerInner * innerPerSupplier, price: price("supplierPrice", basePerInner * innerPerSupplier) });
+  } else if (supplierUnit) units.push({ name: supplierUnit, factor: basePerInner, price: price("supplierPrice", basePerInner) });
+  const purchaseQuantity = Number(form.get("purchaseQuantity") || 0), purchasePrice = Number(form.get("purchasePrice") || 0);
+  const purchaseUnit = supplierUnit || baseUnit, purchaseFactor = supplierUnit ? units.find(unit => unit.name === supplierUnit)?.factor || 1 : 1;
+  return { baseUnit, supplierUnit, innerUnit, innerPerSupplier, basePerInner, units, allowLoose: form.get("allowLoose") === "on", purchaseUnit, purchaseQuantity, purchasePrice, qty: purchaseQuantity * purchaseFactor, cost: purchaseQuantity > 0 && purchaseFactor > 0 ? purchasePrice / purchaseFactor : 0 };
+}
+
+function attachPharmacyUnitCalculator(includePurchase = false) {
+  const modalForm = $("#modal-form");
+  if (!modalForm) return;
+  const update = () => {
+    const config = readPharmacyUnitForm(new FormData(modalForm)), base = config.baseUnit || "unit";
+    document.querySelectorAll("#modal-fields .base-unit-label").forEach(label => label.textContent = base);
+    document.querySelectorAll("#modal-fields .inner-unit-label").forEach(label => label.textContent = config.innerUnit || "inner unit");
+    document.querySelectorAll("#modal-fields .supplier-unit-label").forEach(label => label.textContent = config.supplierUnit || base);
+    $("#inner-per-supplier-label").textContent = `${config.innerUnit || "Inner units"} / ${config.supplierUnit || "outer unit"}`;
+    $("#base-per-inner-label").textContent = config.innerUnit ? `${base} / ${config.innerUnit}` : `${base} / ${config.supplierUnit || "supplier unit"}`;
+    $("#inner-per-supplier-wrap")?.classList.toggle("hidden", !config.innerUnit);
+    $("#inner-selling-price-wrap")?.classList.toggle("hidden", !config.innerUnit);
+    if ($("#inner-price-auto")) $("#inner-price-auto").textContent = config.innerUnit ? `Blank = ${money(config.units[0]?.price || 0)} per ${config.innerUnit}` : "";
+    if ($("#supplier-price-auto")) $("#supplier-price-auto").textContent = config.supplierUnit ? `Blank = ${money(config.units.find(unit => unit.name === config.supplierUnit)?.price || 0)} per ${config.supplierUnit}` : "";
+    if (!includePurchase) return;
+    $("#purchase-quantity-label").textContent = `${config.purchaseUnit} purchased`;
+    $("#purchase-price-label").textContent = `Purchase price per ${config.purchaseUnit}`;
+    const qty = Number.isFinite(config.qty) ? config.qty : 0, total = config.purchaseQuantity * config.purchasePrice;
+    $("#medicine-calculated-stock").textContent = `${+qty.toFixed(6)} ${base}`;
+    $("#medicine-purchase-calculation").textContent = config.supplierUnit && config.innerUnit
+      ? `${config.purchaseQuantity} ${config.supplierUnit} × ${config.innerPerSupplier} ${config.innerUnit}/${config.supplierUnit} × ${config.basePerInner} ${base}/${config.innerUnit}`
+      : `${config.purchaseQuantity} ${config.purchaseUnit} × ${config.supplierUnit ? config.basePerInner : 1} ${base}/${config.purchaseUnit}`;
+    $("#medicine-total-cost").textContent = money(Number.isFinite(total) ? total : 0);
+    $("#medicine-base-cost").textContent = `${money(Number.isFinite(config.cost) ? config.cost : 0)} / ${base}`;
+  };
+  modalForm.oninput = update;
+  modalForm.onchange = update;
+  update();
 }
 
 function attachClothingChipEvents() {
@@ -849,7 +1003,7 @@ function renderOnlineOrders() {
   const returnCountBadge = $("#online-order-return-count");
   if (returnCountBadge) returnCountBadge.textContent = returnCount ? String(returnCount) : "";
   const billShortcut = $("#online-order-bills");
-  if (billShortcut) { billShortcut.disabled = !data.permissions?.sales; billShortcut.title = data.permissions?.sales ? "Open Sales bills" : "Sales permission is required"; }
+  if (billShortcut) { billShortcut.disabled = !data.permissions?.sales; billShortcut.title = data.permissions?.sales ? "Open online-order bills" : "Sales permission is required"; }
   const orders = invalidRange ? [] : allOrders.filter(order => {
     if ((from && order.date < from) || (to && order.date > to)) return false;
     if (statusFilter && order.order_status !== statusFilter) return false;
@@ -886,8 +1040,15 @@ function renderOnlineOrders() {
   if (!tbody) return;
 
   const canDeleteOnlineOrders = signedInUser?.permissions?.delete_online_orders && data.permissions?.online_orders;
+  const page = largeListPage("onlineOrders", orders);
+  const returnsByOrder = new Map();
+  for (const row of data.onlineOrderReturns || []) {
+    const key = Number(row.online_order_id);
+    if (!returnsByOrder.has(key)) returnsByOrder.set(key, []);
+    returnsByOrder.get(key).push(row);
+  }
 
-  tbody.innerHTML = orders.map(order => {
+  tbody.innerHTML = page.visible.map(order => {
     const lines = order.lines || [];
     const itemsHtml = lines.map(l => {
       const details = [
@@ -905,7 +1066,7 @@ function renderOnlineOrders() {
     const paymentInfo = `<b>COD: ${money(order.due_cod)}</b><br><small class="form-hint">${esc(order.payment_method)} (${esc(order.payment_status)})</small>${order.advance_paid > 0 ? `<br><small class="form-hint">Advance: ${money(order.advance_paid)}</small>` : ""}`;
 
     const totalInfo = `<b>${money(order.total)}</b>${order.delivery_charge > 0 ? `<br><small class="form-hint">+ ${money(order.delivery_charge)} deliv.</small>` : ""}${order.discount > 0 ? `<br><small class="form-hint">- ${money(order.discount)} disc.</small>` : ""}`;
-    const orderReturnRows = (data.onlineOrderReturns || []).filter(row => Number(row.online_order_id) === Number(order.id));
+    const orderReturnRows = returnsByOrder.get(Number(order.id)) || [];
     const alreadyReturnedQty = orderReturnRows.reduce((sum, row) => sum + Number(row.qty || 0), 0);
     const orderedQty = (order.lines || []).reduce((sum, line) => sum + Number(line.qty || 0), 0);
     const canRecordReturn = ((order.order_status === "Delivered" && order.stock_deducted) || (order.order_status === "Returned" && !order.stock_deducted && alreadyReturnedQty + 0.000001 < orderedQty)) && data.permissions?.inventory;
@@ -935,6 +1096,7 @@ function renderOnlineOrders() {
 
   $("#online-orders-empty").textContent = invalidRange ? "Choose a valid date range." : allOrders.length ? "No online orders match your search, status, or date filters." : "No online orders yet. Click 'New online order' to record your first parcel or customer shipment.";
   $("#online-orders-empty").classList.toggle("hidden", orders.length > 0);
+  showLargeListPagination("#online-orders-pagination", "onlineOrders", page, orders.length);
 
   const totalRevenue = orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
   const totalCod = orders.reduce((sum, o) => sum + Number(o.due_cod || 0), 0);
@@ -1051,12 +1213,12 @@ function openOnlineOrderModal(orderId = 0) {
   const couriers = ["Steadfast Courier", "Pathao Courier", "RedX", "Paperfly", "Sundarban Courier", "SA Paribahan", "In-house Delivery", "Other"];
   const paymentMethods = ["Cash on Delivery", "bKash", "Nagad", "Card", "Bank Transfer", "Paid in full"];
 
-  const stockedProducts = data.products.filter(p => p.qty > 0 || (existing && (existing.lines || []).some(l => Number(l.productId) === Number(p.id))));
+  const stockedProducts = data.products.filter(p => productSellableQty(p) > 0 || (existing && (existing.lines || []).some(l => Number(l.productId) === Number(p.id))));
   if (!stockedProducts.length && !existing) return toast("No products in stock to create an online order.");
 
   let cart = existing ? (existing.lines || []).map(l => {
     const p = data.products.find(x => Number(x.id) === Number(l.productId));
-    return {
+    const line = {
       productId: l.productId,
       name: l.name,
       category: l.category || p?.category || "Other",
@@ -1067,8 +1229,14 @@ function openOnlineOrderModal(orderId = 0) {
       price: Number(l.price),
       qty: Number(l.qty),
       cost: Number(l.cost || p?.cost || 0),
-      max: p ? Number((p.qty + (existing.stock_deducted ? l.qty : 0)).toFixed(6)) : l.qty
+      max: p ? Number(((data.shopType === "pharmacy" ? productSellableQty(p) : Number(p.qty)) + (existing.stock_deducted ? Number(l.qty) : 0)).toFixed(6)) : Number(l.qty),
+      ...(p ? pharmacyLineFields(p) : pharmacyLineFields({ price: l.price }))
     };
+    if (data.shopType === "pharmacy" && l.saleUnit) {
+      line.mode = pharmacyModeForUnit(line, l.saleUnit);
+      if (Number.isFinite(Number(l.salePrice))) line.unitPrices[line.mode] = Number(l.salePrice);
+    }
+    return line;
   }) : [];
 
   const title = existing ? `Edit Online Order ${esc(existing.order_no)}` : "New Online Order";
@@ -1127,7 +1295,7 @@ function openOnlineOrderModal(orderId = 0) {
         </thead>
         <tbody id="order-cart-lines"></tbody>
       </table>
-      <div class="empty" id="order-cart-empty">No items added yet. Search and pick clothing items above.</div>
+      <div class="empty" id="order-cart-empty">No items added yet. Search and pick products above.</div>
     </div>
     <div class="form-row">
       <label>Delivery charge (${esc(currencySymbol())})<input name="deliveryCharge" id="order-delivery-charge" type="number" min="0" step="0.01" value="${Number(existing?.delivery_charge ?? 60)}" required></label>
@@ -1179,6 +1347,7 @@ function openOnlineOrderModal(orderId = 0) {
         name: l.name,
         qty: l.qty,
         price: l.price,
+        ...(data.shopType === "pharmacy" ? { saleUnit: unitOf(l).name, saleQty: l.qty / unitOf(l).f, salePrice: l.price * unitOf(l).f } : {}),
         size: l.size,
         color: l.color,
         brand: l.brand,
@@ -1238,10 +1407,11 @@ function openOnlineOrderModal(orderId = 0) {
         line.size ? `<span class="cloth-size-badge">${esc(line.size)}</span>` : "",
         line.color ? `<span class="cloth-color-badge">${esc(line.color)}</span>` : ""
       ].filter(Boolean).join(" ");
+      const selected = unitOf(line), pharmacy = data.shopType === "pharmacy";
       return `<tr>
-        <td class="product-cell"><b>${esc(line.name)}</b>${details ? `<br>${details}` : ""}<br><small class="form-hint">In stock: ${line.max} ${esc(line.unit)}</small></td>
-        <td><input type="number" min="0" step="0.01" class="bill-input" data-i="${i}" data-f="price" value="${Number(line.price)}" style="width:80px"></td>
-        <td><input type="number" min="0.001" step="any" max="${line.max}" class="bill-input" data-i="${i}" data-f="qty" value="${Number(line.qty)}" style="width:65px"></td>
+        <td class="product-cell"><b>${esc(line.name)}</b>${details ? `<br>${details}` : ""}<br><small class="form-hint">Available: ${pharmacy ? `${+(line.max / selected.f).toFixed(3)} ${esc(selected.name)} · ` : ""}${line.max} ${esc(line.unit)}</small></td>
+        <td>${pharmacy ? priceCell(line, i) : `<input type="number" min="0" step="0.01" class="bill-input" data-i="${i}" data-f="price" value="${Number(line.price)}" style="width:80px">`}</td>
+        <td>${pharmacy ? qtyCell(line, i) : `<input type="number" min="0.001" step="any" max="${line.max}" class="bill-input" data-i="${i}" data-f="qty" value="${Number(line.qty)}" style="width:65px">`}</td>
         <td><b>${money(line.price * line.qty)}</b></td>
         <td><button type="button" class="user-action danger" data-remove="${i}">×</button></td>
       </tr>`;
@@ -1254,7 +1424,7 @@ function openOnlineOrderModal(orderId = 0) {
     if (!product) return;
     const existingLine = cart.find(l => Number(l.productId) === Number(product.id));
     if (!existingLine) {
-      cart.push({
+      const line = {
         productId: product.id,
         name: product.name,
         category: product.category || "Other",
@@ -1265,12 +1435,22 @@ function openOnlineOrderModal(orderId = 0) {
         price: Number(product.price),
         cost: Number(product.cost || 0),
         qty: 1,
-        max: Number(product.qty)
-      });
-    } else if (existingLine.qty < existingLine.max) {
-      existingLine.qty++;
+        max: Number(productSellableQty(product)),
+        ...pharmacyLineFields(product)
+      };
+      if (data.shopType === "pharmacy") {
+        const selected = unitOf(line);
+        if (line.max + 0.000001 < selected.f) return toast(`Only ${line.max} ${line.unit} of ${line.name} is available; not enough for one ${selected.name}.`);
+        line.mode = selected.key;
+        line.qty = selected.f;
+        const configured = line.unitPrices?.[selected.key];
+        if (configured !== undefined) line.price = configured / selected.f;
+      }
+      cart.push(line);
     } else {
-      return toast(`Only ${existingLine.max} ${existingLine.unit} of ${existingLine.name} in stock.`);
+      const increment = data.shopType === "pharmacy" ? unitOf(existingLine).f : 1;
+      if (existingLine.qty + increment <= existingLine.max + 0.000001) existingLine.qty = Number((existingLine.qty + increment).toFixed(6));
+      else return toast(`Only ${existingLine.max} ${existingLine.unit} of ${existingLine.name} in stock.`);
     }
     drawCart();
     $("#order-product-search")?.focus();
@@ -1288,11 +1468,32 @@ function openOnlineOrderModal(orderId = 0) {
     const input = e.target;
     const line = cart[input.dataset.i];
     if (!line) return;
-    if (input.dataset.f === "price") line.price = Number(input.value) || 0;
+    if (input.dataset.f === "mode") {
+      const selected = unitOf({ ...line, mode: input.value });
+      if (line.max + 0.000001 < selected.f) { toast(`Only ${line.max} ${line.unit} of ${line.name} is available; not enough for one ${selected.name}.`); return drawCart(); }
+      line.mode = selected.key;
+      line.qty = selected.f;
+      const configured = line.unitPrices?.[selected.key];
+      if (configured !== undefined) line.price = configured / selected.f;
+      return drawCart();
+    }
+    const selected = unitOf(line), value = Number(input.value) || 0;
+    if (data.shopType === "pharmacy" && input.dataset.f === "price") {
+      line.price = value / selected.f;
+      line.unitPrices = line.unitPrices || {};
+      line.unitPrices[selected.key] = value;
+    } else if (input.dataset.f === "price") line.price = value;
     if (input.dataset.f === "qty") {
-      let val = Number(input.value) || 0;
-      if (val > line.max) { val = line.max; input.value = val; toast(`Only ${line.max} ${line.unit} available in stock.`); }
-      line.qty = val;
+      if (data.shopType === "pharmacy") {
+        let qty = Math.round(value * selected.f * 1e6) / 1e6;
+        if (!isFractional(line.unit)) qty = Math.round(qty);
+        if (qty > line.max) { qty = line.max; input.value = +(qty / selected.f).toFixed(6); toast(`Only ${line.max} ${line.unit} available in stock.`); }
+        line.qty = qty;
+      } else {
+        let val = value;
+        if (val > line.max) { val = line.max; input.value = val; toast(`Only ${line.max} ${line.unit} available in stock.`); }
+        line.qty = val;
+      }
     }
     input.closest("tr").cells[3].innerHTML = `<b>${money(line.price * line.qty)}</b>`;
     calculate();
@@ -1374,14 +1575,13 @@ function downloadOnlineOrdersExcel() {
   }
   const csv = "﻿" + rows.map(row => row.map(val => csvCell(val)).join(",")).join("\r\n");
   downloadFile(`online-orders-${dateKey(new Date())}.csv`, csv);
-  toast("Online orders downloaded");
 }
 
-document.querySelector("#online-order-search")?.addEventListener("input", renderOnlineOrders);
-document.querySelector("#online-order-status-filter")?.addEventListener("change", renderOnlineOrders);
-document.querySelector("#online-orders-from")?.addEventListener("change", renderOnlineOrders);
-document.querySelector("#online-orders-to")?.addEventListener("change", renderOnlineOrders);
-document.querySelector("#online-orders-clear-dates")?.addEventListener("click", () => { $("#online-orders-from").value = ""; $("#online-orders-to").value = ""; renderOnlineOrders(); });
+document.querySelector("#online-order-search")?.addEventListener("input", () => { largeListPages.onlineOrders = 1; renderOnlineOrders(); });
+document.querySelector("#online-order-status-filter")?.addEventListener("change", () => { largeListPages.onlineOrders = 1; renderOnlineOrders(); });
+document.querySelector("#online-orders-from")?.addEventListener("change", () => { largeListPages.onlineOrders = 1; renderOnlineOrders(); });
+document.querySelector("#online-orders-to")?.addEventListener("change", () => { largeListPages.onlineOrders = 1; renderOnlineOrders(); });
+document.querySelector("#online-orders-clear-dates")?.addEventListener("click", () => { $("#online-orders-from").value = ""; $("#online-orders-to").value = ""; largeListPages.onlineOrders = 1; renderOnlineOrders(); });
 
 function openOnlineOrderReturnModal(order) {
   const recorded = (data.onlineOrderReturns || []).filter(row => Number(row.online_order_id) === Number(order.id));
@@ -1476,14 +1676,14 @@ function openOnlineOrderCustomers() {
     $("#online-customer-body").innerHTML = filtered.map(customer => `<tr data-customer-search="${esc(customer.search)}"><td>${esc(customer.name)}</td><td>${esc(customer.phone || "—")}</td><td>${customer.count}</td><td>${money(customer.total)}</td><td>${customer.latest ? esc(dateLabel(customer.latest)) : "—"}</td></tr>`).join("");
     $("#online-customer-count").textContent = `${filtered.length} customer${filtered.length === 1 ? "" : "s"} · Select a row to filter orders`;
     $("#online-customer-empty").classList.toggle("hidden", filtered.length > 0);
-    $("#online-customer-body").querySelectorAll("tr[data-customer-search]").forEach(row => row.onclick = () => { $("#online-order-search").value = row.dataset.customerSearch; closeModal(); renderOnlineOrders(); });
+    $("#online-customer-body").querySelectorAll("tr[data-customer-search]").forEach(row => row.onclick = () => { $("#online-order-search").value = row.dataset.customerSearch; largeListPages.onlineOrders = 1; closeModal(); renderOnlineOrders(); });
   };
   $("#online-customer-search").oninput = renderCustomers;
   renderCustomers();
 }
 
 document.querySelector("#online-order-customers")?.addEventListener("click", () => openOnlineOrderCustomers());
-document.querySelector("#online-order-bills")?.addEventListener("click", () => { if (!data.permissions?.sales) return toast("Sales permission is required to view Bills."); openBills(false); });
+document.querySelector("#online-order-bills")?.addEventListener("click", () => { if (!data.permissions?.sales) return toast("Sales permission is required to view Bills."); openBills(false, {}, "online"); });
 document.querySelector("#online-order-returns")?.addEventListener("click", () => openOnlineOrderReturnsHistory());
 document.querySelector("#download-online-orders")?.addEventListener("click", downloadOnlineOrdersExcel);
 document.querySelector("#new-online-order")?.addEventListener("click", () => openOnlineOrderModal(0));
@@ -1528,15 +1728,124 @@ document.querySelector("#online-orders-table")?.addEventListener("click", async 
   }
 });
 
-function render() {
+const SHOP_TYPE_THEMES = {
+  pharmacy: { icon: "💊", subtitle: "PHARMACY DESK" },
+  restaurant: { icon: "🍽️", subtitle: "RESTAURANT DESK" },
+  clothing: { icon: "👗", subtitle: "FASHION BOUTIQUE" },
+  mobile: { icon: "📱", subtitle: "MOBILE & REPAIRS" },
+  hardware: { icon: "🛠️", subtitle: "HARDWARE & TOOLS" },
+  grocery: { icon: "🛒", subtitle: "GROCERY & MART" },
+  general: { icon: "🏪", subtitle: "GENERAL RETAIL" }
+};
+
+function applyShopTypeTheme(shopType) {
+  const type = SHOP_TYPE_THEMES[shopType] ? shopType : "general";
+  const theme = SHOP_TYPE_THEMES[type];
+  document.body.dataset.shopType = type;
+  const brandSmall = document.querySelector(".brand small");
+  if (brandSmall) brandSmall.textContent = `${theme.icon} ${t(theme.subtitle)}`;
+  const brandIcon = document.querySelector(".brand-icon");
+  if (brandIcon) brandIcon.innerHTML = `<span class="brand-type-emoji" aria-hidden="true">${theme.icon}</span>`;
+}
+
+const ONLINE_DASHBOARD_STATUS_GROUPS = [
+  { key: "pending", label: "Pending", statuses: ["Pending"], className: "pending", countKey: "pendingCount" },
+  { key: "processing", label: "Confirmed / Processing", statuses: ["Confirmed", "Processing"], className: "processing", countKey: "processingCount" },
+  { key: "shipped", label: "Shipped", statuses: ["Shipped"], className: "shipped", countKey: "shippedCount" },
+  { key: "delivered", label: "Delivered", statuses: ["Delivered"], className: "delivered", countKey: "deliveredCount" },
+  { key: "returned", label: "Returned", statuses: ["Returned"], className: "returned", countKey: "returnedCount" },
+  { key: "cancelled", label: "Cancelled", statuses: ["Cancelled"], className: "cancelled", countKey: "cancelledCount" }
+];
+let dashboardOnlineStatusFilter = "";
+function onlineDashboardOrdersForStatus(orders, statusFilter) {
+  const group = ONLINE_DASHBOARD_STATUS_GROUPS.find(item => item.key === statusFilter);
+  return group ? (orders || []).filter(order => group.statuses.includes(order.order_status)) : (orders || []);
+}
+
+function renderOnlineDashboard(todayKey, permissions) {
+  const panel = $("#dashboard-online-sales");
+  if (!panel) return;
+  panel.classList.toggle("hidden", !permissions.online_orders);
+  if (!permissions.online_orders) return;
+  const orders = data.onlineOrders || [];
+  const summary = summarizeOnlineDashboard(orders, data.sales || [], todayKey);
+  $("#online-today-orders").textContent = localizeDigits(summary.todayOrderCount);
+  $("#online-today-order-value").textContent = `${money(summary.todayOrderValue)} order value`;
+  $("#online-gross-sales").textContent = permissions.sales ? money(summary.sales.grossSales) : "—";
+  $("#online-returned-value").textContent = permissions.sales ? money(summary.sales.returnedValue) : "—";
+  $("#online-net-sales").textContent = permissions.sales ? money(summary.sales.netSales) : "—";
+  $("#online-profit-after-returns").textContent = permissions.sales ? money(summary.sales.profitAfterReturns) : "—";
+  $("#online-profit-breakdown").textContent = permissions.sales ? `Before returns ${money(summary.sales.profitBeforeReturns)} · Reversed ${money(summary.sales.returnedProfit)}` : "Sales access required";
+  $("#online-active-cod").textContent = money(summary.activeCod);
+  $("#online-active-count").textContent = `${localizeDigits(summary.activeOrderCount)} active orders`;
+  $("#online-dashboard-status").innerHTML = ONLINE_DASHBOARD_STATUS_GROUPS.map(group => {
+    const active = dashboardOnlineStatusFilter === group.key;
+    return `<button type="button" class="online-dashboard-status-item${active ? " active" : ""}" data-online-status-filter="${group.key}" aria-pressed="${active}" title="${esc(t("Filter orders by status"))}"><span class="status ${group.className}">${esc(t(group.label))}</span><b>${localizeDigits(summary[group.countKey])}</b></button>`;
+  }).join("");
+  const activeGroup = ONLINE_DASHBOARD_STATUS_GROUPS.find(group => group.key === dashboardOnlineStatusFilter);
+  const filteredOrders = onlineDashboardOrdersForStatus(orders, dashboardOnlineStatusFilter);
+  const page = largeListPage("dashboardOnline", filteredOrders);
+  const visibleOrders = page.visible;
+  const returnTotals = new Map();
+  for (const row of data.onlineOrderReturns || []) returnTotals.set(Number(row.online_order_id), (returnTotals.get(Number(row.online_order_id)) || 0) + Number(row.total || 0));
+  $("#online-orders-filter-label").textContent = activeGroup ? `· ${t(activeGroup.label)}` : "";
+  $("#online-orders-show-all").classList.toggle("hidden", !activeGroup);
+  $("#online-orders-list-meta").textContent = `${localizeDigits(filteredOrders.length)} / ${localizeDigits(orders.length)} ${t("orders shown")}`;
+  $("#dashboard-online-orders-list").innerHTML = visibleOrders.length ? visibleOrders.map(order => {
+    const items = (order.lines || []).map(line => `${esc(line.name)} × ${localizeDigits(line.qty)} ${esc(line.unit || "piece")} · ${money(line.lineTotal ?? Number(line.qty || 0) * Number(line.price || 0))}`).join("<br>");
+    const returnedValue = returnTotals.get(Number(order.id)) || 0;
+    return `<article class="online-dashboard-order"><div class="online-dashboard-order-main"><div class="online-dashboard-order-title"><b>${esc(order.order_no)}</b><span>${dateLabel(order.date)}</span></div><strong>${esc(order.customer_name)}</strong><small>📞 ${esc(order.customer_phone)}</small><small>📍 ${esc(order.shipping_address)}${order.city_area ? ` (${esc(order.city_area)})` : ""}</small><small class="online-dashboard-order-items">${items || "No items"}</small>${order.notes ? `<small>Note: ${esc(order.notes)}</small>` : ""}</div><div class="online-dashboard-order-courier"><b>${esc(order.courier || "Not assigned")}</b>${order.tracking_id ? `<small>Tracking: ${esc(order.tracking_id)}</small>` : "<small>No tracking ID</small>"}</div><div class="online-dashboard-order-payment"><b>${money(order.total)}</b><small>${esc(order.payment_method)} · ${esc(order.payment_status)}</small><small>Advance ${money(order.advance_paid)} · COD ${money(order.due_cod)}</small>${Number(order.delivery_charge || 0) > 0 || Number(order.discount || 0) > 0 ? `<small>Delivery ${money(order.delivery_charge)} · Discount ${money(order.discount)}</small>` : ""}${returnedValue > 0 ? `<small class="online-dashboard-order-returned"><span>Returned</span> ${money(returnedValue)}</small>` : ""}</div><span class="status ${order.order_status.toLowerCase()}">${esc(order.order_status)}</span></article>`;
+  }).join("") : activeGroup ? '<div class="empty">No orders match this status.</div>' : '<div class="empty">No online orders yet. Your latest online orders will appear here.</div>';
+  showLargeListPagination("#dashboard-online-pagination", "dashboardOnline", page, filteredOrders.length);
+}
+
+$("#dashboard-online-sales")?.addEventListener("click", event => {
+  const showAll = event.target.closest("[data-online-show-all]");
+  const statusButton = event.target.closest("[data-online-status-filter]");
+  if (!showAll && !statusButton) return;
+  const nextFilter = showAll ? "" : statusButton.dataset.onlineStatusFilter;
+  dashboardOnlineStatusFilter = !showAll && dashboardOnlineStatusFilter !== nextFilter ? nextFilter : "";
+  largeListPages.dashboardOnline = 1;
+  renderOnlineDashboard(dateKey(new Date()), data.permissions || {});
+  $("#dashboard-online-orders-list").scrollTop = 0;
+});
+
+function renderExpenses() {
+  const canManage = signedInUser?.permissions?.records && data.permissions?.expenses;
+  $("#expenses-actions-header").classList.toggle("hidden", !canManage);
+  $("#expenses").classList.toggle("expenses-has-actions", canManage);
+  const expenses = data.expenses || [];
+  const page = largeListPage("expenses", expenses);
+  $("#expenses-table").innerHTML = page.visible.map(item => `<tr><td>${dateLabel(item.date)}</td><td>${esc(item.category)}</td><td>${esc(item.note || "—")}</td><td><b>${money(item.amount)}</b></td>${canManage ? `<td><button class="user-action" data-expense-action="edit" data-id="${item.id}">Edit</button><button class="user-action danger" data-expense-action="delete" data-id="${item.id}">Delete</button></td>` : ""}</tr>`).join("");
+  $("#expenses-empty").classList.toggle("hidden", expenses.length > 0);
+  showLargeListPagination("#expenses-pagination", "expenses", page, expenses.length);
+}
+
+function renderStockWatch() {
   const permissions = data.permissions || {};
-  const canManageSalesRecords = signedInUser?.permissions?.records && permissions.sales;
-  const canManageExpenseRecords = signedInUser?.permissions?.records && permissions.expenses;
+  const low = data.products.filter(item => item.qty <= item.min);
+  $("#low-count").textContent = permissions.inventory ? `${low.length} low` : "—";
+  $("#stock-watch-count").textContent = low.length ? `${low.length} low` : "";
+  const page = largeListPage("stockWatch", low);
+  $("#stock-watch").innerHTML = low.length
+    ? `<div class="table-scroll stock-watch-scroll"><table><thead><tr><th>PRODUCT</th><th>UNIT</th><th>IN STOCK</th><th>REORDER AT</th><th>STATUS</th></tr></thead><tbody>${page.visible.map(item => `<tr><td class="product-cell" data-label="Product">${esc(item.icon || "📦")} &nbsp;${esc(productLabel(item))}</td><td data-label="Unit">${esc(item.unit || "piece")}</td><td class="qty" data-label="In stock">${item.qty} ${esc(item.unit || "piece")}</td><td data-label="Reorder at">${item.min} ${esc(item.unit || "piece")}</td><td data-label="Status"><span class="status ${item.qty === 0 ? "out" : "low"}">${item.qty === 0 ? "Out of stock" : "Low stock"}</span></td></tr>`).join("")}</tbody></table></div>`
+    : '<div class="empty">Everything is stocked up. Nice work!</div>';
+  showLargeListPagination("#stock-watch-pagination", "stockWatch", page, low.length);
+}
+
+function render() {
+  applyShopTypeTheme(data.shopType || "general");
+  const permissions = data.permissions || {};
   const todayKey = dateKey(new Date());
   const month = todayKey.slice(0, 7);
   const displayName = signedInUser?.displayName || signedInUser?.username || "Shopkeeper";
   $("#welcome-greeting").innerHTML = `${t("Good morning")}, ${esc(displayName)} <span>✳</span>`;
   $("#signed-in-as").textContent = displayName;
+  const activeShopProfile = data.activeProfile || { name: data.shopType || "General store", type: data.shopType || "general" };
+  if ($("#shop-profiles-button")) {
+    $("#shop-profiles-button").innerHTML = `${esc(activeShopProfile.name)} <span aria-hidden="true">▾</span>`;
+    $("#shop-profiles-button").title = `${activeShopProfile.name} · Switch shop profile (separate records)`;
+  }
   $("#profile-initial").textContent = displayName.trim().charAt(0).toUpperCase() || "?";
   const profilePhoto = $("#profile-photo");
   if (signedInUser?.avatarData) {
@@ -1554,13 +1863,21 @@ function render() {
   $("#workspace-name").textContent = data.workspace || "Set workspace";
   refreshTopbarClock();
   renderDashboardTrend();
-  const dashboardReturns = permissions.sales ? (data.salesReturns || []).slice(0, 5) : [];
+  renderOnlineDashboard(todayKey, permissions);
+  const allReturns = permissions.sales ? (data.salesReturns || []) : [];
+  const dashboardReturns = allReturns.slice(0, 5);
   $("#dashboard-returns").classList.toggle("hidden", !permissions.sales);
-  $("#dashboard-returns-list").innerHTML = dashboardReturns.length ? dashboardReturns.map(row => `<div class="dashboard-return-row"><div class="dashboard-return-product">${esc(row.product)}<small class="dashboard-return-meta">${dateLabel(row.date)}${row.reason ? ` · ${esc(row.reason)}` : ""}</small></div><span class="dashboard-return-qty">${Number(row.qty)} ${esc(row.unit || "piece")}</span><b class="dashboard-return-amount">${money(row.total)}</b></div>`).join("") : '<div class="dashboard-returns-empty">No product returns have been recorded.</div>';
+  $("#dashboard-returns-total").textContent = money(allReturns.reduce((sum, row) => sum + Number(row.total || 0), 0));
+  $("#dashboard-returns-count").textContent = localizeDigits(allReturns.length);
+  $("#dashboard-refunds-total").textContent = money(allReturns.reduce((sum, row) => sum + Number(row.refund_amount || 0), 0));
+  $("#dashboard-returns-list").innerHTML = dashboardReturns.length ? dashboardReturns.map(row => `<div class="dashboard-return-row"><div class="dashboard-return-product">${esc(row.product)}<small class="dashboard-return-meta">${dateLabel(row.date)}${row.reason ? ` · ${esc(row.reason)}` : ""}</small></div><span class="dashboard-return-qty">${Number(row.qty)} ${esc(row.unit || "piece")}</span><b class="dashboard-return-amount">−${money(row.total)}</b></div>`).join("") : '<div class="dashboard-returns-empty">No product returns have been recorded.</div>';
   const salesToday = data.sales.filter(item => item.date === todayKey);
-  $("#today-sales").textContent = permissions.sales ? money(salesToday.reduce((sum, item) => sum + item.total, 0)) : "—";
+  const todaySummary = summarizeSales(salesToday);
+  $("#today-sales").textContent = permissions.sales ? money(todaySummary.netSales) : "—";
   $("#today-count").textContent = permissions.sales ? `${salesToday.length} transactions` : "No access";
-  $("#today-profit").textContent = permissions.sales ? money(salesToday.reduce((sum, item) => sum + item.total - item.cost, 0)) : "—";
+  $("#today-sales-breakdown").textContent = permissions.sales ? `Gross ${money(todaySummary.grossSales)} · Returns ${money(todaySummary.returnedValue)}` : "No access";
+  $("#today-profit").textContent = permissions.sales ? money(todaySummary.profitAfterReturns) : "—";
+  $("#today-profit-breakdown").textContent = permissions.sales ? `Before returns ${money(todaySummary.profitBeforeReturns)} · Reversed ${money(todaySummary.returnedProfit)}` : "No access";
   const monthlyExpenses = data.expenses.filter(item => item.date.startsWith(month));
   $("#month-expenses").textContent = permissions.expenses ? money(monthlyExpenses.reduce((sum, item) => sum + item.amount, 0)) : "—";
   $("#expense-count").textContent = permissions.expenses ? `${monthlyExpenses.length} recorded this month` : "No access";
@@ -1571,12 +1888,19 @@ function render() {
 
   $("#inventory-nav").classList.toggle("hidden", !permissions.inventory);
   $("#sales-nav").classList.toggle("hidden", !permissions.sales);
-  $("#sale-shortcut").classList.toggle("hidden", data.shopType === "pharmacy" && featureEnabled("pharmacy"));
-  $("#pharmacy-batches-button")?.classList.toggle("hidden", !(permissions.inventory && data.shopType === "pharmacy" && featureEnabled("pharmacy")));
+  const pharmacyMedexEnabled = data.shopType === "pharmacy" && Boolean(permissions.sales || permissions.inventory);
+  $("#pharmacy-medex-button")?.classList.toggle("hidden", !pharmacyMedexEnabled);
+  $("#pharmacy-medex-inventory-button")?.classList.toggle("hidden", !(permissions.inventory && data.shopType === "pharmacy"));
+  $("#pharmacy-medex-sales-button")?.classList.toggle("hidden", !(permissions.sales && data.shopType === "pharmacy"));
+  $("#pharmacy-batches-button")?.classList.toggle("hidden", !(permissions.inventory && data.shopType === "pharmacy"));
+  const restaurantPackagesEnabled = data.shopType === "restaurant" && Boolean(permissions.sales || permissions.inventory || permissions.food_packages);
+  $("#restaurant-packages-button")?.classList.toggle("hidden", !restaurantPackagesEnabled);
+  $("#restaurant-packages-inventory-button")?.classList.toggle("hidden", !(data.shopType === "restaurant" && (permissions.inventory || permissions.food_packages)));
+  $("#restaurant-packages-sales-button")?.classList.toggle("hidden", !(data.shopType === "restaurant" && (permissions.sales || permissions.food_packages)));
   const onlineOrdersEnabled = !!permissions.online_orders;
   $("#online-orders-nav").classList.toggle("hidden", !onlineOrdersEnabled);
-  const repairsEnabled = data.shopType === "mobile" && permissions.sales && featureEnabled("repairs");
-  const devicesEnabled = data.shopType === "mobile" && permissions.sales && featureEnabled("devices");
+  const repairsEnabled = data.shopType === "mobile" && permissions.sales;
+  const devicesEnabled = data.shopType === "mobile" && permissions.sales;
   $("#repairs-nav").classList.toggle("hidden", !repairsEnabled);
   $("#devices-nav").classList.toggle("hidden", !devicesEnabled);
   $("#expenses-nav").classList.toggle("hidden", !permissions.expenses);
@@ -1584,7 +1908,10 @@ function render() {
   $("#inventory").classList.toggle("hidden", !permissions.inventory);
   const canBulkInventory = signedInUser?.role === "admin" && signedInUser?.permissions?.records && permissions.inventory;
   $("#bulk-inventory-tools").classList.toggle("hidden", !canBulkInventory);
-  $("#bulk-inventory-help").classList.toggle("hidden", !canBulkInventory);
+  if ($("#bulk-inventory-help")) {
+    $("#bulk-inventory-help").textContent = `${bulkInventoryTemplateConfig(data.shopType).help} ${BULK_INVENTORY_UPLOAD_HELP}${data.shopType === "pharmacy" ? " After upload, use Update quantity on a medicine to receive batch-controlled stock." : ""}`;
+    $("#bulk-inventory-help").classList.toggle("hidden", !canBulkInventory);
+  }
   $("#manage-categories").classList.toggle("hidden", !(signedInUser?.permissions?.records && permissions.inventory));
   $("#sales").classList.toggle("hidden", !permissions.sales);
   $("#online-orders")?.classList.toggle("hidden", !onlineOrdersEnabled);
@@ -1603,48 +1930,25 @@ function render() {
   if ($("#edit-workspace")) $("#edit-workspace").title = canSettings ? "Click to edit shop settings and location" : "Workspace location";
   const activeOrders = (data.onlineOrders || []).filter(o => ["Pending", "Confirmed", "Processing", "Shipped"].includes(o.order_status));
   if ($("#nav-online-orders")) $("#nav-online-orders").textContent = onlineOrdersEnabled && activeOrders.length ? activeOrders.length : "";
-  $("#new-sale").classList.toggle("hidden", !permissions.sales || data.requireCustomer || data.taxMode !== "none" || !quickPaymentChoices().length);
-  $("#sale-shortcut").classList.toggle("hidden", !permissions.sales || data.requireCustomer || data.taxMode !== "none" || !quickPaymentChoices().length);
-  $("#low-count").textContent = permissions.inventory ? `${data.products.filter(item => item.qty <= item.min).length} low` : "—";
-
-  const low = data.products.filter(item => item.qty <= item.min);
-  $("#stock-watch-count").textContent = low.length ? `${low.length} low` : "";
-  $("#stock-watch").innerHTML = low.length
-    ? `<div class="table-scroll stock-watch-scroll"><table><thead><tr><th>PRODUCT</th><th>UNIT</th><th>IN STOCK</th><th>REORDER AT</th><th>STATUS</th></tr></thead><tbody>${low.map(item => `<tr><td class="product-cell" data-label="Product">${esc(item.icon || "📦")} &nbsp;${esc(productLabel(item))}</td><td data-label="Unit">${esc(item.unit || "piece")}</td><td class="qty" data-label="In stock">${item.qty} ${esc(item.unit || "piece")}</td><td data-label="Reorder at">${item.min} ${esc(item.unit || "piece")}</td><td data-label="Status"><span class="status ${item.qty === 0 ? "out" : "low"}">${item.qty === 0 ? "Out of stock" : "Low stock"}</span></td></tr>`).join("")}</tbody></table></div>`
-    : '<div class="empty">Everything is stocked up. Nice work!</div>';
+  const quickSaleHidden = !permissions.sales || data.shopType === "pharmacy" || data.requireCustomer || data.taxMode !== "none" || !quickPaymentChoices().length;
+  $("#new-sale").classList.toggle("hidden", quickSaleHidden);
+  $("#sale-shortcut").classList.toggle("hidden", quickSaleHidden);
+  renderStockWatch();
   renderInventoryProducts();
   renderOnlineOrders();
   renderRepairJobs();
   renderDevices();
-  const canReturnSales = permissions.sales && permissions.inventory;
-  $("#sales-actions-header").classList.toggle("hidden", !canManageSalesRecords && !canReturnSales);
-  $("#sales").classList.toggle("sales-has-actions", canManageSalesRecords || canReturnSales);
-  $("#sales-table").innerHTML = data.sales.map(item => {
-    const returned = Number(item.returned_qty || 0) > 0;
-    const isRepair = Number(item.service_job_id) > 0;
-    const returnButton = !isRepair && canReturnSales && item.product_id && Number(item.original_remaining_qty) > 0
-      ? `<button type="button" class="user-action" data-sale-action="return" data-id="${item.id}">Return</button>` : "";
-    const actions = [
-      canManageSalesRecords && !isRepair ? `<button class="user-action" data-sale-action="edit" data-id="${item.id}">Edit</button><button class="user-action danger" data-sale-action="delete" data-id="${item.id}">Delete</button>` : ""
-    ].join("");
-    return `<tr><td>${dateLabel(item.date)}</td><td class="product-cell">${esc(item.product)}${returned ? `<small class="form-hint">Returned ${Number(item.returned_qty)} ${esc(item.unit || "piece")}</small>` : ""}${returnButton}</td><td>${item.qty} ${esc(item.unit || "piece")}</td><td>${esc(item.payment)}</td><td><b>${money(item.total)}</b>${Number(item.tax_amount) > 0 ? `<small class="form-hint">+ ${money(item.tax_amount)} tax</small>` : ""}</td>${canManageSalesRecords || canReturnSales ? `<td>${actions || "—"}</td>` : ""}</tr>`;
-  }).join("");
-  $("#sales-empty").classList.toggle("hidden", data.sales.length > 0);
-  const salesGross = data.sales.reduce((sum, item) => sum + Number(item.original_total ?? item.total ?? 0), 0);
-  const salesNet = data.sales.reduce((sum, item) => sum + Number(item.total || 0), 0);
-  const returnsTotal = Math.max(0, salesGross - salesNet);
-  $("#sales-summary").innerHTML = `<div class="list-summary-heading"><b>Sales totals</b><small>All-time totals across recorded sale lines</small></div><div class="list-summary-cards"><div><small>Sale lines</small><b>${data.sales.length}</b></div><div><small>Gross sales</small><b>${money(salesGross)}</b></div><div><small>Returned value</small><b>${money(returnsTotal)}</b></div><div><small>Net sales after returns</small><b>${money(salesNet)}</b></div></div>`;
-  $("#expenses-actions-header").classList.toggle("hidden", !canManageExpenseRecords);
-  $("#expenses").classList.toggle("expenses-has-actions", canManageExpenseRecords);
-  $("#expenses-table").innerHTML = data.expenses.map(item => `<tr><td>${dateLabel(item.date)}</td><td>${esc(item.category)}</td><td>${esc(item.note || "—")}</td><td><b>${money(item.amount)}</b></td>${canManageExpenseRecords ? `<td><button class="user-action" data-expense-action="edit" data-id="${item.id}">Edit</button><button class="user-action danger" data-expense-action="delete" data-id="${item.id}">Delete</button></td>` : ""}</tr>`).join("");
-  $("#expenses-empty").classList.toggle("hidden", data.expenses.length > 0);
+  $("#sales-actions-header").classList.remove("hidden");
+  $("#sales").classList.remove("sales-has-actions");
+  renderExpenses();
   $("#add-product").classList.toggle("hidden", !permissions.inventory);
-  $("#new-sale").classList.toggle("hidden", !permissions.sales || data.requireCustomer || data.taxMode !== "none" || !quickPaymentChoices().length);
-  $("#sale-shortcut").classList.toggle("hidden", !permissions.sales || data.requireCustomer || data.taxMode !== "none" || !quickPaymentChoices().length);
+  $("#add-product").textContent = data.shopType === "pharmacy" ? "＋ Add medicine" : "＋ Add product";
+  $("#pharmacy-inventory-guide")?.classList.toggle("hidden", data.shopType !== "pharmacy");
+  $("#new-sale").classList.toggle("hidden", quickSaleHidden);
+  $("#sale-shortcut").classList.toggle("hidden", quickSaleHidden);
   $("#add-expense").classList.toggle("hidden", !permissions.expenses);
   renderReport();
   localizeCurrencyLabels();
-  renderLicenseBanner();
   renderBackupWarning();
   translateDom(document.body);
   if (!repairsEnabled && location.hash === "#repairs") showScreen("dashboard", true);
@@ -1653,7 +1957,95 @@ function render() {
 }
 
 const dialog = $("#modal");
-const bulkInventoryHeaders = ["Product ID", "Product Name", "SKU", "Selling Price", "Cost", "Quantity", "Low Stock Alert", "Unit", "Category", "Barcode", "Brand", "Color", "Size", "Material"];
+const BULK_INVENTORY_MAX_FILE_BYTES = 25 * 1024 * 1024;
+const BULK_INVENTORY_MAX_ROWS = 25000;
+const BULK_INVENTORY_UPLOAD_HELP = "The Category column is imported, and missing categories are created for this shop type. Upload up to 25 MB or 25,000 rows at a time.";
+const bulkInventoryCoreHeaders = ["Product ID", "Product Name", "SKU", "Selling Price", "Cost", "Quantity", "Low Stock Alert", "Unit", "Category", "Barcode"];
+const bulkInventoryPharmacyHeaders = ["Supplier / Outer Unit", "Inner Selling Unit", "Inner Units / Outer Unit", "Base Units / Inner Unit", "Inner Unit Selling Price", "Outer Unit Selling Price", "Allow Individual Base Unit Sales", "Opening Purchase Quantity", "Opening Purchase Price / Outer Unit"];
+function bulkInventoryTemplateConfig(shopType = data.shopType) {
+  const baseRow = item => [
+    item.id,
+    item.name,
+    item.sku || "",
+    item.price,
+    item.cost,
+    item.qty,
+    item.min,
+    item.unit || "piece",
+    item.category || "Other",
+    item.barcode || ""
+  ];
+  if (shopType === "pharmacy") {
+    const batchesByProduct = new Map();
+    for (const batch of data.pharmacyBatches || []) {
+      if (Number(batch.quantity_remaining) > 0 && !batchesByProduct.has(batch.product_id)) {
+        batchesByProduct.set(batch.product_id, batch);
+      }
+    }
+    return {
+      filename: "pharmacy-inventory-template.csv",
+      headers: [...bulkInventoryCoreHeaders, "Generic Name", "Strength", "Dosage Form", "Manufacturer", "Batch Number", "Expiry Date", ...bulkInventoryPharmacyHeaders],
+      help: "Pharmacy Excel template: includes all medicine details, packaging, selling units, batch/expiry, and optional opening-purchase fields. Keep Product ID unchanged to update details or packaging; leave it blank to add a medicine. For new medicines, Opening Purchase Quantity and Opening Purchase Price / Outer Unit calculate base Quantity and Cost automatically; leave both blank to use the base-unit Quantity and Cost columns instead. Blank package selling prices use base Selling Price × conversion. Use Yes or No for individual base-unit sales. Example: 10 inner units per box and 10 base units per inner unit means 100 base units per box. Opening-purchase fields are for new medicines only—use Update quantity for existing stock. Blank expiry holds opening stock for verification before sale.",
+      toRow: item => {
+        const batch = batchesByProduct.get(item.id), units = medicineUnitFormValues(item);
+        const hasOuter = Boolean(units.supplierUnit), hasInner = Boolean(hasOuter && units.innerUnit);
+        return [
+          ...baseRow(item), item.generic_name || "", item.strength || "", item.dosage_form || "", item.manufacturer || "", batch?.batch_number || "", batch?.expiry_date || "",
+          units.supplierUnit, units.innerUnit,
+          hasInner ? units.innerPerSupplier : "", hasOuter ? units.basePerInner : "",
+          hasInner ? units.innerPrice : "", hasOuter ? units.supplierPrice : "",
+          item.allow_loose === false ? "No" : "Yes", "", ""
+        ];
+      }
+    };
+  }
+  if (shopType === "restaurant") {
+    return {
+      filename: "restaurant-inventory-template.csv",
+      headers: [...bulkInventoryCoreHeaders, "Portion / Serving", "Food Type", "Spice / Prep", "Kitchen Section"],
+      help: "Food & restaurant Excel template: includes Portion / Serving (e.g. Full, Half, 1:1), Food Type (e.g. Chicken, Beef, Vegetable), Spice / Prep, and Kitchen Section. Keep Product ID unchanged for existing menu items; leave it blank to add a new item.",
+      toRow: item => [...baseRow(item), item.size || "", item.material || "", item.color || "", item.brand || ""]
+    };
+  }
+  if (shopType === "clothing") {
+    return {
+      filename: "clothing-inventory-template.csv",
+      headers: [...bulkInventoryCoreHeaders, "Brand", "Color", "Size", "Material"],
+      help: "Clothing Excel template: includes Brand, Color, Size, and Material for apparel variants. Keep Product ID unchanged for existing items; leave it blank to add a new item.",
+      toRow: item => [...baseRow(item), item.brand || "", item.color || "", item.size || "", item.material || ""]
+    };
+  }
+  if (shopType === "mobile") {
+    return {
+      filename: "mobile-inventory-template.csv",
+      headers: [...bulkInventoryCoreHeaders, "Brand", "Color", "Storage / Variant"],
+      help: "Mobile shop Excel template: includes Brand, Color, and Storage / Variant (e.g. 8GB/128GB) for phones and accessories. Keep Product ID unchanged for existing items; leave it blank to add a new item.",
+      toRow: item => [...baseRow(item), item.brand || "", item.color || "", item.size || ""]
+    };
+  }
+  if (shopType === "hardware") {
+    return {
+      filename: "hardware-inventory-template.csv",
+      headers: [...bulkInventoryCoreHeaders, "Brand", "Size / Spec", "Smaller Unit", "Units per Pack"],
+      help: "Hardware Excel template: includes Brand, Size / Spec (e.g. 10mm, 1 inch), and optional Smaller Unit / Units per Pack (e.g. unit = coil, smaller unit = meter, 305 per coil).",
+      toRow: item => [...baseRow(item), item.brand || "", item.size || "", item.pack_name || "", item.pack_size ? item.pack_size : ""]
+    };
+  }
+  if (shopType === "grocery") {
+    return {
+      filename: "grocery-inventory-template.csv",
+      headers: [...bulkInventoryCoreHeaders, "Brand", "Pack / Weight", "Smaller Unit", "Units per Pack"],
+      help: "Grocery Excel template: includes Brand, Pack / Weight (e.g. 500g, 1L), and optional Smaller Unit / Units per Pack (e.g. unit = sack, smaller unit = kg, 50 per sack).",
+      toRow: item => [...baseRow(item), item.brand || "", item.size || "", item.pack_name || "", item.pack_size ? item.pack_size : ""]
+    };
+  }
+  return {
+    filename: "general-inventory-template.csv",
+    headers: [...bulkInventoryCoreHeaders, "Brand", "Smaller Unit", "Units per Pack"],
+    help: "General retail Excel template: includes Product ID, Name, SKU, Prices, Quantity, Unit, Category, Barcode, Brand, and optional Smaller Unit / Units per Pack.",
+    toRow: item => [...baseRow(item), item.brand || "", item.pack_name || "", item.pack_size ? item.pack_size : ""]
+  };
+}
 function csvCell(value) {
   let text = String(value ?? "");
   if (typeof value === "string" && /^[=+@\- \t\r]/.test(text)) text = "'" + text;
@@ -1671,6 +2063,7 @@ function downloadFile(filename, content, type = "text/csv;charset=utf-8") {
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 30000);
+  toast(`Download complete: ${filename}`, 4000);
 }
 function parseCsv(text) {
   const rows = [];
@@ -1711,9 +2104,19 @@ function closeDialogElement(element) {
   }
 }
 function openModal(title, markup, onSave) {
+  const modalForm = $("#modal-form");
+  // Modal markup is reused; do not let a previous form's calculator handle new fields.
+  modalForm.oninput = null;
+  modalForm.onchange = null;
   $("#modal-title").textContent = t(title);
   const submit = $("#submit-modal");
-  if (submit) { submit.textContent = t("Save"); submit.classList.remove("hidden"); }
+  if (submit) {
+    submit.textContent = t("Save");
+    submit.classList.remove("hidden");
+    submit.disabled = false;
+  }
+  const cancel = $("#cancel-modal");
+  if (cancel) cancel.textContent = t("Cancel");
   const errorBanner = $("#modal-error-banner");
   if (errorBanner) {
     errorBanner.textContent = "";
@@ -1782,23 +2185,49 @@ document.addEventListener("keydown", event => {
   }
 }, true);
 
+$("#shop-profiles-button").onclick = () => {
+  const profiles = data.profiles || [];
+  const activeId = Number(data.activeProfile?.id);
+  const choices = profiles.map(profile => {
+    const current = Number(profile.id) === activeId;
+    return `<button type="button" class="shop-profile-choice ${current ? "current" : ""}" data-switch-profile="${Number(profile.id)}" ${current ? "disabled" : ""}><span><b>${esc(profile.name)}</b><small>${current ? "Current profile" : "Open separate inventory, sales, and reports"}</small></span><span aria-hidden="true">${current ? "✓" : "→"}</span></button>`;
+  }).join("");
+  openModal("Switch shop profile", `<p class="form-hint">Each shop profile has its own inventory, batches, purchases, sales, expenses, reports, and backups. Records never move between profiles.</p><div class="shop-profile-list">${choices || '<div class="empty">No shop profiles are available.</div>'}</div><p class="form-hint">Switching affects only this sign-in session. Other users stay in their selected profile.</p>`, () => false);
+  $("#submit-modal")?.classList.add("hidden");
+  if ($("#cancel-modal")) $("#cancel-modal").textContent = t("Close");
+  document.querySelectorAll("[data-switch-profile]").forEach(button => {
+    button.onclick = async () => {
+      document.querySelectorAll("[data-switch-profile]").forEach(choice => { choice.disabled = true; });
+      try {
+        await api("/api/profiles/switch", { method: "POST", body: JSON.stringify({ profileId: Number(button.dataset.switchProfile) }) });
+        // Reload all state and filters so no rows from the previous shop remain visible.
+        location.reload();
+      } catch (error) {
+        toast(error.message);
+        document.querySelectorAll("[data-switch-profile]").forEach(choice => { choice.disabled = Number(choice.dataset.switchProfile) === activeId; });
+      }
+    };
+  });
+};
+
 $("#edit-workspace").onclick = () => {
   if (!data.permissions.settings) {
     toast("You do not have permission to change shop settings and location.");
     return;
   }
   const select = (name, values, current, disabled = false) => `<select name="${name}" ${disabled ? "disabled" : ""}>${values.map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join("")}</select>`;
-  openModal("Shop settings", `<label>Shop name<input name="shopName" value="${esc(data.shopName)}" required></label><label>Workspace / location<input name="workspace" value="${esc(data.workspace)}" required></label><h3>Business contact details for printed orders</h3><div class="form-row"><label>Contact number<input name="contactNumber" maxlength="60" value="${esc(data.contactNumber || "")}"></label><label>WhatsApp number<input name="whatsappNumber" maxlength="60" value="${esc(data.whatsappNumber || "")}"></label></div><div class="form-row"><label>Email address<input name="email" type="email" maxlength="254" value="${esc(data.email || "")}"></label><label>Website<input name="website" maxlength="250" value="${esc(data.website || "")}" placeholder="www.example.com"></label></div><label>Facebook page<input name="facebookPage" maxlength="250" value="${esc(data.facebookPage || "")}" placeholder="Facebook page URL"></label><label>Contact / return address<input name="contactAddress" maxlength="300" value="${esc(data.contactAddress || "")}" placeholder="Office or shop return address"></label><div class="form-row"><label>Shop type${select("shopType", [["general","General retail"],["hardware","Hardware"],["grocery","Grocery"],["clothing","Clothing"],["pharmacy","Pharmacy"],["mobile","Mobile phone sales & service"]], data.shopType, data.shopTypeLocked)}<small class="form-hint">${data.shopTypeLocked ? "Set by your supplier-issued signed licence. Contact the supplier to change your package." : "Your supplier will set the final shop type when issuing your signed licence."}</small></label><label>Currency${select("currencyCode", [["BDT","Bangladeshi taka (BDT)"],["USD","US dollar (USD)"],["EUR","Euro (EUR)"],["GBP","Pound sterling (GBP)"],["INR","Indian rupee (INR)"],["PKR","Pakistani rupee (PKR)"],["NPR","Nepalese rupee (NPR)"],["LKR","Sri Lankan rupee (LKR)"],["AUD","Australian dollar (AUD)"],["CAD","Canadian dollar (CAD)"]], data.currencyCode)}<small class="form-hint">Changing currency changes display only; it does not convert existing amounts.</small></label></div><label>Number and date region${select("locale", [["en-BD","English · Bangladesh"],["bn-BD","বাংলা · বাংলাদেশ"],["en-US","English · United States"],["en-GB","English · United Kingdom"],["en-IN","English · India"],["en-PK","English · Pakistan"],["en-NP","English · Nepal"],["en-LK","English · Sri Lanka"],["en-AU","English · Australia"],["en-CA","English · Canada"]], data.locale)}</label><label>Language<select name="language"><option value="bn" ${data.language === "bn" ? "selected" : ""}>বাংলা</option><option value="en" ${data.language !== "bn" ? "selected" : ""}>English</option></select></label><label class="setting-check"><input type="checkbox" name="banglaDigits" ${data.banglaDigits ? "checked" : ""}> Bangla digits (০১২৩)</label></div><div class="form-row"><label>Tax mode${select("taxMode", [["none","No tax"],["inclusive","Tax included in prices"],["exclusive","Add tax at checkout"]], data.taxMode)}</label><label>Tax rate (%)<input name="taxRate" type="number" min="0" max="100" step="0.01" value="${Number(data.taxRate || 0)}"></label></div><label>Payment methods <small class="form-hint">Separate options with commas. Example: Cash, Card, Mobile pay, Due.</small><input name="paymentMethods" maxlength="400" value="${esc((data.paymentMethods || []).join(", "))}" required></label><label class="setting-check"><input type="checkbox" name="requireCustomer" ${data.requireCustomer ? "checked" : ""}> Require a customer name on every bill</label><label class="setting-check"><input type="checkbox" name="allowDiscounts" ${data.allowDiscounts ? "checked" : ""}> Allow bill discounts</label>`, async form => {
+  openModal("Shop settings", `<label>Shop name<input name="shopName" value="${esc(data.shopName)}" required></label><label>Workspace / location<input name="workspace" value="${esc(data.workspace)}" required></label><h3>Business contact details for printed orders</h3><div class="form-row"><label>Contact number<input name="contactNumber" maxlength="60" value="${esc(data.contactNumber || "")}"></label><label>WhatsApp number<input name="whatsappNumber" maxlength="60" value="${esc(data.whatsappNumber || "")}"></label></div><div class="form-row"><label>Email address<input name="email" type="email" maxlength="254" value="${esc(data.email || "")}"></label><label>Website<input name="website" maxlength="250" value="${esc(data.website || "")}" placeholder="www.example.com"></label></div><label>Facebook page<input name="facebookPage" maxlength="250" value="${esc(data.facebookPage || "")}" placeholder="Facebook page URL"></label><label>Contact / return address<input name="contactAddress" maxlength="300" value="${esc(data.contactAddress || "")}" placeholder="Office or shop return address"></label><div class="form-row"><label>Shop type${select("shopType", [["general","General retail"],["hardware","Hardware"],["grocery","Grocery"],["clothing","Clothing"],["pharmacy","Pharmacy"],["mobile","Mobile phone sales & service"],["restaurant","Food & restaurant"]], data.shopType, true)}<small class="form-hint">Fixed for this profile. Use Switch shop profile in the top bar to open another shop type with separate records.</small></label><label>Currency${select("currencyCode", [["BDT","Bangladeshi taka (BDT)"],["USD","US dollar (USD)"],["EUR","Euro (EUR)"],["GBP","Pound sterling (GBP)"],["INR","Indian rupee (INR)"],["PKR","Pakistani rupee (PKR)"],["NPR","Nepalese rupee (NPR)"],["LKR","Sri Lankan rupee (LKR)"],["AUD","Australian dollar (AUD)"],["CAD","Canadian dollar (CAD)"]], data.currencyCode)}<small class="form-hint">Changing currency changes display only; it does not convert existing amounts.</small></label></div><label>Number and date region${select("locale", [["en-BD","English · Bangladesh"],["bn-BD","বাংলা · বাংলাদেশ"],["en-US","English · United States"],["en-GB","English · United Kingdom"],["en-IN","English · India"],["en-PK","English · Pakistan"],["en-NP","English · Nepal"],["en-LK","English · Sri Lanka"],["en-AU","English · Australia"],["en-CA","English · Canada"]], data.locale)}</label><label>Language<select name="language"><option value="bn" ${data.language === "bn" ? "selected" : ""}>বাংলা</option><option value="en" ${data.language !== "bn" ? "selected" : ""}>English</option></select></label><label class="setting-check"><input type="checkbox" name="banglaDigits" ${data.banglaDigits ? "checked" : ""}> Bangla digits (০১২৩)</label></div><div class="form-row"><label>Tax mode${select("taxMode", [["none","No tax"],["inclusive","Tax included in prices"],["exclusive","Add tax at checkout"]], data.taxMode)}</label><label>Tax rate (%)<input name="taxRate" type="number" min="0" max="100" step="0.01" value="${Number(data.taxRate || 0)}"></label></div><label>Payment methods <small class="form-hint">Separate options with commas. Example: Cash, Card, Mobile pay, Due.</small><input name="paymentMethods" maxlength="400" value="${esc((data.paymentMethods || []).join(", "))}" required></label><label class="setting-check"><input type="checkbox" name="requireCustomer" ${data.requireCustomer ? "checked" : ""}> Require a customer name on every bill</label><label class="setting-check"><input type="checkbox" name="allowDiscounts" ${data.allowDiscounts ? "checked" : ""}> Allow bill discounts</label>`, async form => {
     const previousLanguage = data.language, previousDigits = data.banglaDigits;
     data = await api("/api/settings", { method: "PUT", body: JSON.stringify({ shopName: form.get("shopName").trim(), workspace: form.get("workspace").trim(), contactNumber: form.get("contactNumber").trim(), website: form.get("website").trim(), email: form.get("email").trim(), facebookPage: form.get("facebookPage").trim(), whatsappNumber: form.get("whatsappNumber").trim(), contactAddress: form.get("contactAddress").trim(), shopType: form.get("shopType") || data.shopType, currencyCode: form.get("currencyCode"), locale: form.get("locale"), taxMode: form.get("taxMode"), taxRate: Number(form.get("taxRate")), paymentMethods: String(form.get("paymentMethods")).split(",").map(value => value.trim()).filter(Boolean), requireCustomer: form.get("requireCustomer") === "on", allowDiscounts: form.get("allowDiscounts") === "on", language: form.get("language"), banglaDigits: form.get("banglaDigits") === "on" }) });
     if (data.language !== previousLanguage || data.banglaDigits !== previousDigits) { location.reload(); return; }
     render();
     toast("Shop details saved");
   });
-  $("#open-license-settings")?.remove();
-  $("#modal-fields")?.insertAdjacentHTML("beforeend", `<p class="settings-license-row"><button type="button" class="button secondary" id="open-license-settings">Licence & plan</button> <span class="form-hint">${esc(t("Installation ID"))}: <code title="${esc(data.license?.installShort || "")}">${esc(data.license?.installId || "")}</code></span></p>`);
-  const licenseButton = $("#open-license-settings");
-  if (licenseButton) licenseButton.onclick = () => { closeModal(); openLicenseModal(); };
+  const shopTypeSelect = document.querySelector('#modal-fields select[name="shopType"]');
+  if (shopTypeSelect) {
+    shopTypeSelect.onchange = event => applyShopTypeTheme(event.target.value);
+    dialog.addEventListener("close", () => applyShopTypeTheme(data.shopType || "general"), { once: true });
+  }
   $("#settings-update-row")?.remove();
   $("#modal-fields")?.insertAdjacentHTML("beforeend", `<p class="settings-update-row" id="settings-update-row"><button type="button" class="button secondary" id="check-updates">${esc(t("Check for updates"))}</button> <span class="form-hint" id="update-status" role="status"></span></p>`);
   const updateButton = $("#check-updates");
@@ -1940,7 +2369,52 @@ $("#profile-button").onclick = () => {
   };
 };
 
+function openMedicineProductForm(product = null) {
+  const editing = Boolean(product), item = product || { unit: "tablet", min: 5, price: "", cost: 0, category: "Medicines" };
+  const categories = [...new Set([item.category || "Medicines", ...(data.categories || []).map(category => category.name)])];
+  const existingNames = [...new Map(data.products.map(medicine => [medicine.name.toLocaleLowerCase(), medicine])).values()];
+  const baseUnit = item.unit || "tablet";
+  const guidance = editing
+    ? "Update the medicine name or prices here. To change quantity, use <b>Update quantity</b> on the inventory row."
+    : "Add the medicine and its selling price first. You can leave stock at zero and use <b>Update quantity</b> after saving.";
+  const advancedTitle = editing ? "More details, packaging & low-stock settings" : "More details, packaging & opening stock (optional)";
+  const advancedFields = `<details class="pharmacy-advanced"><summary>${advancedTitle}</summary><div class="pharmacy-advanced-content">
+    <div class="form-row"><label>SKU / item code<input name="sku" maxlength="100" value="${esc(item.sku || "")}" placeholder="Optional"></label><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" value="${esc(item.barcode || "")}" placeholder="Scan or enter barcode"></label></div>
+    ${pharmacyFormFields(item, !editing)}
+    <label>Low-stock alert at (<span class="base-unit-label">${esc(baseUnit)}</span>)<input name="min" type="number" min="0" step="any" value="${Number(item.min)}" required></label>
+    ${pharmacyUnitFormFields(item, !editing)}
+  </div></details>`;
+  openModal(editing ? "Edit medicine" : "Add medicine", `<p class="pharmacy-simple-intro">${guidance}</p>
+    <label>Medicine name<input name="name" list="medicine-name-suggestions" maxlength="200" autocomplete="off" required value="${esc(item.name || "")}" placeholder="e.g. Napa 500 mg"><datalist id="medicine-name-suggestions">${existingNames.map(medicine => `<option value="${esc(medicine.name)}"></option>`).join("")}</datalist></label>
+    <label>Category<select name="category">${categories.map(name => `<option ${name === item.category ? "selected" : ""}>${esc(name)}</option>`).join("")}</select></label>
+    <div class="form-row"><label>Stock counted in<input name="unit" maxlength="30" value="${esc(baseUnit)}" placeholder="tablet, capsule, ml" required><small class="form-hint">Usually tablet or capsule. Use ml for liquid medicine.</small></label><label>Selling price per <span class="base-unit-label">${esc(baseUnit)}</span> (${esc(currencySymbol())})<input name="price" type="number" min="0" step="any" value="${esc(item.price)}" required></label></div>
+    ${editing ? `<label>Average purchase cost per <span class="base-unit-label">${esc(baseUnit)}</span> (${esc(currencySymbol())})<input name="cost" type="number" min="0" step="any" value="${Number(item.cost)}" required></label><p class="form-hint">Current stock: <b>${Number(item.qty)} ${esc(baseUnit)}</b>. Use <b>Update quantity</b> on the inventory row to receive stock.</p>` : ""}
+    ${advancedFields}`, async form => {
+    const config = readPharmacyUnitForm(form);
+    if (!config.baseUnit) throw new Error("Enter the stock unit, such as tablet, capsule, ml, or gram.");
+    const payload = {
+      name: String(form.get("name") || "").trim(), category: form.get("category"), sku: String(form.get("sku") || "").trim(), barcode: String(form.get("barcode") || "").trim(),
+      genericName: form.get("genericName") || "", strength: form.get("strength") || "", dosageForm: form.get("dosageForm") || "", manufacturer: form.get("manufacturer") || "",
+      unit: config.baseUnit, price: Number(form.get("price")), min: Number(form.get("min")), sale_units: config.units, allow_loose: config.allowLoose
+    };
+    if (editing) Object.assign(payload, { cost: Number(form.get("cost")), qty: Number(item.qty) });
+    else Object.assign(payload, { cost: config.cost, qty: config.qty, batchNumber: String(form.get("batchNumber") || "").trim(), expiryDate: form.get("expiryDate") || "", purchaseUnit: config.purchaseUnit, purchaseQuantity: config.purchaseQuantity, purchasePrice: config.purchasePrice });
+    const result = await api(editing ? `/api/products/${item.id}` : "/api/products", { method: editing ? "PATCH" : "POST", body: JSON.stringify(payload) });
+    data = result; render();
+    if (editing) toast("Medicine updated");
+    else toast(config.qty > 0 ? `Medicine added with ${+config.qty.toFixed(6)} ${config.baseUnit} in opening stock` : "Medicine added. Use Update quantity to receive stock.");
+  });
+  attachPharmacyFormMedexEvents();
+  attachPharmacyUnitCalculator(!editing);
+  $("#submit-modal").textContent = editing ? "Save changes" : "Add medicine";
+  $("#modal-fields").addEventListener("invalid", event => {
+    const section = event.target.closest("details");
+    if (section) section.open = true;
+  }, true);
+}
+
 $("#add-product").onclick = () => {
+  if (data.shopType === "pharmacy") return openMedicineProductForm();
   const categories = data.categories || [];
   const existingNames = [...new Map(data.products.map(item => [item.name.toLocaleLowerCase(), item])).values()];
   const clothing = clothingFormFields();
@@ -1950,14 +2424,16 @@ $("#add-product").onclick = () => {
     toast("Product added");
   });
   attachClothingChipEvents();
+  attachPharmacyFormMedexEvents();
   $("#modal-fields [name=unit]").oninput = event => {
     document.querySelectorAll("#modal-fields .unit-label").forEach(label => label.textContent = event.target.value.trim() || "unit");
   };
 };
 $("#manage-categories").onclick = () => {
   const categories = data.categories || [];
+  const categoryExample = data.shopType === "restaurant" ? "Rice & Biryani" : data.shopType === "pharmacy" ? "Medicines" : data.shopType === "grocery" ? "Produce" : "Hand tools";
   const rows = categories.map(category => `<div class="category-row"><b>${esc(category.name)}</b>${category.name.toLowerCase() === "other" ? `<small>Fallback category</small>` : `<button class="user-action" data-category-action="edit" data-id="${category.id}" data-name="${esc(category.name)}">Edit</button><button class="user-action danger" data-category-action="delete" data-id="${category.id}" data-name="${esc(category.name)}">Delete</button>`}</div>`).join("");
-  openModal("Manage product categories", `<div class="category-list">${rows}</div><label>Add category<input name="name" maxlength="80" placeholder="e.g. Hand tools"></label><p class="form-hint">Deleting a category moves its products to Other.</p>`, async form => {
+  openModal("Manage product categories", `<div class="category-list">${rows}</div><label>Add category<input name="name" maxlength="80" placeholder="e.g. ${esc(categoryExample)}"></label><p class="form-hint">Only categories for this shop type are shown. Deleting a category moves its products to Other.</p>`, async form => {
     data = await api("/api/categories", { method: "POST", body: JSON.stringify({ name: form.get("name").trim() }) });
     render();
     toast("Category added");
@@ -2104,11 +2580,9 @@ $("#download-report").onclick = () => {
   const expenseTotal = expenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const rows = [["SHOP REPORT", range.start + " to " + range.end], [], ["SUMMARY", "AMOUNT"]];
   if (permissions.sales) {
-    const gross = sales.reduce((sum, item) => sum + Number(item.total || 0), 0);
-    const profit = sales.reduce((sum, item) => sum + Number(item.total || 0) - Number(item.cost || 0), 0);
-    const tax = sales.reduce((sum, item) => sum + Number(item.tax_amount || 0), 0);
-    rows.push(["Gross sales (excluding tax)", gross], ["Tax collected", tax], ["Gross profit", profit]);
-    if (permissions.expenses) rows.push(["Expenses", expenseTotal], ["Net profit", profit - expenseTotal]);
+    const summary = summarizeSales(sales);
+    rows.push(["Gross sales (excluding tax)", summary.grossSales], ["Returned value (excluding tax)", summary.returnedValue], ["Net sales after returns (excluding tax)", summary.netSales], ["Tax collected after returns", summary.netTax], ["Profit after returns", summary.profitAfterReturns]);
+    if (permissions.expenses) rows.push(["Expenses", expenseTotal], ["Net profit", summary.profitAfterReturns - expenseTotal]);
     rows.push([], ["SALES", "Date", "Product", "Quantity", "Unit", "Payment", "Sales (ex tax)", "Tax", "Cost", "Profit"]);
     for (const item of sales) rows.push(["", item.date, item.product, item.qty, item.unit || "piece", item.payment, item.total, item.tax_amount || 0, item.cost, Number(item.total || 0) - Number(item.cost || 0)]);
   }
@@ -2123,7 +2597,6 @@ $("#download-report").onclick = () => {
     return '"' + cell.split('"').join('""') + '"';
   }).join(",")).join("\r\n");
   downloadFile(`shop-report-${range.start}-to-${range.end}.csv`, csv);
-  toast("Excel-compatible report downloaded");
 };
 $("#print-report").onclick = () => {
   const permissions = data.permissions || {}, range = reportRange();
@@ -2133,9 +2606,12 @@ $("#print-report").onclick = () => {
   const rows = [];
   if (permissions.sales) for (const item of sales) rows.push(`<tr><td>${esc(item.date)}</td><td>${esc(item.product)}</td><td>${item.qty} ${esc(item.unit || "piece")}</td><td>${esc(item.payment)}</td><td>${money(item.total)}</td><td>${money(item.tax_amount || 0)}</td><td>${money(Number(item.total || 0) - Number(item.cost || 0))}</td></tr>`);
   if (permissions.expenses) for (const item of expenses) rows.push(`<tr><td>${esc(item.date)}</td><td>${esc(item.category)}${item.note ? ` · ${esc(item.note)}` : ""}</td><td></td><td>Expense</td><td>${money(item.amount)}</td><td></td><td></td></tr>`);
-  const gross = sales.reduce((sum, item) => sum + Number(item.total || 0), 0), tax = sales.reduce((sum, item) => sum + Number(item.tax_amount || 0), 0);
-  const grossProfit = sales.reduce((sum, item) => sum + Number(item.total || 0) - Number(item.cost || 0), 0), spent = expenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-  const summary = [["Sales (ex tax)", gross], ["Tax collected", tax], ["Gross profit", grossProfit], ["Expenses", spent], ["Net profit", grossProfit - spent]].filter(([label]) => label !== "Sales (ex tax)" || permissions.sales).filter(([label]) => label !== "Expenses" || permissions.expenses).map(([label, amount]) => `<tr><th>${label}</th><td>${money(amount)}</td></tr>`).join("");
+  const salesSummary = summarizeSales(sales), spent = expenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const summaryRows = [];
+  if (permissions.sales) summaryRows.push(["Gross sales (ex tax)", salesSummary.grossSales], ["Returned value (ex tax)", salesSummary.returnedValue], ["Net sales after returns (ex tax)", salesSummary.netSales], ["Tax collected after returns", salesSummary.netTax], ["Profit after returns", salesSummary.profitAfterReturns]);
+  if (permissions.expenses) summaryRows.push(["Expenses", spent]);
+  if (permissions.sales && permissions.expenses) summaryRows.push(["Net profit", salesSummary.profitAfterReturns - spent]);
+  const summary = summaryRows.map(([label, amount]) => `<tr><th>${label}</th><td>${money(amount)}</td></tr>`).join("");
   printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Shop report</title><style>@page{margin:12mm}body{font:12px system-ui,"Segoe UI",sans-serif;color:#17212b}h1{margin:0}p{color:#66727d}table{border-collapse:collapse;width:100%;margin:14px 0}th,td{border:1px solid #d2d8dc;padding:6px;text-align:left}thead th{background:#eef2f3}.summary{width:auto;min-width:50%}.summary td{text-align:right}.summary th{background:#f5f6f7}</style></head><body><h1>${esc(data.shopName)}</h1><p>${esc(data.workspace)} · Report from ${esc(range.start)} to ${esc(range.end)}</p><table class="summary"><tbody>${summary}</tbody></table><table><thead><tr><th>Date</th><th>Item / category</th><th>Quantity</th><th>Payment</th><th>Amount</th><th>Tax</th><th>Profit</th></tr></thead><tbody>${rows.join("") || `<tr><td colspan="7">No records in this period.</td></tr>`}</tbody></table></body></html>`);
 };
 $("#download-stock-watch").onclick = () => {
@@ -2153,20 +2629,21 @@ $("#download-stock-watch").onclick = () => {
     return '"' + cell.split('"').join('""') + '"';
   }).join(",")).join("\r\n");
   downloadFile(`stock-watch-${dateKey(new Date())}.csv`, csv);
-  toast("Stock watch downloaded");
 };
 // ---- Team access: owner, administrators and staff, each with powers that can be given or taken away ----
-const CAP_LABELS = [["inventory", "View and add inventory"], ["sales", "View and record sales and bills"], ["expenses", "View and add expenses"], ["online_orders", "Manage online orders"], ["delete_online_orders", "Delete online orders"], ["server_load", "View server load in the top bar"],
+const CAP_LABELS = [["inventory", "View and add inventory"], ["sales", "View and record sales and bills"], ["expenses", "View and add expenses"], ["food_packages", "Create and manage custom food packages (Food & restaurant)"], ["online_orders", "Manage online orders"], ["delete_online_orders", "Delete online orders"], ["server_load", "View server load in the top bar"],
   ["records", "Correct or delete records and manage categories"], ["team", "Manage staff accounts (add, reset password, set access, disable)"],
   ["admins", "Manage administrators (create them, change roles, grant admin powers)"], ["settings", "Change shop name and shop address/location"],
   ["supplier_purchases", "Edit supplier purchase and payment records"], ["backups", "Manage backups and restore the database"],
   ["repair_records", "Edit and delete delivered repair jobs (mobile shop only)"]];
-const CAP_SHORT = { inventory: "inventory", sales: "sales", expenses: "expenses", server_load: "view server load", records: "edit/delete", team: "manage staff", admins: "manage admins", settings: "shop settings", supplier_purchases: "edit supplier purchases", backups: "backups and restore", repair_records: "edit/delete delivered repair jobs", online_orders: "online orders", delete_online_orders: "delete online orders" };
+const CAP_SHORT = { inventory: "inventory", sales: "sales", expenses: "expenses", food_packages: "create food packages", server_load: "view server load", records: "edit/delete", team: "manage staff", admins: "manage admins", settings: "shop settings", supplier_purchases: "edit supplier purchases", backups: "backups and restore", repair_records: "edit/delete delivered repair jobs", online_orders: "online orders", delete_online_orders: "delete online orders" };
 const myCaps = () => signedInUser?.permissions || {};
 const canGrantCap = cap => cap === "online_orders"
   ? signedInUser?.role === "admin"
   : cap === "delete_online_orders"
   ? signedInUser?.role === "admin"
+  : cap === "food_packages"
+  ? signedInUser?.role === "admin" || !!myCaps().food_packages
   : cap === "backups"
   ? signedInUser?.username?.toLowerCase() === "jahangir" && signedInUser?.role === "admin"
   : cap === "server_load"
@@ -2174,7 +2651,7 @@ const canGrantCap = cap => cap === "online_orders"
   : cap === "repair_records"
     ? signedInUser?.role === "admin"
   : !!myCaps()[cap];
-const accessFields = (perms, role) => `<fieldset class="permissions"><legend>Allow this ${role === "admin" ? "administrator" : "staff member"} to:</legend>${CAP_LABELS.filter(([cap]) => (role === "admin" || !["team", "admins", "backups"].includes(cap)) && (cap !== "repair_records" || (data.shopType === "mobile" && role !== "admin"))).map(([cap, label]) => { const grantable = canGrantCap(cap), reason = ["delete_online_orders", "online_orders", "server_load", "repair_records"].includes(cap) ? "only administrators can grant this access" : cap === "backups" ? "only Jahangir can grant this power" : "you do not hold this power"; return `<label><input type="checkbox" name="${cap}" ${perms[cap] ? "checked" : ""} ${grantable ? "" : "disabled"}> ${label}${grantable ? "" : ` <small>(${reason})</small>`}</label>`; }).join("")}${data.shopType !== "mobile" && role === "staff" ? `<input class="hidden" type="checkbox" name="repair_records" ${perms.repair_records ? "checked" : ""} hidden>` : ""}${role === "admin" && data.shopType === "mobile" ? `<small class="form-hint">Administrators always have access to delivered repair jobs. Use the staff access checkbox to grant or remove this power for a staff member.</small>` : ""}</fieldset>`;
+const accessFields = (perms, role) => `<fieldset class="permissions"><legend>Allow this ${role === "admin" ? "administrator" : "staff member"} to:</legend>${CAP_LABELS.filter(([cap]) => (role === "admin" || !["team", "admins", "backups"].includes(cap)) && (cap !== "repair_records" || (data.shopType === "mobile" && role !== "admin"))).map(([cap, label]) => { const grantable = canGrantCap(cap), reason = ["delete_online_orders", "online_orders", "server_load", "repair_records", "food_packages"].includes(cap) ? "only administrators can grant this access" : cap === "backups" ? "only Jahangir can grant this power" : "you do not hold this power"; return `<label><input type="checkbox" name="${cap}" ${perms[cap] ? "checked" : ""} ${grantable ? "" : "disabled"}> ${label}${grantable ? "" : ` <small>(${reason})</small>`}</label>`; }).join("")}${data.shopType !== "mobile" && role === "staff" ? `<input class="hidden" type="checkbox" name="repair_records" ${perms.repair_records ? "checked" : ""} hidden>` : ""}${role === "admin" && data.shopType === "mobile" ? `<small class="form-hint">Administrators always have access to delivered repair jobs. Use the staff access checkbox to grant or remove this power for a staff member.</small>` : ""}</fieldset>`;
 const readCaps = () => Object.fromEntries(CAP_LABELS.map(([cap]) => [cap, !!document.querySelector(`#modal-fields input[name="${cap}"]`)?.checked]));
 async function loadUsers() {
   if (!(myCaps().team || myCaps().admins)) return;
@@ -2239,6 +2716,16 @@ $("#products-table").onclick = event => {
   const button = event.target.closest("button[data-action]");
   if (!button) return;
   const id = button.dataset.id;
+  if (button.dataset.action === "medex-product") {
+    openPharmacyMedicineLookup(button.dataset.name || "");
+    return;
+  }
+  if (button.dataset.action === "receive-product-stock") {
+    if (data.shopType !== "pharmacy" || !data.permissions?.inventory) return;
+    const product = data.products.find(item => String(item.id) === String(id));
+    if (!product) return toast("Medicine not found. Refresh and try again.");
+    return openPharmacyReceiveBatch(product);
+  }
   if (button.dataset.action === "delete-product") {
     if (!signedInUser?.permissions?.records || !data.permissions?.inventory) return;
     const { name, qty, unit } = button.dataset;
@@ -2254,13 +2741,14 @@ $("#products-table").onclick = event => {
   if (button.dataset.action !== "rename-product" || !canEditItems) return;
   const product = data.products.find(item => String(item.id) === String(id));
   if (!product) return toast("Inventory item not found. Refresh and try again.");
+  if (data.shopType === "pharmacy") return openMedicineProductForm(product);
   const oldCategory = product.category || "Other";
   const clothing = clothingFormFields(product);
   const pharmacy = pharmacyFormFields(product, false);
-  openModal("Edit inventory item", `<label>Item name<input name="name" maxlength="200" value="${esc(product.name)}" required></label><div class="form-row"><label>SKU / item code<input name="sku" maxlength="100" value="${esc(product.sku || "")}"></label><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" value="${esc(product.barcode || "")}" placeholder="Scan or enter barcode"></label></div>${clothing}${pharmacy}<div class="form-row"><label>Unit of measure<input name="unit" maxlength="30" value="${esc(product.unit || "piece")}" required></label><label>Category<select name="category">${(data.categories || []).map(item => `<option ${item.name === oldCategory ? "selected" : ""}>${esc(item.name)}</option>`).join("")}</select></label></div><div class="form-row"><label>Selling price per unit (${esc(currencySymbol())})<input name="price" type="number" min="0" step="0.01" value="${Number(product.price)}" required></label><label>Purchase cost per unit (${esc(currencySymbol())})<input name="cost" type="number" min="0" step="0.01" value="${Number(product.cost)}" required></label></div><div class="form-row"><label>Stock quantity (${esc(product.unit || "piece")})<input name="qty" type="number" min="0" step="1" value="${Number(product.qty)}" required></label><label>Low-stock alert at<input name="min" type="number" min="0" step="1" value="${Number(product.min)}" required></label></div><p class="form-hint">Changing stock here sets the new stock total. Past sales keep their recorded cost and unit.</p>`, async form => {
+  openModal("Edit inventory item", `<label>Item name<input name="name" maxlength="200" value="${esc(product.name)}" required></label><div class="form-row"><label>SKU / item code<input name="sku" maxlength="100" value="${esc(product.sku || "")}"></label><label>Barcode<input name="barcode" maxlength="120" inputmode="numeric" value="${esc(product.barcode || "")}" placeholder="Scan or enter barcode"></label></div>${clothing}${pharmacy}<div class="form-row"><label>Unit of measure<input name="unit" maxlength="30" value="${esc(product.unit || "piece")}" required></label><label>Category<select name="category">${[...new Set([oldCategory, ...(data.categories || []).map(item => item.name)])].map(name => `<option ${name === oldCategory ? "selected" : ""}>${esc(name)}</option>`).join("")}</select></label></div><div class="form-row"><label>Selling price per unit (${esc(currencySymbol())})<input name="price" type="number" min="0" step="0.01" value="${Number(product.price)}" required></label><label>Purchase cost per unit (${esc(currencySymbol())})<input name="cost" type="number" min="0" step="0.01" value="${Number(product.cost)}" required></label></div><div class="form-row"><label>Stock quantity (${esc(product.unit || "piece")})<input name="qty" type="number" min="0" step="1" value="${Number(product.qty)}" required></label><label>Low-stock alert at<input name="min" type="number" min="0" step="1" value="${Number(product.min)}" required></label></div><p class="form-hint">Changing stock here sets the new stock total. Past sales keep their recorded cost and unit.</p>`, async form => {
     const details = Object.fromEntries(["name","sku","barcode","unit","category"].map(key => [key, (form.get(key) || "").trim()]));
-    if (data.shopType === "clothing" && featureEnabled("clothing")) for (const key of ["brand", "color", "size", "material"]) details[key] = (form.get(key) || "").trim();
-    if (data.shopType === "pharmacy" && featureEnabled("pharmacy")) Object.assign(details,{genericName:form.get("genericName")||"",strength:form.get("strength")||"",dosageForm:form.get("dosageForm")||"",manufacturer:form.get("manufacturer")||""});
+    if (data.shopType !== "pharmacy") for (const key of ["brand", "color", "size", "material"]) if (form.get(key) !== null) details[key] = (form.get(key) || "").trim();
+    if (data.shopType === "pharmacy") Object.assign(details,{genericName:form.get("genericName")||"",strength:form.get("strength")||"",dosageForm:form.get("dosageForm")||"",manufacturer:form.get("manufacturer")||""});
     for (const key of ["price","cost","qty","min"]) details[key] = Number(form.get(key));
     details.pack_name = (form.get("pack_name") || "").trim(); details.pack_size = Number(form.get("pack_size") || 0);
     data = await api(`/api/products/${id}`, { method: "PATCH", body: JSON.stringify(details) });
@@ -2268,6 +2756,7 @@ $("#products-table").onclick = event => {
     toast("Inventory item updated");
   });
   attachClothingChipEvents();
+  attachPharmacyFormMedexEvents();
 };
 $("#sales-table").onclick = async event => {
   const button = event.target.closest("[data-sale-action]");
@@ -2345,46 +2834,99 @@ $("#sales-table").onclick = async event => {
   });
 };
 $("#download-inventory-template").onclick = () => {
-  const rows = [bulkInventoryHeaders, ...data.products.map(item => [
-    item.id, item.name, item.sku, item.price, item.cost, item.qty, item.min, item.unit || "piece", item.category || "Other", item.barcode || "", item.brand || "", item.color || "", item.size || "", item.material || ""
-  ])];
+  const config = bulkInventoryTemplateConfig(data.shopType);
+  const rows = [config.headers, ...data.products.map(item => config.toRow(item))];
   const csv = "\uFEFF" + rows.map(row => row.map(csvCell).join(",")).join("\r\n");
-  downloadFile("shop-inventory-template.csv", csv);
-  toast("Excel-compatible inventory template downloaded");
+  downloadFile(config.filename, csv);
 };
 $("#bulk-inventory-file").onchange = async event => {
   const file = event.target.files?.[0];
   if (!file) return;
   try {
-    if (file.size > 400000) throw new Error("Please keep the CSV file under 400 KB.");
+    if (file.size > BULK_INVENTORY_MAX_FILE_BYTES) throw new Error("Please keep the inventory CSV file under 25 MB.");
     const csvRows = parseCsv((await file.text()).replace(/^\uFEFF/, ""));
-    const headers = csvRows.shift()?.map(value => value.trim().toLowerCase());
-    const expected = bulkInventoryHeaders.map(value => value.toLowerCase());
-    const barcodeHeaders = expected.slice(0, 10), categoryHeaders = expected.slice(0, 9);
-    const unitHeaders = expected.slice(0, 8), legacyHeaders = expected.slice(0, 7);
-    const matches = template => headers?.length === template.length && template.every((header, index) => headers[index] === header);
-    const hasClothing = matches(expected);
-    const hasBarcode = hasClothing || matches(barcodeHeaders);
-    const hasCategory = hasBarcode || matches(categoryHeaders);
-    const hasUnit = matches(unitHeaders);
-    const isLegacyTemplate = matches(legacyHeaders);
-    if (!hasCategory && !hasUnit && !isLegacyTemplate) {
-      throw new Error(`Use the downloaded template without changing its columns: ${bulkInventoryHeaders.join(", ")}.`);
+    const rawHeaders = csvRows.shift();
+    if (!rawHeaders || !rawHeaders.length) throw new Error("The CSV file is empty.");
+    const headers = rawHeaders.map(value => value.trim().toLowerCase());
+    const config = bulkInventoryTemplateConfig(data.shopType);
+    const requiredCore = ["product id", "product name", "sku", "selling price", "cost", "quantity", "low stock alert"];
+    const hasRequiredPrefix = requiredCore.every((col, idx) => headers[idx] === col);
+    if (!hasRequiredPrefix) {
+      throw new Error(`Use the downloaded ${data.shopType || "shop"} template with columns: ${config.headers.join(", ")}.`);
     }
+    const colIndex = new Map(headers.map((name, idx) => [name, idx]));
+    const getCol = (values, ...names) => {
+      for (const name of names) {
+        if (colIndex.has(name)) return (values[colIndex.get(name)] ?? "").trim();
+      }
+      return null;
+    };
     const rows = csvRows.map((values, index) => {
       if (values.length !== headers.length) throw new Error(`CSV row ${index + 2} has ${values.length} columns; expected ${headers.length}.`);
-    const [id, name, sku, price, cost, qty, min, unit, category, barcode, brand, color, size, material] = values.map(value => value.trim());
-      return { id, name, sku, price, cost, qty, min, unit: hasUnit || hasCategory ? unit : "", category: hasCategory ? category : "", barcode: hasBarcode ? barcode : null, brand: hasClothing ? brand : null, color: hasClothing ? color : null, size: hasClothing ? size : null, material: hasClothing ? material : null };
+      const id = getCol(values, "product id") ?? "";
+      const name = getCol(values, "product name") ?? "";
+      const sku = getCol(values, "sku") ?? "";
+      const price = getCol(values, "selling price") ?? "";
+      const cost = getCol(values, "cost") ?? "";
+      const qty = getCol(values, "quantity") ?? "";
+      const min = getCol(values, "low stock alert") ?? "";
+      const unit = getCol(values, "unit") ?? "";
+      const category = getCol(values, "category", "product category") ?? "";
+      const barcode = getCol(values, "barcode");
+      const brand = getCol(values, "brand", "kitchen section");
+      const color = getCol(values, "color", "spice / prep");
+      const size = getCol(values, "size", "portion / serving", "storage / variant", "size / spec", "pack / weight");
+      const material = getCol(values, "material", "food type");
+      const pack_name = getCol(values, "smaller unit", "pack name");
+      const packSizeRaw = getCol(values, "units per pack", "pack size");
+      const pack_size = packSizeRaw === null ? null : packSizeRaw === "" ? 0 : Number(packSizeRaw);
+      const genericName = getCol(values, "generic name");
+      const strength = getCol(values, "strength");
+      const dosageForm = getCol(values, "dosage form");
+      const manufacturer = getCol(values, "manufacturer");
+      const batchNumber = getCol(values, "batch number");
+      const expiryDate = getCol(values, "expiry date");
+      const supplierUnit = getCol(values, "supplier / outer unit");
+      const innerUnit = getCol(values, "inner selling unit");
+      const innerPerSupplier = getCol(values, "inner units / outer unit");
+      const basePerInner = getCol(values, "base units / inner unit");
+      const innerPrice = getCol(values, "inner unit selling price");
+      const supplierPrice = getCol(values, "outer unit selling price");
+      const allowLoose = getCol(values, "allow individual base unit sales");
+      const purchaseQuantity = getCol(values, "opening purchase quantity");
+      const purchasePrice = getCol(values, "opening purchase price / outer unit");
+      return {
+        id, name, sku, price, cost, qty, min, unit, category, barcode,
+        brand, color, size, material, pack_name, pack_size,
+        genericName, strength, dosageForm, manufacturer, batchNumber, expiryDate,
+        supplierUnit, innerUnit, innerPerSupplier, basePerInner, innerPrice, supplierPrice, allowLoose, purchaseQuantity, purchasePrice
+      };
     });
     if (!rows.length) throw new Error("The template has no inventory rows to upload.");
-    if (rows.length > 500) throw new Error("Upload no more than 500 rows at a time.");
+    if (rows.length > BULK_INVENTORY_MAX_ROWS) throw new Error("Upload no more than 25,000 rows at a time.");
     const updates = rows.filter(row => row.id).length;
     const additions = rows.length - updates;
-    const summary = `${updates} existing item(s) will be updated and ${additions} new item(s) added. Quantity replaces the current stock count. Any new categories in the file will be created automatically. Continue?`;
+    let legacyStockCount = 0;
+    let summary;
+    if (data.shopType === "pharmacy") {
+      const newRows = rows.filter(row => !row.id);
+      const hasOpeningPurchase = row => ["purchaseQuantity", "purchasePrice"].some(key => String(row[key] ?? "").trim() !== "");
+      const openingPurchaseCount = newRows.filter(hasOpeningPurchase).length;
+      const hasBlankDefaults = newRows.some(row => !hasOpeningPurchase(row) && ["price", "cost", "qty", "min"].some(key => String(row[key] ?? "").trim() === ""));
+      legacyStockCount = newRows.filter(row => (hasOpeningPurchase(row) ? Number(row.purchaseQuantity || 0) : Number(row.qty || 0)) > 0 && !String(row.expiryDate ?? "").trim()).length;
+      summary = `${updates} existing medicine(s) will be updated and ${additions} new medicine(s) added. Missing categories will be created automatically.`;
+      if (hasBlankDefaults) summary += " Without opening-purchase conversion, blank Selling Price, Cost, and Quantity on new medicines become 0; blank Low Stock Alert becomes 5.";
+      if (openingPurchaseCount) summary += ` ${openingPurchaseCount} new medicine row(s) will calculate base stock and cost automatically from the outer-package purchase.`;
+      if (legacyStockCount) summary += ` ${legacyStockCount} opening-stock row(s) have no expiry date and will be unavailable for sale until verified in Batches & expiry. Missing batch numbers will be generated as LEGACY batch numbers.`;
+      summary += " Continue?";
+    } else {
+      summary = `${updates} existing item(s) will be updated and ${additions} new item(s) added. Quantity replaces the current stock count. Any new categories in the file will be created automatically. Continue?`;
+    }
     if (!confirm(summary)) return;
     data = await api("/api/inventory/bulk", { method: "POST", body: JSON.stringify({ rows }) });
+    inventoryPage = 1;
+    toast(`Upload complete: ${additions} added, ${updates} updated${legacyStockCount ? `; ${legacyStockCount} legacy stock row(s) need expiry verification before sale` : ""}`, legacyStockCount ? 7000 : 4000);
     render();
-    toast(`Inventory updated: ${updates} updated, ${additions} added`);
   } catch (error) {
     toast(error.message);
   } finally {
@@ -2407,6 +2949,48 @@ setInterval(async () => {
 setInterval(refreshServerLoad, 30000);
 // ---- Billing: several items for one customer, saved as one printable bill ----
 const billNo = id => "B-" + String(id).padStart(8, "0");
+function groupLocalSales(sales) {
+  const groups = new Map();
+  for (const sale of sales || []) {
+    if (Number(sale.online_order_linked)) continue;
+    const billId = Number(sale.bill_id || 0), key = billId ? `bill:${billId}` : `sale:${sale.id}`;
+    if (!groups.has(key)) groups.set(key, { key, billId, date: sale.date, lines: [] });
+    groups.get(key).lines.push(sale);
+  }
+  return [...groups.values()].map(group => ({ ...group, lines: group.lines.slice().sort((a, b) => Number(a.id) - Number(b.id)) }));
+}
+function localSaleGroupTotals(group) {
+  const first = group.lines[0] || {};
+  if (group.billId && first.bill_total !== null && first.bill_total !== undefined) {
+    const gross = Number(first.bill_total || 0), returned = Number(first.bill_returned || 0), net = Math.max(0, gross - returned), paid = Number(first.bill_paid || 0);
+    return { gross, returned, net, paid, due: Math.max(0, net - paid), tax: 0 };
+  }
+  const summary = summarizeSales(group.lines), directDue = /due|unpaid/i.test(first.payment || "") ? summary.netSales : 0;
+  return { gross: summary.grossSales, returned: summary.returnedValue, net: summary.netSales, paid: Math.max(0, summary.netSales - directDue), due: directDue, tax: summary.netTax };
+}
+function localSaleGroupHtml(group, canManageSalesRecords, canReturnSales) {
+  const first = group.lines[0] || {}, totals = localSaleGroupTotals(group), isBill = group.billId > 0;
+  const items = group.lines.map(item => {
+    const originalQty = Number(item.original_qty ?? item.qty ?? 0), gross = Number(item.original_total ?? item.total ?? 0), net = Number(item.total || 0);
+    const returnedQty = Number(item.returned_qty || 0), returnedValue = Math.max(0, gross - net), unit = item.unit || "piece";
+    const isRepair = Number(item.service_job_id) > 0;
+    const returnButton = !isRepair && canReturnSales && item.product_id && Number(item.original_remaining_qty) > 0
+      ? `<button type="button" class="user-action" data-sale-action="return" data-id="${item.id}">Return</button>` : "";
+    return `<div class="local-sale-item"><div><b>${esc(item.product)}</b><small>${localizeDigits(originalQty)} ${esc(unit)} × ${money(originalQty > 0 ? gross / originalQty : 0)} · ${money(gross)}</small>${returnedQty > 0 ? `<small class="local-sale-return"><span>Returned</span> ${localizeDigits(returnedQty)} ${esc(unit)} · ${money(returnedValue)} · <span>Net</span> ${localizeDigits(item.qty)} ${esc(unit)} / ${money(net)}</small>` : ""}</div>${returnButton}</div>`;
+  }).join("");
+  const actions = [];
+  if (isBill) {
+    actions.push(`<button type="button" class="user-action" data-print-bill="${group.billId}">Print</button>`);
+    if (totals.due > 0) actions.push(`<button type="button" class="user-action" data-local-bill-action="receive" data-id="${group.billId}">Receive</button>`);
+    if (canManageSalesRecords && totals.returned <= 0) actions.push(`<button type="button" class="user-action" data-local-bill-action="edit" data-id="${group.billId}">Edit</button><button type="button" class="user-action danger" data-local-bill-action="delete" data-id="${group.billId}">Delete</button>`);
+  } else if (canManageSalesRecords && !Number(first.service_job_id)) {
+    actions.push(`<button type="button" class="user-action" data-sale-action="edit" data-id="${first.id}">Edit</button><button type="button" class="user-action danger" data-sale-action="delete" data-id="${first.id}">Delete</button>`);
+  }
+  const reference = isBill ? billNo(group.billId) : `${t("Direct sale")} #${first.id}`;
+  const customer = first.bill_customer || "—";
+  const payment = `<b>${esc(first.payment || "—")}</b><small class="form-hint"><span>Paid</span> ${money(totals.paid)}</small>${totals.due > 0 ? `<small class="form-hint local-sale-due"><span>Due</span> ${money(totals.due)}</small>` : ""}`;
+  return `<tr><td class="product-cell"><b>${esc(reference)}</b></td><td>${dateLabel(group.date)}</td><td>${esc(customer)}${first.bill_phone ? `<small class="form-hint">${esc(first.bill_phone)}</small>` : ""}</td><td class="local-sale-items">${items || "—"}</td><td>${payment}</td><td class="local-sale-total"><b>${money(totals.net)}</b>${totals.returned > 0 ? `<small class="form-hint local-sale-return"><span>Returned</span> ${money(totals.returned)}</small>` : ""}${!isBill && totals.tax > 0 ? `<small class="form-hint">+ ${money(totals.tax)} tax</small>` : ""}</td><td>${actions.join("") || "—"}</td></tr>`;
+}
 // Weighed and measured items (kg, litre, metre...) can be sold in fractions; kg can be typed in gm, litre in ml, metre in cm.
 const FRACTIONAL = /^(kgs?|kilos?|kilograms?|gm?s?|grams?|l|ltrs?|lit(re|er)s?|ml|m|meters?|metres?|ft|feet|foot|yards?|yd|inch(es)?|cm|mm)$/i;
 const isFractional = unit => FRACTIONAL.test(String(unit || "").trim());
@@ -2418,8 +3002,22 @@ const smallUnit = unit => {
   return null;
 };
 const fmtQty = (qty, unit) => { const small = smallUnit(unit); return small && qty < 1 ? `${+(qty * small.factor).toFixed(1)} ${small.name}` : `${qty} ${unit}`; };
-// Each bill line can be typed in its own unit: the item's unit, a smaller one (kg to gm), or a pack such as a coil.
+function medicinePurchaseUnits(product) {
+  return [{ name: product.unit || "piece", factor: 1 }, ...(product.medicine_units || []).map(unit => ({ name: unit.name, factor: Number(unit.factor) }))];
+}
+function pharmacyLineFields(product) {
+  const medicineUnits = Array.isArray(product.medicine_units) ? product.medicine_units : [];
+  const unitPrices = { base: Number(product.price || 0) };
+  for (const unit of medicineUnits) unitPrices[`medicine:${String(unit.name).toLocaleLowerCase()}`] = Number(unit.price || 0);
+  return { medicineUnits, allowLoose: product.allow_loose !== false, unitPrices };
+}
+// Each bill line can be typed in its own unit: the item's unit, a smaller one (kg to gm), or a configured Pharmacy package.
 const lineUnits = line => {
+  if (data.shopType === "pharmacy") {
+    const list = line.allowLoose === false ? [] : [{ key: "base", name: line.unit, f: 1 }];
+    for (const unit of line.medicineUnits || []) list.push({ key: `medicine:${String(unit.name).toLocaleLowerCase()}`, name: unit.name, f: Number(unit.factor) });
+    return list.length ? list : [{ key: "base", name: line.unit, f: 1 }];
+  }
   const custom = line.packSize > 0, small = custom ? null : smallUnit(line.unit);
   const list = [{ key: "base", name: line.unit, f: 1 }];
   if (custom) list.push({ key: "custom", name: line.packName || "part", f: line.packSize });
@@ -2427,19 +3025,22 @@ const lineUnits = line => {
   return list;
 };
 const unitOf = line => lineUnits(line).find(u => u.key === line.mode) || lineUnits(line)[0];
+const pharmacyModeForUnit = (line, name) => lineUnits(line).find(unit => String(unit.name).toLocaleLowerCase() === String(name || "").toLocaleLowerCase())?.key || "base";
 const qtyCell = (line, i) => {
-  const units = lineUnits(line), u = unitOf(line), packed = line.packSize > 0, frac = isFractional(line.unit) || packed;
-  const step = u.key === "small" ? 1 : packed ? "any" : frac ? "0.001" : 1;
-  const box = units.length > 1 ? `<select class="bill-input qty-unit" data-i="${i}" data-f="mode">${units.map(x => `<option value="${x.key}" ${x.key === u.key ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : esc(line.unit);
-  const min = u.key === "small" || u.key === "base" && !frac ? 1 : 0.0001;
-  return `<input class="bill-input qty-input" data-i="${i}" data-f="qty" type="number" min="${min}" max="${+(line.max * u.f).toFixed(3)}" step="${step}" value="${+(line.qty * u.f).toFixed(3)}" required> ${box}`;
+  const units = lineUnits(line), u = unitOf(line), pharmacy = data.shopType === "pharmacy", packed = !pharmacy && line.packSize > 0, frac = isFractional(line.unit) || packed;
+  const step = pharmacy ? (isFractional(line.unit) ? "any" : 1) : u.key === "small" ? 1 : packed ? "any" : frac ? "0.001" : 1;
+  const box = units.length > 1 ? `<select class="bill-input qty-unit" data-i="${i}" data-f="mode" aria-label="Selling unit">${units.map(x => `<option value="${esc(x.key)}" ${x.key === u.key ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : esc(line.unit);
+  const min = pharmacy ? (isFractional(line.unit) ? 0.000001 : 1) : u.key === "small" || u.key === "base" && !frac ? 1 : 0.0001;
+  const shownQty = pharmacy ? line.qty / u.f : line.qty * u.f, maxQty = pharmacy ? line.max / u.f : line.max * u.f;
+  return `<span class="bill-quantity-control"><input class="bill-input qty-input" data-i="${i}" data-f="qty" type="number" min="${min}" max="${+maxQty.toFixed(6)}" step="${step}" value="${+shownQty.toFixed(6)}" required>${box}</span>`;
 };
 // Price is kept per stock unit (per coil); for a cut length it is shown and typed per metre/foot.
 const priceCell = (line, i) => {
-  const u = unitOf(line), custom = u.key === "custom", shown = custom ? line.price / u.f : line.price;
-  return `<input class="bill-input" data-i="${i}" data-f="price" type="number" min="0" step="any" value="${+shown.toFixed(4)}" required>${custom ? `<br><small>per ${esc(u.name)}</small>` : ""}`;
+  const u = unitOf(line), pharmacy = data.shopType === "pharmacy", custom = !pharmacy && u.key === "custom", shown = pharmacy ? line.price * u.f : custom ? line.price / u.f : line.price;
+  return `<input class="bill-input" data-i="${i}" data-f="price" type="number" min="0" step="any" value="${+shown.toFixed(4)}" required>${pharmacy || custom ? `<br><small>per ${esc(u.name)}</small>` : ""}`;
 };
 const lineDetail = l => {
+  if (l.saleUnit && Number(l.saleQty) > 0) return `${+Number(l.saleQty).toFixed(6)} ${l.saleUnit} × ${money(Number(l.salePrice ?? (l.price * (l.unitFactor || 1))))}/${l.saleUnit} = ${fmtQty(l.qty, l.unit)}`;
   if (l.packSize > 0) {
     const parts = +(l.qty * l.packSize).toFixed(2), name = l.packName || "part";
     return `${l.qty < 1 ? "" : `${+l.qty.toFixed(3)} ${l.unit} = `}${parts} ${name} × ${money(l.price / l.packSize)}/${name}`;
@@ -2450,12 +3051,33 @@ const baseRender = render;
 render = function () {
   baseRender();
   $("#new-bill").classList.toggle("hidden", !data.permissions?.sales);
-  [...$("#sales-table").rows].forEach((row, index) => {
-    const sale = data.sales[index];
-    if (sale?.bill_id && row.cells[1]) row.cells[1].insertAdjacentHTML("beforeend", ` <button type="button" class="user-action" data-print-bill="${sale.bill_id}">${billNo(sale.bill_id)}</button>`);
-  });
 };
+function restaurantBillHtml(bill) {
+  const subtotal = bill.lines.reduce((sum, line) => sum + line.qty * line.price, 0);
+  const when = new Date(bill.created_at.replace(" ", "T") + "Z").toLocaleString(data.locale || "en-BD");
+  const rows = bill.lines.map(line => {
+    const returnedQty = Number(line.returnedQty || 0), returnedValue = Number(line.returnedValue || 0);
+    const isPackage = line.unit === "package" || line.category === "Combo Meals";
+    const name = String(line.name || "").replace(/\s+\((?:Portion|Type|Prep|Kitchen):[\s\S]*\)$/, "");
+    const details = [];
+    if (line.size) details.push(`Portion: ${line.size}`);
+    if (isPackage && line.brand) details.push(`Includes: ${line.brand}`);
+    if (!isPackage && line.material) details.push(`Type: ${line.material}`);
+    if (!isPackage && line.color) details.push(`Prep: ${line.color}`);
+    if (isPackage && line.color && line.color !== "Custom Package") details.push(`Note: ${line.color}`);
+    const returnNote = returnedQty > 0 ? `<br><small class="returned">Returned: ${esc(fmtQty(returnedQty, line.unit || "piece"))} · ${money(returnedValue)}</small>` : "";
+    return `<tr><td class="item"><b>${esc(name)}</b>${details.length ? `<br><small>${details.map(detail => `<span>${esc(detail)}</span>`).join(" · ")}</small>` : ""}${returnNote}</td><td class="qty">${esc(fmtQty(line.qty, line.unit || "piece"))}</td><td class="r">${money(line.price)}</td><td class="r">${money(line.qty * line.price)}</td></tr>`;
+  }).join("");
+  const paymentText = bill.payments ? (bill.payments.map(payment => `${payment.method} ${money(payment.amount)}`).join(", ") || "None yet") : bill.payment;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${billNo(bill.id)} · Restaurant receipt</title><style>
+@page{margin:4mm}*{box-sizing:border-box}body{font:12px/1.3 system-ui,"Segoe UI",sans-serif;color:#000;width:72mm;max-width:100%;margin:0 auto}h1{font-size:18px;line-height:1.15;margin:0;text-align:center}h2{font-size:11px;letter-spacing:1.2px;margin:5px 0 7px;text-align:center}.c{text-align:center}.meta{margin:3px 0 8px}.meta p{margin:2px 0}small{color:#333}table{width:100%;border-collapse:collapse;table-layout:fixed}th,td{padding:4px 3px;vertical-align:top}th{font-size:10px;text-transform:uppercase;border-top:1px solid #000;border-bottom:1px solid #000}td{border-bottom:1px dotted #777}.item{width:44%;overflow-wrap:anywhere}.qty{width:19%;text-align:center;white-space:nowrap}.r{text-align:right;white-space:nowrap}.line td{border-top:1px dashed #000;border-bottom:0}.total td{border-top:2px solid #000;border-bottom:0;font-size:15px;font-weight:700;padding-top:6px}.returned{color:#a33;font-weight:700}.payment{margin:8px 0 4px}.thanks{text-align:center;font-weight:700;margin:9px 0 0}</style></head><body>
+<h1>${esc(data.shopName)}</h1><h2>RESTAURANT RECEIPT</h2><p class="c">${esc(data.workspace)}${data.contactNumber ? `<br>Phone: ${esc(data.contactNumber)}` : ""}</p>
+<div class="meta"><p>Bill no: <b>${billNo(bill.id)}</b><br>${esc(when)}${bill.customer ? `<br>Customer: ${esc(bill.customer)}` : ""}${bill.phone ? `<br>Phone: ${esc(bill.phone)}` : ""}</p></div>
+<table><thead><tr><th class="item">Item</th><th class="qty">Qty</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead><tbody>${rows}<tr class="line"><td colspan="3">Subtotal</td><td class="r">${money(subtotal)}</td></tr>${Number(bill.delivery_charge || 0) > 0 ? `<tr><td colspan="3">Delivery</td><td class="r">${money(bill.delivery_charge)}</td></tr>` : ""}${bill.discount > 0 ? `<tr><td colspan="3">Discount</td><td class="r">- ${money(bill.discount)}</td></tr>` : ""}${Number(bill.tax_amount) > 0 ? `<tr><td colspan="3">Tax ${bill.tax_mode === "inclusive" ? "included" : ""} (${Number(bill.tax_rate)}%)</td><td class="r">${money(bill.tax_amount)}</td></tr>` : ""}${Number(bill.returned || 0) > 0 ? `<tr><td colspan="3">Returns</td><td class="r">- ${money(bill.returned)}</td></tr>` : ""}<tr class="total"><td colspan="3">${Number(bill.returned || 0) > 0 ? "Final total" : "Total"}</td><td class="r">${money(bill.netTotal ?? bill.total)}</td></tr>${bill.payments ? `<tr class="line"><td colspan="3">Paid</td><td class="r">${money(bill.paid)}</td></tr>${bill.due > 0 ? `<tr class="total"><td colspan="3">DUE</td><td class="r">${money(bill.due)}</td></tr>` : Number(bill.customerCredit) > 0 ? `<tr class="total"><td colspan="3">REFUND DUE</td><td class="r">${money(bill.customerCredit)}</td></tr>` : ""}` : ""}</tbody></table>
+<p class="payment">Payment: ${esc(paymentText)}<br>Served by: ${esc(bill.cashier)}</p><p class="thanks">Thank you for dining with us!</p></body></html>`;
+}
 function billHtml(bill) {
+  if (data.shopType === "restaurant") return restaurantBillHtml(bill);
   const subtotal = bill.lines.reduce((sum, line) => sum + line.qty * line.price, 0);
   const when = new Date(bill.created_at.replace(" ", "T") + "Z").toLocaleString(data.locale || "en-BD");
   const rows = bill.lines.map(line => {
@@ -2463,7 +3085,7 @@ function billHtml(bill) {
     const returnNote = returnedQty > 0 ? `<br><small style="color:#a33;font-weight:700">Returned: ${esc(fmtQty(returnedQty, line.unit || "piece"))} · ${money(returnedValue)}</small>` : "";
     return `<tr><td>${esc(line.name)}<br><small>${esc(lineDetail(line))}</small>${returnNote}${line.serials?.length ? `<br><small>IMEI/serial: ${esc(line.serials.join(", "))}${Number(line.warrantyMonths) ? ` · Warranty ${Number(line.warrantyMonths)} months` : " · No warranty"}</small>` : ""}</td><td class="r">${money(line.qty * line.price)}</td></tr>`;
   }).join("");
-  const clothingNotice = data.shopType === "clothing" && featureEnabled("clothing") ? `<p class="c" style="font-size:11px;color:#555">Exchanges accepted within 7 days with original tags and receipt.</p>` : "";
+  const clothingNotice = data.shopType === "clothing" ? `<p class="c" style="font-size:11px;color:#555">Exchanges accepted within 7 days with original tags and receipt.</p>` : "";
   return `<!doctype html><html><head><meta charset="utf-8"><title>${billNo(bill.id)}</title><style>
 @page{margin:6mm}body{font:13px/1.35 system-ui,"Segoe UI",sans-serif;color:#000;width:76mm;margin:0 auto}
 h1{font-size:18px;margin:0;text-align:center}.c{text-align:center}small{color:#333}table{width:100%;border-collapse:collapse}td{padding:4px 0;vertical-align:top}.r{text-align:right;white-space:nowrap}
@@ -2481,15 +3103,33 @@ $("#sales-table").addEventListener("click", async event => {
   if (!button) return;
   try { printBill(await api("/api/bills/" + button.dataset.printBill)); } catch (error) { toast(error.message); }
 });
-function openBillEditor(editing) {
+$("#sales-table").addEventListener("click", async event => {
+  const button = event.target.closest("[data-local-bill-action]");
+  if (!button) return;
+  const id = Number(button.dataset.id), action = button.dataset.localBillAction;
+  let bill;
+  try { bill = await api(`/api/bills/${id}`); } catch (error) { return toast(error.message); }
+  if (action === "edit") return openBillEditor(bill);
+  if (action === "delete") {
+    if (!confirm(`Delete bill ${billNo(id)} permanently? Its items go back into stock, and its sales and payment records are removed.`)) return;
+    try { data = await api(`/api/bills/${id}`, { method: "DELETE" }); render(); toast(`${billNo(id)} deleted`); } catch (error) { toast(error.message); }
+    return;
+  }
+  if (action !== "receive" || !(bill.due > 0)) return;
+  openModal(`Receive payment · ${billNo(id)}`, `<p>Due now: <b>${money(bill.due)}</b></p><label>Amount received (৳)<input name="amount" type="number" min="0.01" max="${bill.due}" step="any" value="${bill.due}" required></label><label>Method<select name="method">${paymentOptions("Cash", quickPaymentChoices())}</select></label>`, async form => {
+    const { bill: saved, ...state } = await api(`/api/bills/${id}/payments`, { method: "POST", body: JSON.stringify({ amount: Number(form.get("amount")), method: form.get("method") }) });
+    data = state; render(); toast("Payment saved");
+  });
+});
+function openBillEditor(editing, initialProduct = null) {
   const pid = l => l.productId || data.products.find(p => p.name === l.name)?.id;
   const extra = Object.fromEntries((editing?.lines || []).map(l => [pid(l), l.qty]));
   if (editing && data.shopType === "pharmacy") return toast("Pharmacy bills cannot be edited after saving. Process a return and create a corrected bill.");
   const stocked = data.products.filter(item => productSellableQty(item) > 0 || extra[item.id]);
   if (!stocked.length) return toast("No products in stock.");
   let cart = (editing?.lines || []).map(l => { const p = data.products.find(x => x.id === pid(l)); return p && { id: p.id, name: productLabel(p), category: l.category || p.category || "", unit: p.unit || "piece", packSize: p.pack_size || 0, packName: p.pack_name, price: l.price, cost: p.cost, qty: l.qty, max: +(p.qty + l.qty).toFixed(6), serials: l.serials || [], warrantyMonths: Number(l.warrantyMonths || 0) }; }).filter(Boolean);
-  openModal(editing ? `Edit ${billNo(editing.id)}` : "New bill", `<div class="item-search"><label for="bill-search">Add item <span class="form-hint">Type part of a name, SKU, or barcode. Pick from the list or press Enter to add.</span></label><div class="item-search-wrap"><input id="bill-search" type="search" autocomplete="off" placeholder="Item name, SKU, or barcode"><button type="button" class="item-search-toggle" id="bill-search-toggle" aria-label="Show all in-stock items" title="Show all in-stock items">▾</button><div class="item-search-results hidden" id="bill-search-results" role="listbox" aria-label="Matching in-stock items"></div></div></div>
-<div class="table-scroll bill-cart"><table><thead><tr><th>Item</th><th>Price / unit</th><th>Qty</th><th>Amount</th><th class="${data.shopType === "mobile" ? "" : "hidden"}">IMEI / serial &amp; warranty</th><th></th></tr></thead><tbody id="bill-lines"></tbody></table><div class="empty" id="bill-empty">No items yet. Search above to add the first one.</div></div>
+  openModal(editing ? `Edit ${billNo(editing.id)}` : "New bill", `<div class="item-search"><div class="bill-search-head"><label for="bill-search">Add item <span class="form-hint">Type part of a name, SKU, or barcode. Pick from the list or press Enter to add.</span></label>${data.shopType === "pharmacy" ? `<button type="button" class="button secondary" id="bill-medex-toggle">Medicine info (MedEx)</button>` : data.shopType === "restaurant" ? `<button type="button" class="button secondary" id="bill-manage-food-packages">Food packages</button>` : ""}</div><div class="item-search-wrap"><input id="bill-search" type="search" autocomplete="off" placeholder="Item name, SKU, or barcode"><button type="button" class="item-search-toggle" id="bill-search-toggle" aria-label="Show all in-stock items" title="Show all in-stock items">▾</button><div class="item-search-results hidden" id="bill-search-results" role="listbox" aria-label="Matching in-stock items"></div></div></div>${data.shopType === "pharmacy" ? `<div id="bill-medex-drawer" class="medex-inline-drawer hidden"></div>` : ""}${data.shopType === "restaurant" && (data.foodPackages || []).length ? `<div class="cloth-quick-chips" id="bill-food-packages-bar" style="margin-bottom:10px"><span class="form-hint" style="margin-right:4px">🍱 Quick packages:</span>${(data.foodPackages || []).map(pkg => `<button type="button" class="cloth-chip" data-bill-pkg-product="${pkg.productId || ""}" title="${esc(pkg.itemsSummary || "")}">🍱 ${esc(pkg.name)} (${esc(pkg.portion || "1:1")}) · ${money(pkg.price)}</button>`).join("")}</div>` : ""}
+<div class="table-scroll bill-cart"><table><thead><tr><th>Item</th><th>Price / unit</th><th class="bill-quantity-heading">Qty</th><th class="bill-amount-heading">Amount</th><th class="${data.shopType === "mobile" ? "" : "hidden"}">IMEI / serial &amp; warranty</th><th></th></tr></thead><tbody id="bill-lines"></tbody></table><div class="empty" id="bill-empty">No items yet. Search above to add the first one.</div></div>
 <div class="form-row"><label>Customer name${data.requireCustomer ? "" : " (optional)"}<input name="customer" maxlength="80" value="${esc(editing?.customer || "")}" ${data.requireCustomer && !editing ? "required" : ""}></label><label>Phone (optional)<input name="phone" maxlength="30" inputmode="tel" value="${esc(editing?.phone || "")}"></label></div>
 <div class="form-row"><label class="${editing ? "hidden" : ""}">Payment method<select name="payment">${paymentOptions(editing?.payment || "Cash")}</select></label>${data.allowDiscounts ? `<label>Discount (৳)<input id="bill-discount" name="discount" type="number" min="0" step="any" value="${editing ? editing.discount : 0}"></label>` : ""}</div>
 ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive further payments from the Bills list.</p><div id="refund-section" class="hidden" style="background:#fef2f2;padding:12px;border-radius:8px;border:1px solid #dc2626;margin:10px 0"><label style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><input type="checkbox" id="refund-checkbox" name="processRefund"><span style="font-weight:600;color:#dc2626">Process refund to customer</span></label><label>Refund amount (৳)<input id="refund-amount" name="refundAmount" type="number" min="0" step="any" value="0"><small class="form-hint">Auto-calculated but you can adjust if needed (e.g., customer agrees to store credit instead of full refund)</small></label></div>` : `<label>Paid now (৳)<span class="form-hint">Leave as the total if fully paid. A smaller amount becomes a due.</span><input id="bill-paid" name="paid" type="number" min="0" step="any"></label>`}
@@ -2505,7 +3145,7 @@ ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive f
     if (below.length && !confirm(`Warning: these items are priced below purchase cost: ${below.map(line => line.name).join(", ")}. Continue anyway?`)) return false;
     const payload = {
       paid: form.get("paid"),
-      items: cart.map(line => ({ productId: line.id, qty: line.qty, price: line.price, serials: line.serials || [], warrantyMonths: line.warrantyMonths || 0 })),
+      items: cart.map(line => ({ productId: line.id, qty: line.qty, price: line.price, ...(data.shopType === "pharmacy" ? { saleUnit: unitOf(line).name, saleQty: line.qty / unitOf(line).f, salePrice: line.price * unitOf(line).f } : {}), serials: line.serials || [], warrantyMonths: line.warrantyMonths || 0 })),
       customer: form.get("customer"),
       phone: form.get("phone"),
       payment: form.get("payment"),
@@ -2574,16 +3214,29 @@ ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive f
     }
   };
   const draw = () => {
-    $("#bill-lines").innerHTML = cart.map((line, i) => `<tr><td class="product-cell">${esc(line.name)}</td><td>${priceCell(line, i)}</td><td>${qtyCell(line, i)}</td><td><b>${money(line.price * line.qty)}</b></td><td>${data.shopType === "mobile" && /smartphone|feature phone|tablet|mobile phone/i.test(line.category) ? `<label class="device-fields"><small>One IMEI/serial per unit</small><textarea data-i="${i}" data-f="serials" rows="2" placeholder="Enter each on a new line">${esc((line.serials || []).join("\n"))}</textarea><small>Warranty months</small><input class="bill-input" data-i="${i}" data-f="warranty" type="number" min="0" max="120" step="1" value="${Number(line.warrantyMonths || 0)}"></label>` : ""}</td><td><button type="button" class="user-action danger" data-remove="${i}">Remove</button></td></tr>`).join("");
+    $("#bill-lines").innerHTML = cart.map((line, i) => `<tr><td class="product-cell">${esc(line.name)}${data.shopType === "pharmacy" ? `<br><small class="form-hint">Available: ${+(line.max / unitOf(line).f).toFixed(3)} ${esc(unitOf(line).name)} · ${line.max} ${esc(line.unit)}</small>` : ""}</td><td>${priceCell(line, i)}</td><td class="bill-quantity">${qtyCell(line, i)}</td><td class="bill-amount"><b>${money(line.price * line.qty)}</b></td><td class="${data.shopType === "mobile" ? "" : "hidden"}">${data.shopType === "mobile" && /smartphone|feature phone|tablet|mobile phone/i.test(line.category) ? `<label class="device-fields"><small>One IMEI/serial per unit</small><textarea data-i="${i}" data-f="serials" rows="2" placeholder="Enter each on a new line">${esc((line.serials || []).join("\n"))}</textarea><small>Warranty months</small><input class="bill-input" data-i="${i}" data-f="warranty" type="number" min="0" max="120" step="1" value="${Number(line.warrantyMonths || 0)}"></label>` : ""}</td><td><button type="button" class="user-action danger" data-remove="${i}">Remove</button></td></tr>`).join("");
     $("#bill-empty").classList.toggle("hidden", cart.length > 0);
     totals();
   };
   const addProduct = item => {
     if (!item) return;
     const existing = cart.find(line => line.id === item.id);
-    if (!existing) cart.push({ id: item.id, name: productLabel(item), category: item.category || "", serials: [], warrantyMonths: 12, unit: item.unit || "piece", packSize: item.pack_size || 0, packName: item.pack_name, price: item.price, cost: item.cost, qty: 1, max: +(productSellableQty(item) + (extra[item.id] || 0)).toFixed(6) });
-    else if (existing.qty < existing.max) existing.qty++;
-    else { toast(`Only ${existing.max} ${existing.unit} of ${existing.name} in stock.`); return; }
+    if (!existing) {
+      const line = { id: item.id, name: productLabel(item), category: item.category || "", serials: [], warrantyMonths: 12, unit: item.unit || "piece", packSize: item.pack_size || 0, packName: item.pack_name, price: item.price, cost: item.cost, qty: 1, max: +(productSellableQty(item) + (extra[item.id] || 0)).toFixed(6), ...pharmacyLineFields(item) };
+      if (data.shopType === "pharmacy") {
+        const selected = unitOf(line);
+        if (line.max + 0.000001 < selected.f) return toast(`Only ${line.max} ${line.unit} of ${line.name} is available; not enough for one ${selected.name}.`);
+        line.mode = selected.key;
+        line.qty = selected.f;
+        const configured = line.unitPrices?.[selected.key];
+        if (configured !== undefined) line.price = configured / selected.f;
+      }
+      cart.push(line);
+    } else {
+      const increment = data.shopType === "pharmacy" ? unitOf(existing).f : 1;
+      if (existing.qty + increment <= existing.max + 0.000001) existing.qty = Number((existing.qty + increment).toFixed(6));
+      else { toast(`Only ${existing.max} ${existing.unit} of ${existing.name} in stock.`); return; }
+    }
     draw();
     $("#bill-search")?.focus();
   };
@@ -2598,17 +3251,38 @@ ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive f
   $("#bill-lines").oninput = event => {
     const input = event.target, line = cart[input.dataset.i];
     if (!line) return;
-    if (input.dataset.f === "mode") { line.mode = input.value; return draw(); }
+    if (input.dataset.f === "mode") {
+      if (data.shopType === "pharmacy") {
+        const selected = unitOf({ ...line, mode: input.value });
+        if (line.max + 0.000001 < selected.f) { toast(`Only ${fmtQty(line.max, line.unit)} of ${line.name} in stock; not enough for one ${selected.name}.`); return draw(); }
+        line.mode = selected.key;
+        line.qty = selected.f;
+        const configured = line.unitPrices?.[selected.key];
+        if (configured !== undefined) line.price = configured / selected.f;
+      } else line.mode = input.value;
+      return draw();
+    }
     if (input.dataset.f === "serials") { line.serials = input.value.split(/\r?\n/).map(value => value.trim()).filter(Boolean); return; }
     if (input.dataset.f === "warranty") { line.warrantyMonths = Number(input.value); return; }
-    const f = unitOf(line).f, value = Number(input.value) || 0;
+    const selected = unitOf(line), f = selected.f, value = Number(input.value) || 0;
     if (input.dataset.f === "qty") {
-      const prec = line.packSize > 0 ? 1e6 : 1e3;
-      let qty = Math.round(value / f * prec) / prec;
-      if (!isFractional(line.unit) && !(line.packSize > 0)) qty = Math.round(qty);
-      if (qty > line.max) { qty = line.max; input.value = +(qty * f).toFixed(3); toast(`Only ${fmtQty(line.max, line.unit)} of ${line.name} in stock.`); }
-      line.qty = qty;
-    } else { const u = unitOf(line); line.price = u.key === "custom" ? value * u.f : value; }
+      if (data.shopType === "pharmacy") {
+        let qty = Math.round(value * f * 1e6) / 1e6;
+        if (!isFractional(line.unit)) qty = Math.round(qty);
+        if (qty > line.max) { qty = line.max; input.value = +(qty / f).toFixed(6); toast(`Only ${fmtQty(line.max, line.unit)} of ${line.name} in stock.`); }
+        line.qty = qty;
+      } else {
+        const prec = line.packSize > 0 ? 1e6 : 1e3;
+        let qty = Math.round(value / f * prec) / prec;
+        if (!isFractional(line.unit) && !(line.packSize > 0)) qty = Math.round(qty);
+        if (qty > line.max) { qty = line.max; input.value = +(qty * f).toFixed(3); toast(`Only ${fmtQty(line.max, line.unit)} of ${line.name} in stock.`); }
+        line.qty = qty;
+      }
+    } else if (data.shopType === "pharmacy") {
+      line.price = value / f;
+      line.unitPrices = line.unitPrices || {};
+      line.unitPrices[selected.key] = value;
+    } else line.price = selected.key === "custom" ? value * f : value;
     input.closest("tr").cells[3].innerHTML = `<b>${money(line.price * line.qty)}</b>`;
     totals();
   };
@@ -2643,6 +3317,45 @@ ${editing ? `<p class="form-hint">Paid so far: ${money(editing.paid)}. Receive f
     }
   }
   draw();
+  if (initialProduct) addProduct(initialProduct);
+  if ($("#bill-medex-toggle") && $("#bill-medex-drawer")) {
+    let billMedexMounted = null;
+    $("#bill-medex-toggle").onclick = () => {
+      const drawer = $("#bill-medex-drawer");
+      const opening = drawer.classList.contains("hidden");
+      drawer.classList.toggle("hidden", !opening);
+      if (opening) {
+        const currentBillQuery = ($("#bill-search")?.value || "").trim();
+        if (!billMedexMounted) {
+          billMedexMounted = mountMedexLookupBox(drawer, {
+            initialQuery: currentBillQuery,
+            onAddToBill: item => {
+              addProduct(item);
+              toast(`${productLabel(item)} added to bill.`);
+            }
+          });
+        } else if (currentBillQuery) {
+          billMedexMounted.setQueryAndSearch(currentBillQuery);
+        } else {
+          billMedexMounted.focusInput();
+        }
+      }
+    };
+  }
+  if ($("#bill-manage-food-packages")) {
+    $("#bill-manage-food-packages").onclick = () => openFoodPackageManager();
+  }
+  if ($("#bill-food-packages-bar")) {
+    $("#bill-food-packages-bar").onclick = event => {
+      const btn = event.target.closest("[data-bill-pkg-product]");
+      if (!btn) return;
+      const productId = Number(btn.dataset.billPkgProduct);
+      const item = stocked.find(p => p.id === productId);
+      if (!item) return toast("This package is currently out of stock.");
+      addProduct(item);
+      toast(`${item.name} added to bill.`);
+    };
+  }
   $("#bill-search").focus();
 }
 $("#new-bill").onclick = () => openBillEditor();
@@ -2707,7 +3420,6 @@ $("#inv-download").onclick = () => {
   const rows = [["Product", "SKU", "Category", "Brand", "Color", "Size", "Material", "Unit", "Quantity", "Minimum", "Selling price", ...(hasCost ? ["Purchase cost", "Stock value (cost)"] : [])],
     ...items.map(p => [p.name, p.sku, p.category || "Other", p.brand || "", p.color || "", p.size || "", p.material || "", p.unit || "piece", p.qty, p.min, p.price, ...(hasCost ? [p.cost, p.cost * p.qty] : [])])];
   downloadFile(`inventory-${today10()}.csv`, "\uFEFF" + rows.map(r => r.map(csvCell).join(",")).join("\r\n"));
-  toast(`${items.length} products downloaded`);
 };
 $("#inv-print").onclick = () => {
   const items = inventoryRows(), hasCost = items.some(p => p.cost !== undefined);
@@ -2720,32 +3432,37 @@ table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5p
 <table><thead><tr><th>#</th><th>Product</th><th>Brand</th><th>Color</th><th>Size</th><th>Material</th><th>SKU</th><th>Category</th><th class="r">Qty</th><th class="r">Min</th><th class="r">Price</th>${hasCost ? '<th class="r">Cost</th>' : ""}</tr></thead><tbody>${items.map((p, i) => `<tr><td>${i + 1}</td><td>${esc(p.name)}</td><td>${esc(p.brand || "")}</td><td>${esc(p.color || "")}</td><td>${esc(p.size || "")}</td><td>${esc(p.material || "")}</td><td>${esc(p.sku)}</td><td>${esc(p.category || "Other")}</td><td class="r">${p.qty} ${esc(p.unit || "piece")}</td><td class="r">${p.min}</td><td class="r">${money(p.price)}</td>${hasCost ? `<td class="r">${money(p.cost)}</td>` : ""}</tr>`).join("")}</tbody></table></body></html>`);
 };
 
-// Sales history: search by item, payment, bill no, date range
-$("#sales .table-scroll").insertAdjacentHTML("beforebegin", `<div class="sales-filter"><label class="search">⌕ <input id="sales-search" placeholder="Search item, payment, bill no, amount"></label><label>From <input type="date" id="sales-from"></label><label>To <input type="date" id="sales-to"></label><button class="button secondary" id="sales-clear" type="button">Clear</button><span class="sales-count" id="sales-count"></span><button class="button secondary" id="sales-print" type="button">Print</button></div>`);
-let currentMatchingSales = [];
+// Local Sales: search whole bills by customer, item, payment, bill no, or date range.
+$("#sales .table-scroll").insertAdjacentHTML("beforebegin", `<div class="sales-filter"><label class="search">⌕ <input id="sales-search" placeholder="Search bill, customer, item, payment"></label><label>From <input type="date" id="sales-from"></label><label>To <input type="date" id="sales-to"></label><button class="button secondary" id="sales-clear" type="button">Clear</button><span class="sales-count" id="sales-count"></span><button class="button secondary" id="sales-print" type="button">Print</button></div>`);
+let currentMatchingSales = [], currentLocalSaleGroups = [];
 function filterSales() {
   const q = $("#sales-search").value.trim().toLowerCase(), from = $("#sales-from").value, to = $("#sales-to").value;
-  const matchingSales = [];
-  [...$("#sales-table").rows].forEach((row, i) => {
-    const s = data.sales[i];
-    if (!s) return;
-    const hay = [s.product, s.payment, s.date, s.total, s.bill_id ? billNo(s.bill_id) : ""].join(" ").toLowerCase();
-    const ok = (!q || hay.includes(q)) && (!from || s.date >= from) && (!to || s.date <= to);
-    row.classList.toggle("hidden", !ok);
-    if (ok) matchingSales.push(s);
+  const groups = groupLocalSales(data.sales);
+  const matchingGroups = groups.filter(group => {
+    if ((from && group.date < from) || (to && group.date > to)) return false;
+    if (!q) return true;
+    const first = group.lines[0] || {};
+    const hay = [group.billId ? billNo(group.billId) : `Direct sale ${first.id}`, first.bill_customer, first.bill_phone, group.date, localSaleGroupTotals(group).net, ...group.lines.flatMap(sale => [sale.product, sale.payment, sale.total])].join(" ").toLowerCase();
+    return hay.includes(q);
   });
-  currentMatchingSales = matchingSales;
-  const shown = matchingSales.length, filtering = Boolean(q || from || to);
-  const salesGross = matchingSales.reduce((sum, item) => sum + Number(item.original_total ?? item.total ?? 0), 0);
-  const salesNet = matchingSales.reduce((sum, item) => sum + Number(item.total || 0), 0);
+  currentLocalSaleGroups = matchingGroups;
+  currentMatchingSales = matchingGroups.flatMap(group => group.lines);
+  const page = largeListPage("sales", matchingGroups);
+  const canManage = signedInUser?.permissions?.records && data.permissions?.sales;
+  const canReturn = data.permissions?.sales && data.permissions?.inventory;
+  $("#sales-table").innerHTML = page.visible.map(group => localSaleGroupHtml(group, canManage, canReturn)).join("");
+  const shown = matchingGroups.length, filtering = Boolean(q || from || to);
+  const salesGross = currentMatchingSales.reduce((sum, item) => sum + Number(item.original_total ?? item.total ?? 0), 0);
+  const salesNet = currentMatchingSales.reduce((sum, item) => sum + Number(item.total || 0), 0);
   const returnsTotal = Math.max(0, salesGross - salesNet);
-  $("#sales-count").textContent = filtering ? `${shown} of ${data.sales.length} sales` : `${shown} sales`;
-  $("#sales-summary").innerHTML = `<div class="list-summary-heading"><b>Sales totals</b><small>${filtering ? "Totals for the sales currently shown" : "All-time totals across recorded sale lines"}</small></div><div class="list-summary-cards"><div><small>Sale lines</small><b>${shown}</b></div><div><small>Gross sales</small><b>${money(salesGross)}</b></div><div><small>Returned value</small><b>${money(returnsTotal)}</b></div><div><small>Net sales after returns</small><b>${money(salesNet)}</b></div></div>`;
-  $("#sales-empty").textContent = filtering && !shown ? "No sales match your search." : "Your recorded sales will appear here.";
-  $("#sales-empty").classList.toggle("hidden", !!shown || (!filtering && data.sales.length > 0));
+  $("#sales-count").textContent = filtering ? `${shown} of ${groups.length} local sales` : `${shown} local sales`;
+  $("#sales-summary").innerHTML = `<div class="list-summary-heading"><b>Sales totals</b><small>${filtering ? "Totals for the local sales currently shown" : "Local sale lines only; online-order bills stay separate"}</small></div><div class="list-summary-cards"><div><small>Sale lines</small><b>${currentMatchingSales.length}</b></div><div><small>Gross sales</small><b>${money(salesGross)}</b></div><div><small>Returned value</small><b>${money(returnsTotal)}</b></div><div><small>Net sales after returns</small><b>${money(salesNet)}</b></div></div>`;
+  $("#sales-empty").textContent = filtering && !shown ? "No local sales match your search." : "Your local sales will appear here.";
+  $("#sales-empty").classList.toggle("hidden", shown > 0);
+  showLargeListPagination("#sales-pagination", "sales", page, shown);
 }
-["#sales-search", "#sales-from", "#sales-to"].forEach(id => $(id).addEventListener("input", filterSales));
-$("#sales-clear").onclick = () => { $("#sales-search").value = $("#sales-from").value = $("#sales-to").value = ""; filterSales(); };
+["#sales-search", "#sales-from", "#sales-to"].forEach(id => $(id).addEventListener("input", () => { largeListPages.sales = 1; filterSales(); }));
+$("#sales-clear").onclick = () => { $("#sales-search").value = $("#sales-from").value = $("#sales-to").value = ""; largeListPages.sales = 1; filterSales(); };
 $("#sales-print").onclick = () => {
   if (!currentMatchingSales.length) return toast("No sales to print.");
   const from = $("#sales-from").value, to = $("#sales-to").value;
@@ -2753,13 +3470,21 @@ $("#sales-print").onclick = () => {
   const salesGross = currentMatchingSales.reduce((sum, item) => sum + Number(item.original_total ?? item.total ?? 0), 0);
   const salesNet = currentMatchingSales.reduce((sum, item) => sum + Number(item.total || 0), 0);
   const returnsTotal = Math.max(0, salesGross - salesNet);
-  printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Sales History</title><style>
+  const printRows = currentLocalSaleGroups.map(group => {
+    const first = group.lines[0] || {}, totals = localSaleGroupTotals(group);
+    const items = group.lines.map(sale => {
+      const originalQty = Number(sale.original_qty ?? sale.qty ?? 0), gross = Number(sale.original_total ?? sale.total ?? 0), returnedQty = Number(sale.returned_qty || 0);
+      return `<b>${esc(sale.product)}</b> · ${originalQty} ${esc(sale.unit || "piece")} × ${money(originalQty > 0 ? gross / originalQty : 0)} = ${money(gross)}${returnedQty > 0 ? `<br><i>Returned ${returnedQty} · Net ${sale.qty} ${esc(sale.unit || "piece")} / ${money(sale.total)}</i>` : ""}`;
+    }).join("<br>");
+    return `<tr><td>${esc(group.date)}</td><td>${group.billId ? billNo(group.billId) : `Direct sale #${first.id}`}</td><td>${esc(first.bill_customer || "-")}${first.bill_phone ? `<br>${esc(first.bill_phone)}` : ""}</td><td>${items}</td><td>${esc(first.payment || "-")}${totals.due > 0 ? `<br>Due ${money(totals.due)}` : ""}</td><td class="r">${money(totals.net)}${totals.returned > 0 ? `<br><small>${money(totals.returned)} returned</small>` : ""}</td></tr>`;
+  }).join("");
+  printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Local Sales</title><style>
 @page{margin:10mm}body{font:12px/1.4 system-ui,"Segoe UI",sans-serif;color:#000}h1{font-size:20px;margin:0}p{margin:2px 0 10px}
-table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5px 7px;text-align:left}th{background:#eee}.r{text-align:right}tr{page-break-inside:avoid}
+table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5px 7px;text-align:left;vertical-align:top}th{background:#eee}.r{text-align:right}tr{page-break-inside:avoid}
 .summary{margin:15px 0;padding:10px;background:#f5f5f5;border:1px solid #ccc}.summary-row{display:flex;justify-content:space-between;margin:3px 0}</style></head><body>
-<h1>${esc(data.shopName)} - Sales History</h1><p>${esc(data.workspace)} · ${new Date().toLocaleString("en-BD")} · ${dateRange}</p>
+<h1>${esc(data.shopName)} - Local Sales</h1><p>${esc(data.workspace)} · ${new Date().toLocaleString("en-BD")} · ${dateRange} · Online-order bills are not included.</p>
 <div class="summary"><div class="summary-row"><span>Sale lines:</span><b>${currentMatchingSales.length}</b></div><div class="summary-row"><span>Gross sales:</span><b>${money(salesGross)}</b></div><div class="summary-row"><span>Returned value:</span><b>${money(returnsTotal)}</b></div><div class="summary-row"><span>Net sales after returns:</span><b>${money(salesNet)}</b></div></div>
-<table><thead><tr><th>Date</th><th>Item</th><th>Qty / Unit</th><th>Payment</th><th>Bill No.</th><th class="r">Total</th></tr></thead><tbody>${currentMatchingSales.map((s) => `<tr><td>${esc(s.date)}</td><td>${esc(s.product)}${s.is_return ? ' <i>(Return)</i>' : ''}</td><td>${s.qty} ${esc(s.unit || "piece")}</td><td>${esc(s.payment)}</td><td>${s.bill_id ? billNo(s.bill_id) : "-"}</td><td class="r">${money(s.total)}</td></tr>`).join("")}</tbody></table></body></html>`);
+<table><thead><tr><th>Date</th><th>Bill / Sale</th><th>Customer</th><th>Items</th><th>Payment</th><th class="r">Total</th></tr></thead><tbody>${printRows}</tbody></table></body></html>`);
 };
 const renderBeforeExtras = render;
 render = function () {
@@ -2847,11 +3572,11 @@ render = function () {
   if (dues) $("#dues-text").textContent = `⚠ Customer dues: ${money(dues.amount)} unpaid across ${dues.count} bill${dues.count === 1 ? "" : "s"}`;
   $("#bills-list").classList.toggle("hidden", !sales);
 };
-$("#customer-history").insertAdjacentHTML("afterend", `<button class="button secondary" id="bills-list" type="button">Bills</button><button class="button secondary" id="returns-list" type="button">Returns</button>`);
-$("#bills-list").onclick = () => openBills(false);
+$("#customer-history").insertAdjacentHTML("afterend", `<button class="button secondary" id="bills-list" type="button">Local bills</button><button class="button secondary" id="returns-list" type="button">Returns</button>`);
+$("#bills-list").onclick = () => openBills(false, {}, "local");
 $("#dues-view").onclick = () => openBills(true);
 $("#returns-list").onclick = () => {
-  const rows = data.salesReturns || [];
+  const rows = (data.salesReturns || []).filter(row => !Number(row.online_order_id || 0));
   openModal("Sales returns", `<div class="returns-search-row"><label class="search">⌕ <input type="search" id="returns-search" placeholder="Search item, bill, reason, staff"></label><button class="button secondary" id="returns-clear-filters" type="button">Clear filters</button></div><div class="returns-date-filters"><label>From<input type="date" id="returns-from"></label><label>To<input type="date" id="returns-to"></label></div><p class="form-hint" id="returns-count"></p><div class="table-scroll bill-cart" style="max-height:430px"><table><thead><tr><th>Date</th><th>Item</th><th>Qty</th><th>Bill</th><th>Return value</th><th>Refund</th><th>Reason / by</th></tr></thead><tbody id="returns-body"></tbody></table></div><div class="empty hidden" id="returns-empty"></div>`, async () => {});
   dialog.classList.add("wide");
   const renderReturns = () => {
@@ -2878,10 +3603,12 @@ $("#returns-list").onclick = () => {
   const submit = $("#submit-modal"); submit.classList.add("hidden");
   dialog.addEventListener("close", () => { dialog.classList.remove("wide"); submit.classList.remove("hidden"); }, { once: true });
 };
-async function openBills(duesOnly, previousFilters = {}) {
+async function openBills(duesOnly, previousFilters = {}, scope = "all") {
+  if (!["all", "local", "online"].includes(scope)) scope = "all";
   let bills;
-  try { bills = (await api("/api/bills")).bills; } catch (error) { return toast(error.message); }
-  openModal("Bills", `<div class="cust-head"><label class="search">⌕ <input id="bill-find" placeholder="Search bill no, customer, phone, item" value="${esc(previousFilters.query || "")}"></label><label><input type="checkbox" id="dues-only" ${duesOnly ? "checked" : ""}> Dues only</label></div><div class="bills-date-filters"><label>From<input type="date" id="bills-from" value="${esc(previousFilters.from || "")}"></label><label>To<input type="date" id="bills-to" value="${esc(previousFilters.to || "")}"></label><button type="button" class="button secondary" id="bills-clear-filters">Clear filters</button></div><p class="form-hint" id="bills-count"></p><div class="table-scroll bill-cart" style="max-height:430px"><table><thead><tr><th>Bill</th><th>Date</th><th>Customer</th><th>Total</th><th>Paid</th><th>Due</th><th></th></tr></thead><tbody id="bills-body"></tbody></table></div><div class="empty hidden" id="bills-empty">No bills found.</div>`, async () => {});
+  try { bills = (await api(`/api/bills?scope=${scope}`)).bills; } catch (error) { return toast(error.message); }
+  const title = scope === "online" ? "Online order bills" : scope === "local" ? "Local sales bills" : "Bills";
+  openModal(title, `<div class="cust-head"><label class="search">⌕ <input id="bill-find" placeholder="Search bill no, customer, phone, item" value="${esc(previousFilters.query || "")}"></label><label><input type="checkbox" id="dues-only" ${duesOnly ? "checked" : ""}> Dues only</label></div><div class="bills-date-filters"><label>From<input type="date" id="bills-from" value="${esc(previousFilters.from || "")}"></label><label>To<input type="date" id="bills-to" value="${esc(previousFilters.to || "")}"></label><button type="button" class="button secondary" id="bills-clear-filters">Clear filters</button></div><p class="form-hint" id="bills-count"></p><div class="table-scroll bill-cart" style="max-height:430px"><table><thead><tr><th>Bill</th><th>Date</th><th>Customer</th><th>Total</th><th>Paid</th><th>Due</th><th></th></tr></thead><tbody id="bills-body"></tbody></table></div><div class="empty hidden" id="bills-empty">No bills found.</div>`, async () => {});
   dialog.classList.add("wide");
   const submit = $("#submit-modal"); submit.classList.add("hidden");
   dialog.addEventListener("close", () => { dialog.classList.remove("wide"); submit.classList.remove("hidden"); }, { once: true });
@@ -2891,7 +3618,7 @@ async function openBills(duesOnly, previousFilters = {}) {
     const invalidRange = Boolean(from && to && from > to);
     const hits = invalidRange ? [] : bills.filter(b => (!dues || b.due > 0) && (!from || b.date >= from) && (!to || b.date <= to) && (!q || `${billNo(b.id)} ${b.customer} ${b.phone} ${b.lines.map(l => l.name).join(" ")}`.toLowerCase().includes(q)));
     const btn = (a, label, cls = "") => `<button type="button" class="user-action ${cls}" data-a="${a}">${label}</button>`;
-    $("#bills-body").innerHTML = hits.map(b => `<tr data-id="${b.id}"><td>${billNo(b.id)}</td><td>${esc(b.date)}</td><td>${esc(b.customer || "-")}${b.phone ? `<br><small>${esc(b.phone)}</small>` : ""}</td><td>${money(b.netTotal ?? b.total)}${b.returned > 0 ? `<small class="form-hint">${money(b.returned)} returned</small>` : ""}</td><td>${money(b.paid)}</td><td>${b.due > 0 ? `<b>${money(b.due)}</b>` : b.customerCredit > 0 ? `<small>Credit ${money(b.customerCredit)}</small>` : "-"}</td><td>${btn("print", "Print")}${b.due > 0 ? btn("pay", "Receive") : ""}${!b.returned ? `${btn("edit", "Edit")}${btn("delete", "Delete", "danger")}` : "Return history"}</td></tr>`).join("");
+    $("#bills-body").innerHTML = hits.map(b => `<tr data-id="${b.id}"><td>${billNo(b.id)}</td><td>${esc(b.date)}</td><td>${esc(b.customer || "-")}${b.phone ? `<br><small>${esc(b.phone)}</small>` : ""}</td><td>${money(b.netTotal ?? b.total)}${b.returned > 0 ? `<small class="form-hint">${money(b.returned)} returned</small>` : ""}</td><td>${money(b.paid)}</td><td>${b.due > 0 ? `<b>${money(b.due)}</b>` : b.customerCredit > 0 ? `<small>Credit ${money(b.customerCredit)}</small>` : "-"}</td><td>${btn("print", "Print")}${b.due > 0 ? btn("pay", "Receive") : ""}${scope === "online" ? "Manage in Online Orders" : !b.returned ? `${btn("edit", "Edit")}${btn("delete", "Delete", "danger")}` : "Return history"}</td></tr>`).join("");
     $("#bills-count").textContent = invalidRange ? "The start date must be before the end date." : `Showing ${hits.length} of ${bills.length} bills`;
     $("#bills-empty").classList.toggle("hidden", hits.length > 0);
     $("#bills-empty").textContent = invalidRange ? "Choose a valid date range." : "No bills match your filters.";
@@ -2907,12 +3634,12 @@ async function openBills(duesOnly, previousFilters = {}) {
     if (button.dataset.a === "edit") return openBillEditor(bill);
     if (button.dataset.a === "delete") {
       if (!confirm(`Delete bill ${billNo(bill.id)} permanently? Its items go back into stock, and its sales and payment records are removed.`)) return;
-      try { data = await api("/api/bills/" + bill.id, { method: "DELETE" }); render(); toast(`${billNo(bill.id)} deleted`); closeModal(); openBills(again, filters); } catch (error) { toast(error.message); }
+      try { data = await api("/api/bills/" + bill.id, { method: "DELETE" }); render(); toast(`${billNo(bill.id)} deleted`); closeModal(); openBills(again, filters, scope); } catch (error) { toast(error.message); }
       return;
     }
     openModal(`Receive payment · ${billNo(bill.id)}`, `<p>Due now: <b>${money(bill.due)}</b></p><label>Amount received (৳)<input name="amount" type="number" min="0.01" max="${bill.due}" step="any" value="${bill.due}" required></label><label>Method<select name="method"><option>Cash</option><option>bKash</option><option>Nagad</option><option>Card</option></select></label>`, async form => {
       const { bill: saved, ...state } = await api(`/api/bills/${bill.id}/payments`, { method: "POST", body: JSON.stringify({ amount: Number(form.get("amount")), method: form.get("method") }) });
-      data = state; render(); toast("Payment saved"); setTimeout(() => openBills(again, filters), 50);
+      data = state; render(); toast("Payment saved"); setTimeout(() => openBills(again, filters, scope), 50);
     });
     submit.classList.remove("hidden");
   };
@@ -3112,7 +3839,7 @@ async function renderBackupManager() {
   try {
     const [{ files }, schedule] = await Promise.all([api("/api/backups"), api("/api/backups/schedule")]);
     const lastBackup = schedule.lastBackupAt ? new Date(schedule.lastBackupAt).toLocaleString() : "No scheduled backup has completed yet.";
-    container.innerHTML = `<section id="offsite-panel" class="offsite-panel"><p class="backup-status">Loading offsite backup…</p></section><p class="backup-intro">Create a dated SQLite copy and choose where to save it on this computer. To restore, select a Shop Desk backup file. Restoring replaces current shop data; a safety copy is made first.</p><section class="backup-schedule"><div><h3>Automatic backup schedule</h3><p>Choose a folder on the shop server PC. The server must be running at the selected time. Uses the server PC’s local time; keeps the newest 14 backups.</p><p class="backup-last-run">Last scheduled backup: <b>${esc(lastBackup)}</b></p></div><form id="backup-schedule-form"><label class="backup-schedule-toggle"><input type="checkbox" name="enabled" ${schedule.enabled ? "checked" : ""}> Enable daily backup</label><label>Backup time<input type="time" name="time" value="${esc(schedule.time)}" required></label><label class="backup-schedule-directory">Server backup folder<span class="backup-folder-choice"><input type="text" id="backup-schedule-directory" name="directory" value="${esc(schedule.directory)}" readonly required><button type="button" class="button secondary" id="browse-backup-folder">Choose folder…</button></span></label><button type="submit" class="button secondary">Save schedule</button><span id="backup-schedule-status" role="status"></span></form></section><dialog id="backup-folder-dialog" class="backup-folder-dialog" aria-labelledby="backup-folder-title"><div class="backup-folder-dialog-content"><div class="backup-folder-heading"><h3 id="backup-folder-title">Choose server backup folder</h3><button type="button" class="user-action" id="close-backup-folder">Close</button></div><p>Browse folders on the server PC, then choose the folder for scheduled backups.</p><div class="backup-folder-current"><button type="button" class="user-action" id="backup-folder-up">Up one folder</button><button type="button" class="user-action" id="backup-folder-drives">Drives</button><strong id="backup-folder-current"></strong></div><p id="backup-folder-error" class="backup-folder-error" role="status"></p><div id="backup-folder-list" class="backup-folder-list"></div><div class="backup-folder-actions"><button type="button" class="button primary" id="use-backup-folder">Use this folder</button><button type="button" class="button secondary" id="cancel-backup-folder">Cancel</button></div></div></dialog><div class="backup-actions"><button type="button" class="button primary" id="create-save-backup">Create and save backup</button><button type="button" class="button secondary" id="restore-from-file">Restore from file…</button></div><p class="backup-status" id="backup-status" role="status"></p>${files.length ? `<h3>Backups stored on the shop server</h3><div class="table-scroll"><table><thead><tr><th>Backup file</th><th>Size</th><th>Actions</th></tr></thead><tbody>${files.map(file => `<tr><td>${esc(file.name)}</td><td>${(file.size / 1048576).toFixed(2)} MB</td><td><button type="button" class="user-action" data-save-backup="${esc(file.name)}">Save to location…</button><button type="button" class="user-action danger" data-restore-server-backup="${esc(file.name)}">Restore</button><button type="button" class="user-action danger" data-delete-backup="${esc(file.name)}" aria-label="Delete backup ${esc(file.name)}">Delete</button></td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">No backups are stored on the shop server yet.</p>`}`;
+    container.innerHTML = `<section id="offsite-panel" class="offsite-panel"><p class="backup-status">Loading offsite backup…</p></section><p class="backup-intro">Backups belong to <b>${esc(data.activeProfile?.name || "this shop profile")}</b>. Create a dated SQLite copy and choose where to save it on this computer. Restoring replaces only this profile’s data, requires a backup of the same shop type, and makes a safety copy first.</p><section class="backup-schedule"><div><h3>Automatic backup schedule</h3><p>Choose a folder on the shop server PC. The server must be running at the selected time. Uses the server PC’s local time; keeps the newest 14 backups.</p><p class="backup-last-run">Last scheduled backup: <b>${esc(lastBackup)}</b></p></div><form id="backup-schedule-form"><label class="backup-schedule-toggle"><input type="checkbox" name="enabled" ${schedule.enabled ? "checked" : ""}> Enable daily backup</label><label>Backup time<input type="time" name="time" value="${esc(schedule.time)}" required></label><label class="backup-schedule-directory">Server backup folder<span class="backup-folder-choice"><input type="text" id="backup-schedule-directory" name="directory" value="${esc(schedule.directory)}" readonly required><button type="button" class="button secondary" id="browse-backup-folder">Choose folder…</button></span></label><button type="submit" class="button secondary">Save schedule</button><span id="backup-schedule-status" role="status"></span></form></section><dialog id="backup-folder-dialog" class="backup-folder-dialog" aria-labelledby="backup-folder-title"><div class="backup-folder-dialog-content"><div class="backup-folder-heading"><h3 id="backup-folder-title">Choose server backup folder</h3><button type="button" class="user-action" id="close-backup-folder">Close</button></div><p>Browse folders on the server PC, then choose the folder for scheduled backups.</p><div class="backup-folder-current"><button type="button" class="user-action" id="backup-folder-up">Up one folder</button><button type="button" class="user-action" id="backup-folder-drives">Drives</button><strong id="backup-folder-current"></strong></div><p id="backup-folder-error" class="backup-folder-error" role="status"></p><div id="backup-folder-list" class="backup-folder-list"></div><div class="backup-folder-actions"><button type="button" class="button primary" id="use-backup-folder">Use this folder</button><button type="button" class="button secondary" id="cancel-backup-folder">Cancel</button></div></div></dialog><div class="backup-actions"><button type="button" class="button primary" id="create-save-backup">Create and save backup</button><button type="button" class="button secondary" id="restore-from-file">Restore from file…</button></div><p class="backup-status" id="backup-status" role="status"></p>${files.length ? `<h3>Backups stored on the shop server</h3><div class="table-scroll"><table><thead><tr><th>Backup file</th><th>Size</th><th>Actions</th></tr></thead><tbody>${files.map(file => `<tr><td>${esc(file.name)}</td><td>${(file.size / 1048576).toFixed(2)} MB</td><td><button type="button" class="user-action" data-save-backup="${esc(file.name)}">Save to location…</button><button type="button" class="user-action danger" data-restore-server-backup="${esc(file.name)}">Restore</button><button type="button" class="user-action danger" data-delete-backup="${esc(file.name)}" aria-label="Delete backup ${esc(file.name)}">Delete</button></td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">No backups are stored on the shop server yet.</p>`}`;
     $("#backup-schedule-form").onsubmit = async event => {
       event.preventDefault();
       const form = new FormData(event.currentTarget), button = event.currentTarget.querySelector('[type="submit"]'), status = $("#backup-schedule-status");
@@ -3233,7 +3960,7 @@ async function deleteStoredBackup(name) {
 }
 $("#fresh-start-button").onclick = async () => {
   if (signedInUser?.username?.toLowerCase() !== "jahangir" || signedInUser?.role !== "admin") return toast("Only the Jahangir administrator can start a fresh setup.");
-  if (!confirm("This removes trial products, customers, suppliers, bills, sales, expenses, purchase history, and team accounts. Jahangir’s login is kept. A backup will be created first. Continue?")) return;
+  if (!confirm("This clears products, customers, suppliers, bills, sales, expenses, and purchase history in the current shop profile only. Team accounts and all other shop profiles are kept. A backup of this profile will be created first. Continue?")) return;
   if (prompt("Type FRESH START to confirm clearing this shop’s trial data.") !== "FRESH START") return toast("Fresh start cancelled. The confirmation text did not match.");
   try {
     const result = await api("/api/fresh-start", { method: "POST", body: JSON.stringify({ confirmation: "FRESH START" }) });
@@ -3291,7 +4018,7 @@ async function openSupplierHub() {
     const canEdit = canEditSupplierHistory();
     const canRecord = !!data.permissions?.inventory;
     const supplierRows = suppliers.length ? suppliers.map(s => `<tr><td><b>${esc(s.name)}</b>${s.phone ? `<br><small>${esc(s.phone)}</small>` : ""}</td><td>${supplierMoney(s.opening_balance)}</td><td>${supplierMoney(s.total_bought)}</td><td>${supplierMoney(s.total_paid)}</td><td><b>${supplierMoney(s.balance)}</b></td><td>${canRecord && Number(s.balance) > 0 ? `<button type="button" class="user-action" data-supplier-pay="${s.id}" data-supplier-name="${esc(s.name)}" data-balance="${s.balance}">Pay supplier</button>` : "—"}${canEdit ? `<button type="button" class="user-action" data-edit-supplier="${s.id}">Edit</button>` : ""}</td></tr>`).join("") : '<tr><td colspan="6" class="empty">Add a supplier to start recording purchases.</td></tr>';
-    const purchaseRows = purchases.length ? purchases.map(p => `<tr data-history-supplier="${p.supplier_id}"><td><input type="checkbox" aria-label="Select purchase P-${String(p.id).padStart(8, "0")}" data-select-purchase="${p.id}"></td><td>P-${String(p.id).padStart(8, "0")}</td><td>${esc(p.date)}</td><td>${esc(p.supplier_name)}</td><td>${p.line_count} items <button type="button" class="user-action" aria-expanded="false" data-toggle-purchase="${p.id}">View products</button></td><td><b>${supplierMoney(p.total)}</b></td><td>${esc(p.reference || "—")}</td><td>${esc(p.created_by || "")}</td><td><button type="button" class="user-action" data-print-purchase="${p.id}">Print list</button>${canEdit ? `<button type="button" class="user-action" data-edit-purchase="${p.id}">Edit</button>` : ""}</td></tr><tr class="purchase-detail-row hidden" data-history-supplier="${p.supplier_id}" data-purchase-detail="${p.id}"><td colspan="9"><div class="purchase-detail"><b>Products bought from ${esc(p.supplier_name)}</b>${p.items?.length ? `<div class="table-scroll"><table><thead><tr><th>Product</th><th>Quantity</th><th>Unit cost</th><th>Line total</th>${data.shopType === "pharmacy" && featureEnabled("pharmacy") ? "<th>Batch / lot</th><th>Expiry</th>" : ""}</tr></thead><tbody>${p.items.map(item => `<tr><td>${esc(item.productName)}</td><td>${Number(item.qty)} ${esc(item.unit || "piece")}</td><td>${supplierMoney(item.cost)}</td><td>${supplierMoney(Number(item.qty) * Number(item.cost))}</td>${data.shopType === "pharmacy" && featureEnabled("pharmacy") ? `<td>${esc(item.batchNumber || "Not recorded")}</td><td>${esc(item.expiryDate || "Not recorded")}</td>` : ""}</tr>`).join("")}</tbody></table></div>` : `<p class="form-hint">Product details are unavailable for this older purchase.</p>`}</div></td></tr>`).join("") : '<tr><td colspan="9" class="empty">No purchases recorded yet.</td></tr>';
+    const purchaseRows = purchases.length ? purchases.map(p => `<tr data-history-supplier="${p.supplier_id}"><td><input type="checkbox" aria-label="Select purchase P-${String(p.id).padStart(8, "0")}" data-select-purchase="${p.id}"></td><td>P-${String(p.id).padStart(8, "0")}</td><td>${esc(p.date)}</td><td>${esc(p.supplier_name)}</td><td>${p.line_count} items <button type="button" class="user-action" aria-expanded="false" data-toggle-purchase="${p.id}">View products</button></td><td><b>${supplierMoney(p.total)}</b></td><td>${esc(p.reference || "—")}</td><td>${esc(p.created_by || "")}</td><td><button type="button" class="user-action" data-print-purchase="${p.id}">Print list</button>${canEdit ? `<button type="button" class="user-action" data-edit-purchase="${p.id}">Edit</button>` : ""}</td></tr><tr class="purchase-detail-row hidden" data-history-supplier="${p.supplier_id}" data-purchase-detail="${p.id}"><td colspan="9"><div class="purchase-detail"><b>Products bought from ${esc(p.supplier_name)}</b>${p.items?.length ? `<div class="table-scroll"><table><thead><tr><th>Product</th><th>Quantity</th><th>Unit cost</th><th>Line total</th>${data.shopType === "pharmacy" ? "<th>Batch / lot</th><th>Expiry</th>" : ""}</tr></thead><tbody>${p.items.map(item => `<tr><td>${esc(item.productName)}</td><td>${Number(item.qty)} ${esc(item.unit || "piece")}</td><td>${supplierMoney(item.cost)}</td><td>${supplierMoney(Number(item.qty) * Number(item.cost))}</td>${data.shopType === "pharmacy" ? `<td>${esc(item.batchNumber || "Not recorded")}</td><td>${esc(item.expiryDate || "Not recorded")}</td>` : ""}</tr>`).join("")}</tbody></table></div>` : `<p class="form-hint">Product details are unavailable for this older purchase.</p>`}</div></td></tr>`).join("") : '<tr><td colspan="9" class="empty">No purchases recorded yet.</td></tr>';
     const movementRows = movements.length ? movements.map(m => `<tr><td>${esc(m.at)}</td><td>${esc(m.product_name)}</td><td>${esc(m.kind)}</td><td>${Number(m.quantity_change) > 0 ? "+" : ""}${Number(m.quantity_change)} ${esc(m.unit)}</td><td>${Number(m.quantity_after)} ${esc(m.unit)}</td><td>${esc(m.reference || "—")}</td><td>${esc(m.note || "—")}</td><td>${esc(m.actor || "")}</td></tr>`).join("") : '<tr><td colspan="8" class="empty">New stock movements will appear here.</td></tr>';
     const paymentRows = payments.length ? payments.map(p => `<tr data-history-supplier="${p.supplier_id}"><td><input type="checkbox" aria-label="Select supplier payment ${p.id}" data-select-payment="${p.id}"></td><td>${esc(p.date)}</td><td>${esc(p.supplier_name)}</td><td>${esc(p.method)}</td><td><b>${supplierMoney(p.amount)}</b></td><td>${esc(p.note || "—")}</td><td>${esc(p.received_by || "")}</td><td><button type="button" class="user-action" data-print-payment="${p.id}">Print</button>${canEdit ? `<button type="button" class="user-action" data-edit-payment="${p.id}">Edit</button>` : ""}</td></tr>`).join("") : '<tr><td colspan="8" class="empty">No supplier payments recorded yet.</td></tr>';
     supplierModal("Suppliers & purchases", `<div class="supplier-actions">${canRecord ? `<button type="button" class="button secondary" id="supplier-add">＋ Add supplier</button><button type="button" class="button primary" id="purchase-add" ${suppliers.length ? "" : "disabled"}>＋ Record purchase</button>` : ""}</div>
@@ -3352,8 +4079,8 @@ async function openSupplierHub() {
     dialog.querySelectorAll("[data-print-payment]").forEach(button => button.onclick = () => printRecord("payment", payments.filter(p => p.id === Number(button.dataset.printPayment))));
     dialog.querySelectorAll("[data-edit-purchase]").forEach(button => button.onclick = () => {
       const purchase = purchases.find(p => p.id === Number(button.dataset.editPurchase));
-      if (!(data.shopType === "pharmacy" && featureEnabled("pharmacy")) && purchase.items?.length && purchase.items.every(item => item.productId && data.products.some(product => product.id === item.productId))) return openPurchaseEntry(suppliers, purchase);
-      supplierModal(`Edit purchase P-${String(purchase.id).padStart(8, "0")}`, `<label>Purchase date<input name="date" type="date" value="${esc(purchase.date)}" required></label><label>Invoice / reference<input name="reference" maxlength="100" value="${esc(purchase.reference || "")}"></label><label>Note<input name="note" maxlength="500" value="${esc(purchase.note || "")}"></label><p class="form-hint">${data.shopType === "pharmacy" && featureEnabled("pharmacy") ? "The Pharmacy receipt and its batch/expiry history are preserved. Only date, reference, and note can be corrected here." : "The original item was removed or cannot be matched, so only purchase details can be edited."}</p>`, async form => {
+      if (data.shopType !== "pharmacy" && purchase.items?.length && purchase.items.every(item => item.productId && data.products.some(product => product.id === item.productId))) return openPurchaseEntry(suppliers, purchase);
+      supplierModal(`Edit purchase P-${String(purchase.id).padStart(8, "0")}`, `<label>Purchase date<input name="date" type="date" value="${esc(purchase.date)}" required></label><label>Invoice / reference<input name="reference" maxlength="100" value="${esc(purchase.reference || "")}"></label><label>Note<input name="note" maxlength="500" value="${esc(purchase.note || "")}"></label><p class="form-hint">${data.shopType === "pharmacy" ? "The Pharmacy receipt and its batch/expiry history are preserved. Only date, reference, and note can be corrected here." : "The original item was removed or cannot be matched, so only purchase details can be edited."}</p>`, async form => {
         await api(`/api/purchases/${purchase.id}`, { method: "PATCH", body: JSON.stringify({ date: form.get("date"), reference: form.get("reference"), note: form.get("note") }) });
         toast("Purchase details updated"); await openSupplierHub(); return false;
       });
@@ -3372,7 +4099,7 @@ async function openSupplierHub() {
 function openPurchaseEntry(suppliers, editing = null) {
   const supplierOptions = suppliers.map(s => `<option value="${s.id}">${esc(s.name)} · due ${supplierMoney(s.balance)}</option>`).join("");
   const productOptions = (selectedId = 0) => data.products.map(p => `<option value="${p.id}" data-cost="${Number(p.cost)}" ${p.id === Number(selectedId) ? "selected" : ""}>${esc(productLabel(p))} · ${esc(p.unit || "piece")} · stock ${Number(p.qty)}</option>`).join("");
-  const row = (item = {}) => `<tr><td><select class="purchase-product" required><option value="">Select product</option>${productOptions(item.productId)}</select>${data.shopType === "pharmacy" && featureEnabled("pharmacy") ? `<div class="pharmacy-purchase-batch"><label>Batch / lot<input class="purchase-batch" maxlength="80" value="${esc(item.batchNumber || "")}" required></label><label>Expiry<input class="purchase-expiry" type="date" value="${esc(item.expiryDate || "")}" required></label></div>` : ""}</td><td><input class="purchase-qty" type="number" min="0.001" step="any" value="${Number(item.qty ?? 1)}" required></td><td><input class="purchase-cost" type="number" min="0" step="0.01" value="${Number(item.cost ?? 0)}" required></td><td class="purchase-line-total">৳0.00</td><td><button type="button" class="user-action danger purchase-remove">Remove</button></td></tr>`;
+  const row = (item = {}) => `<tr><td><select class="purchase-product" required><option value="">Select product</option>${productOptions(item.productId)}</select>${data.shopType === "pharmacy" ? `<div class="pharmacy-purchase-batch"><label>Batch / lot<input class="purchase-batch" maxlength="80" value="${esc(item.batchNumber || "")}" required></label><label>Expiry<input class="purchase-expiry" type="date" value="${esc(item.expiryDate || "")}" required></label></div>` : ""}</td><td>${data.shopType === "pharmacy" ? `<select class="purchase-unit" aria-label="Purchase unit" required></select>` : ""}<input class="purchase-qty" type="number" min="0.000001" step="any" value="${Number(item.qty ?? 1)}" required>${data.shopType === "pharmacy" ? `<small class="form-hint purchase-base-qty"></small>` : ""}</td><td><input class="purchase-cost" type="number" min="0" step="any" value="${Number(item.cost ?? 0)}" required></td><td class="purchase-line-total">৳0.00</td><td><button type="button" class="user-action danger purchase-remove">Remove</button></td></tr>`;
   const lines = editing?.items?.length ? editing.items : [{}];
   const supplierField = editing
     ? `<label>Supplier<input value="${esc(editing.supplier_name)}" disabled></label>`
@@ -3380,10 +4107,15 @@ function openPurchaseEntry(suppliers, editing = null) {
   const paymentFields = editing
     ? `<p class="form-hint">Existing payments are kept in payment history. Stock is adjusted for item changes, and the item's current average cost is recalculated where enough stock remains.</p>`
     : `<div class="form-row supplier-purchase-payment"><label>Paid now (৳)<input name="paid" type="number" min="0" step="0.01" value="0" required></label><label>Payment method<select name="method"><option>Cash</option><option>bKash</option><option>Nagad</option><option>Bank</option><option>Other</option></select></label></div>`;
-  supplierModal(editing ? `Edit purchase P-${String(editing.id).padStart(8, "0")}` : "Record supplier purchase", `${supplierField}<div class="form-row"><label>Purchase date<input name="date" type="date" value="${esc(editing?.date || supplierDate())}" required></label><label>Invoice / reference<input name="reference" maxlength="100" value="${esc(editing?.reference || "")}"></label></div><div class="table-scroll purchase-lines"><table><thead><tr><th>Product ${data.shopType === "pharmacy" && featureEnabled("pharmacy") ? "· Batch / expiry" : ""}</th><th>Quantity</th><th>Cost per unit (৳)</th><th>Line total</th><th></th></tr></thead><tbody id="purchase-lines">${lines.map(row).join("")}</tbody></table></div><button type="button" class="button secondary" id="purchase-line-add">＋ Add item</button>${paymentFields}<label>Note<input name="note" maxlength="500" value="${esc(editing?.note || "")}"></label><div class="bill-total"><span>Purchase total <b id="purchase-total">৳0.00</b></span>${editing ? "" : `<span>Due added <b id="purchase-due">৳0.00</b></span>`}</div>`, async form => {
-    const items = [...document.querySelectorAll("#purchase-lines tr")].map(tr => ({ productId: Number(tr.querySelector(".purchase-product").value), qty: Number(tr.querySelector(".purchase-qty").value), cost: Number(tr.querySelector(".purchase-cost").value), batchNumber: tr.querySelector(".purchase-batch")?.value.trim() || "", expiryDate: tr.querySelector(".purchase-expiry")?.value || "" }));
+  supplierModal(editing ? `Edit purchase P-${String(editing.id).padStart(8, "0")}` : "Record supplier purchase", `${supplierField}<div class="form-row"><label>Purchase date<input name="date" type="date" value="${esc(editing?.date || supplierDate())}" required></label><label>Invoice / reference<input name="reference" maxlength="100" value="${esc(editing?.reference || "")}"></label></div><div class="table-scroll purchase-lines"><table><thead><tr><th>Product ${data.shopType === "pharmacy" ? "· Batch / expiry" : ""}</th><th>${data.shopType === "pharmacy" ? "Purchase unit / quantity" : "Quantity"}</th><th>${data.shopType === "pharmacy" ? "Price per selected unit (৳)" : "Cost per unit (৳)"}</th><th>Line total</th><th></th></tr></thead><tbody id="purchase-lines">${lines.map(row).join("")}</tbody></table></div><button type="button" class="button secondary" id="purchase-line-add">＋ Add item</button>${paymentFields}<label>Note<input name="note" maxlength="500" value="${esc(editing?.note || "")}"></label><div class="bill-total"><span>Purchase total <b id="purchase-total">৳0.00</b></span>${editing ? "" : `<span>Due added <b id="purchase-due">৳0.00</b></span>`}</div>`, async form => {
+    const items = [...document.querySelectorAll("#purchase-lines tr")].map(tr => {
+      const productId = Number(tr.querySelector(".purchase-product").value), product = data.products.find(item => Number(item.id) === productId);
+      const purchaseQuantity = Number(tr.querySelector(".purchase-qty").value), purchasePrice = Number(tr.querySelector(".purchase-cost").value), purchaseUnit = tr.querySelector(".purchase-unit")?.value || "";
+      const selected = data.shopType === "pharmacy" && product ? medicinePurchaseUnits(product).find(unit => unit.name === purchaseUnit) : null, factor = Number(selected?.factor || 1);
+      return { productId, qty: selected ? purchaseQuantity * factor : purchaseQuantity, cost: selected ? purchasePrice / factor : purchasePrice, purchaseUnit, purchaseQuantity, purchasePrice, batchNumber: tr.querySelector(".purchase-batch")?.value.trim() || "", expiryDate: tr.querySelector(".purchase-expiry")?.value || "" };
+    });
     if (items.some(i => !i.productId || !(i.qty > 0) || !(i.cost >= 0))) throw new Error("Choose each product and enter a valid quantity and cost.");
-    if (data.shopType === "pharmacy" && featureEnabled("pharmacy") && items.some(i => !i.batchNumber || !i.expiryDate)) throw new Error("Every Pharmacy purchase needs a batch number and expiry date.");
+    if (data.shopType === "pharmacy" && items.some(i => !i.batchNumber || !i.expiryDate)) throw new Error("Every Pharmacy purchase needs a batch number and expiry date.");
     const payload = { date: form.get("date"), reference: form.get("reference"), note: form.get("note"), items };
     const result = await api(editing ? `/api/purchases/${editing.id}` : "/api/purchases", { method: editing ? "PATCH" : "POST", body: JSON.stringify(editing ? payload : { ...payload, supplierId: Number(form.get("supplierId")), paid: Number(form.get("paid")), method: form.get("method") }) });
     data = await api("/api/state"); render(); toast(editing ? "Purchase and stock updated" : `Purchase P-${String(result.id).padStart(8, "0")} saved; stock updated`); await openSupplierHub(); return false;
@@ -3393,16 +4125,37 @@ function openPurchaseEntry(suppliers, editing = null) {
     let total = 0;
     document.querySelectorAll("#purchase-lines tr").forEach(tr => {
       const qty = Number(tr.querySelector(".purchase-qty").value) || 0, cost = Number(tr.querySelector(".purchase-cost").value) || 0, line = qty * cost;
+      if (data.shopType === "pharmacy") {
+        const product = data.products.find(item => Number(item.id) === Number(tr.querySelector(".purchase-product").value));
+        const selected = product ? medicinePurchaseUnits(product).find(unit => unit.name === tr.querySelector(".purchase-unit").value) : null;
+        tr.querySelector(".purchase-base-qty").textContent = product && selected ? `= ${+(qty * Number(selected.factor)).toFixed(6)} ${product.unit} · ${supplierMoney(cost / Number(selected.factor))}/${product.unit}` : "Choose a medicine and purchase unit";
+      }
       tr.querySelector(".purchase-line-total").textContent = supplierMoney(line); total += line;
     });
     const paid = Number($("[name=paid]")?.value) || 0;
     $("#purchase-total").textContent = supplierMoney(total);
     if ($("#purchase-due")) $("#purchase-due").textContent = supplierMoney(Math.max(0, total - paid));
   };
+  const syncPurchaseRow = (tr, rebuildUnits = false) => {
+    const product = data.products.find(item => Number(item.id) === Number(tr.querySelector(".purchase-product").value));
+    if (data.shopType !== "pharmacy") {
+      if (product && rebuildUnits) tr.querySelector(".purchase-cost").value = Number(product.cost || 0);
+      return updateTotals();
+    }
+    if (!product) return updateTotals();
+    const select = tr.querySelector(".purchase-unit"), previous = select.value, units = medicinePurchaseUnits(product);
+    if (rebuildUnits || !select.options.length) select.innerHTML = units.map(unit => `<option value="${esc(unit.name)}">${esc(unit.name)} = ${unit.factor} ${esc(product.unit)}</option>`).join("");
+    if (!units.some(unit => unit.name === previous)) select.value = units.at(-1).name;
+    const selected = units.find(unit => unit.name === select.value) || units[0];
+    select.value = selected.name;
+    tr.querySelector(".purchase-cost").value = Number((Number(product.cost || 0) * Number(selected.factor)).toFixed(4));
+    updateTotals();
+  };
   $("#purchase-line-add").onclick = () => { $("#purchase-lines").insertAdjacentHTML("beforeend", row()); updateTotals(); };
   $("#purchase-lines").oninput = event => { if (event.target.matches(".purchase-qty,.purchase-cost")) updateTotals(); };
   $("#purchase-lines").onchange = event => {
-    if (event.target.matches(".purchase-product")) { const cost = event.target.selectedOptions[0]?.dataset.cost; if (cost !== undefined) event.target.closest("tr").querySelector(".purchase-cost").value = cost; updateTotals(); }
+    if (event.target.matches(".purchase-product")) syncPurchaseRow(event.target.closest("tr"), true);
+    if (event.target.matches(".purchase-unit")) syncPurchaseRow(event.target.closest("tr"));
   };
   $("#purchase-lines").onclick = event => { if (event.target.closest(".purchase-remove")) { if (document.querySelectorAll("#purchase-lines tr").length > 1) event.target.closest("tr").remove(); else toast("A purchase needs at least one item."); updateTotals(); } };
   const paidInput = $("[name=paid]");
@@ -3410,7 +4163,7 @@ function openPurchaseEntry(suppliers, editing = null) {
   updateTotals();
 }
 async function openPharmacyBatchManager() {
-  if (data.shopType !== "pharmacy" || !featureEnabled("pharmacy")) return toast("Pharmacy batches require Pharmacy access.");
+  if (data.shopType !== "pharmacy") return toast("Pharmacy batches are only available when the shop type is Pharmacy.");
   if (!data.permissions?.inventory) return toast("Inventory access is required to manage medicine batches.");
   try {
     data = await api("/api/state");
@@ -3454,6 +4207,7 @@ async function openPharmacyBatchManager() {
     search.addEventListener("input", () => update(true)); filter.addEventListener("change", () => update(true));
     $("#batch-prev").onclick = () => { page--; update(); }; $("#batch-next").onclick = () => { page++; update(); };
     $("#batch-print").onclick = () => printSupplierRows(`Medicine expiry report — ${filter.selectedOptions[0].textContent}${search.value.trim() ? ` — search: ${search.value.trim()}` : ""}`, ["Medicine","Generic","Batch","Expiry","Remaining","Status"], filtered.map(batch => [batch.product_name,batch.generic_name || "",batch.batch_number,batch.expiry_date || "Unknown",`${batch.quantity_remaining} ${batch.product_unit || "piece"}`,expiryState(batch)]));
+    $("#cancel-modal").textContent = t("Close");
     $("#pharmacy-receive-batch").onclick = () => { closeModal(); openPharmacyReceiveBatch(); };
     rows.onclick = event => {
       const button = event.target.closest("[data-edit-pharmacy-batch], [data-adjust-pharmacy-batch]"); if (!button) return;
@@ -3474,16 +4228,51 @@ function openPharmacyAdjustBatch(batch) {
   });
 }
 
-function openPharmacyReceiveBatch() {
+function openPharmacyReceiveBatch(selectedProduct = null) {
   const products = (data.products || []).filter(product => product.id);
   if (!products.length) return toast("Add a medicine before receiving stock.");
-  const options = products.map(product => `<option value="${product.id}">${esc(product.name)} · ${esc(product.unit || "piece")} · current ${Number(product.qty || 0)}</option>`).join("");
-  openModal("Receive medicine batch", `<label>Medicine<select name="productId" required><option value="">Choose medicine</option>${options}</select></label><div class="form-row"><label>Batch / lot number<input name="batchNumber" maxlength="80" required placeholder="As printed on the pack"></label><label>Expiry date<input name="expiryDate" type="date" required></label></div><div class="form-row"><label>Quantity received<input name="quantity" type="number" min="0.001" step="any" required></label><label>Unit purchase cost (${esc(currencySymbol())})<input name="unitCost" type="number" min="0" step="0.01" required></label></div><p class="form-hint">Use the exact batch number and expiry printed by the manufacturer. For repeated receipts of the same batch, use the same batch number and expiry.</p>`, async form => {
-    const result = await api("/api/pharmacy/batches", { method: "POST", body: JSON.stringify({ productId: Number(form.get("productId")), batchNumber: form.get("batchNumber").trim(), expiryDate: form.get("expiryDate"), quantity: Number(form.get("quantity")), unitCost: Number(form.get("unitCost")) }) });
-    data = result;
-    render();
-    toast("Medicine batch received; stock and expiry are recorded.");
+  const selectedId = Number(selectedProduct?.id || 0);
+  const options = products.map(product => `<option value="${product.id}" ${Number(product.id) === selectedId ? "selected" : ""}>${esc(product.name)} · ${esc(product.unit || "piece")} · current ${Number(product.qty || 0)}</option>`).join("");
+  openModal(selectedProduct ? `Update quantity · ${selectedProduct.name}` : "Receive medicine batch", `<p class="pharmacy-simple-intro">Receive new stock from the supplier pack and invoice. Existing batches remain unchanged.</p><label>Medicine<select name="productId" required><option value="">Choose medicine</option>${options}</select></label><div class="form-row"><label>Batch number (on pack)<input name="batchNumber" maxlength="80" required placeholder="As printed on the pack"></label><label>Expiry date (on pack)<input name="expiryDate" type="date" required></label></div><div class="form-row"><label>Package you bought<select name="purchaseUnit" required></select></label><label>Quantity purchased<input name="quantity" type="number" min="0.000001" step="any" value="1" required></label><label>Invoice price per selected package (${esc(currencySymbol())})<input name="purchasePrice" type="number" min="0" step="any" value="0" required></label></div><div class="pharmacy-purchase-calculator" aria-live="polite"><div><small>Stock to add</small><b id="receive-base-qty">0</b></div><div><small>Total purchase cost</small><b id="receive-total-cost">${money(0)}</b></div><div><small>Cost per base unit</small><b id="receive-base-cost">${money(0)}</b></div></div><p class="form-hint">Check the pack and invoice. Example: 2 boxes × 12 tablets = 24 tablets added. ShopDesk calculates stock and cost automatically.</p>`, async form => {
+    const product = products.find(item => Number(item.id) === Number(form.get("productId")));
+    if (!product) throw new Error("Choose a medicine before receiving the batch.");
+    const selected = medicinePurchaseUnits(product).find(unit => unit.name === form.get("purchaseUnit"));
+    if (!selected) throw new Error("Choose a configured purchase unit.");
+    const quantity = Number(form.get("quantity")), purchasePrice = Number(form.get("purchasePrice")), baseQuantity = quantity * Number(selected.factor), unitCost = purchasePrice / Number(selected.factor);
+    const result = await api("/api/pharmacy/batches", { method: "POST", body: JSON.stringify({ productId: Number(form.get("productId")), batchNumber: form.get("batchNumber").trim(), expiryDate: form.get("expiryDate"), quantity: baseQuantity, unitCost, purchaseUnit: selected?.name || product.unit, purchaseQuantity: quantity, purchasePrice }) });
+    data = result; render(); toast(`Medicine batch received: ${+baseQuantity.toFixed(6)} ${product.unit} added to stock.`);
   });
+  const productSelect = $("#modal-fields [name=productId]"), unitSelect = $("#modal-fields [name=purchaseUnit]"), priceInput = $("#modal-fields [name=purchasePrice]");
+  const update = () => {
+    const product = products.find(item => Number(item.id) === Number(productSelect.value)), selected = medicinePurchaseUnits(product || { unit: "unit" }).find(unit => unit.name === unitSelect.value) || { factor: 1, name: "unit" };
+    const quantity = Number($("#modal-fields [name=quantity]").value) || 0, price = Number(priceInput.value) || 0, factor = Number(selected.factor || 1), base = product?.unit || "base unit";
+    $("#receive-base-qty").textContent = `${+(quantity * factor).toFixed(6)} ${base}`;
+    $("#receive-total-cost").textContent = money(quantity * price);
+    $("#receive-base-cost").textContent = `${money(factor > 0 ? price / factor : 0)} / ${base}`;
+  };
+  productSelect.onchange = () => {
+    const product = products.find(item => Number(item.id) === Number(productSelect.value));
+    if (!product) { unitSelect.innerHTML = ""; priceInput.value = 0; update(); return; }
+    const units = medicinePurchaseUnits(product);
+    unitSelect.innerHTML = units.map(unit => `<option value="${esc(unit.name)}">${esc(unit.name)} = ${unit.factor} ${esc(product.unit)}</option>`).join("");
+    unitSelect.value = units.at(-1).name;
+    priceInput.value = Number((Number(product.cost || 0) * Number(units.at(-1).factor)).toFixed(4));
+    update();
+  };
+  unitSelect.onchange = () => {
+    const product = products.find(item => Number(item.id) === Number(productSelect.value));
+    if (!product) { update(); return; }
+    const selected = medicinePurchaseUnits(product).find(unit => unit.name === unitSelect.value);
+    if (selected) priceInput.value = Number((Number(product.cost || 0) * Number(selected.factor)).toFixed(4));
+    update();
+  };
+  $("#modal-fields [name=quantity]").oninput = update;
+  priceInput.oninput = update;
+  $("#submit-modal").textContent = "Receive stock";
+  if (selectedId) {
+    productSelect.value = String(selectedId);
+    productSelect.onchange();
+  }
 }
 function openPharmacyEditBatch(batch) {
   openModal("Correct medicine batch / expiry", `<p><b>${esc(batch.product_name)}</b></p><label>Batch / lot number<input name="batchNumber" maxlength="80" value="${esc(batch.batch_number)}" required></label><label>Expiry date<input name="expiryDate" type="date" value="${esc(batch.expiry_date || "")}" required></label><p class="form-hint">Confirm the value against the manufacturer's packaging before saving. Unknown-expiry legacy stock stays unavailable until verified.</p>`, async form => {
@@ -3494,6 +4283,668 @@ function openPharmacyEditBatch(batch) {
   });
 }
 
+function medexSearchUrl(query = "") {
+  const q = String(query || "").trim();
+  return q ? `https://medex.com.bd/search?search=${encodeURIComponent(q)}` : "https://medex.com.bd/search";
+}
+
+function mountMedexLookupBox(container, { initialQuery = "", onAddToBill = null, onFillProductForm = null } = {}) {
+  if (!container) return null;
+  container.innerHTML = `<div class="medex-lookup-root">
+    <div class="medex-search-bar">
+      <input type="search" class="medex-query-input" autocomplete="off" placeholder="Search medicine brand or generic name (e.g. Napa, Sergel 20, Paracetamol)..." value="${esc(initialQuery)}">
+      <button type="button" class="button primary medex-search-btn">Search medicine info</button>
+      <a class="button secondary medex-external-btn" href="${esc(medexSearchUrl(initialQuery))}" target="_blank" rel="noopener noreferrer">Open medex.com.bd/search ↗</a>
+    </div>
+    <p class="form-hint">Check medicine details, generic name, strength, dosage form, manufacturer, unit price, indications, and shop stock or same-generic alternatives.</p>
+    <div class="medex-local-section medex-section"></div>
+    <div class="medex-remote-section medex-section"></div>
+  </div>`;
+  translateDom(container);
+
+  const input = container.querySelector(".medex-query-input");
+  const searchBtn = container.querySelector(".medex-search-btn");
+  const externalBtn = container.querySelector(".medex-external-btn");
+  const localSection = container.querySelector(".medex-local-section");
+  const remoteSection = container.querySelector(".medex-remote-section");
+  let lastRemoteResults = [];
+  let extraGenerics = [];
+
+  const updateExternalHref = () => {
+    if (externalBtn) externalBtn.href = medexSearchUrl(input?.value || "");
+  };
+
+  const renderShopCard = (item, isAlternative = false) => {
+    const sellable = productSellableQty(item);
+    const totalQty = Number(item.qty || 0);
+    const statusClass = sellable === 0 ? "out" : sellable <= Number(item.min || 0) ? "low" : "";
+    const statusText = sellable === 0 ? (totalQty > 0 ? "No safe-to-sell stock" : "Out of stock") : sellable <= Number(item.min || 0) ? "Low stock" : "In stock";
+    const meta = [
+      item.generic_name ? `Generic: ${item.generic_name}` : "",
+      item.strength ? `Strength: ${item.strength}` : "",
+      item.dosage_form ? `Form: ${item.dosage_form}` : "",
+      item.manufacturer ? `Maker: ${item.manufacturer}` : ""
+    ].filter(Boolean).join(" · ");
+    return `<div class="medex-card">
+      <div class="medex-card-head">
+        <div>
+          <span class="medex-card-title">${esc(item.name)}</span>
+          ${item.dosage_form ? `<span class="medex-badge">${esc(item.dosage_form)}</span>` : ""}
+          ${isAlternative ? `<span class="medex-badge">Same generic in shop</span>` : ""}
+          ${meta ? `<div class="medex-meta">${esc(meta)}</div>` : ""}
+        </div>
+        <div>
+          <b>${money(item.price)}</b> / ${esc(item.unit || "piece")} · <span class="status ${statusClass}">${esc(statusText)} (${sellable} sellable)</span>
+        </div>
+      </div>
+      <div class="medex-actions">
+        <button type="button" class="user-action" data-medex-check-brand="${esc(item.name)}">Check on MedEx</button>
+        ${item.generic_name ? `<button type="button" class="user-action" data-medex-check-generic="${esc(item.generic_name)}">Same generic (${esc(item.generic_name)})</button>` : ""}
+        ${onAddToBill && sellable > 0 ? `<button type="button" class="user-action" data-medex-add-bill="${item.id}">＋ Add to bill</button>` : ""}
+        <a class="user-action" href="${esc(medexSearchUrl(item.name))}" target="_blank" rel="noopener noreferrer">Open MedEx ↗</a>
+      </div>
+    </div>`;
+  };
+
+  const renderLocal = () => {
+    const rawQuery = (input?.value || "").trim();
+    const q = rawQuery.toLocaleLowerCase();
+    const allProducts = data.products || [];
+    const directMatches = q
+      ? allProducts.filter(item => [item.name, item.generic_name, item.strength, item.dosage_form, item.manufacturer, item.sku, item.barcode].some(v => String(v || "").toLocaleLowerCase().includes(q)))
+      : allProducts.slice(0, 8);
+
+    const directIds = new Set(directMatches.map(item => item.id));
+    const matchedGenerics = new Set([
+      ...directMatches.map(item => String(item.generic_name || "").trim().toLocaleLowerCase()).filter(Boolean),
+      ...extraGenerics.map(g => String(g || "").trim().toLocaleLowerCase()).filter(Boolean)
+    ]);
+
+    const genericAlternatives = matchedGenerics.size
+      ? allProducts.filter(item => !directIds.has(item.id) && matchedGenerics.has(String(item.generic_name || "").trim().toLocaleLowerCase()))
+      : [];
+
+    const combined = [
+      ...directMatches.map(item => renderShopCard(item, false)),
+      ...genericAlternatives.map(item => renderShopCard(item, true))
+    ];
+
+    localSection.innerHTML = `<h3><span>In your pharmacy stock${q ? ` (${directMatches.length} match${directMatches.length === 1 ? "" : "es"}${genericAlternatives.length ? ` + ${genericAlternatives.length} same-generic alternative${genericAlternatives.length === 1 ? "" : "s"}` : ""})` : ""}</span><small class="form-hint">${allProducts.length} total medicines in inventory</small></h3>
+      ${combined.length ? `<div class="medex-list">${combined.join("")}</div>` : `<div class="empty">No matching medicine found in your shop inventory${q ? ` for “${esc(rawQuery)}”` : ""}. Check the MedEx directory below.</div>`}`;
+    translateDom(localSection);
+  };
+
+  const renderRemotePlaceholder = () => {
+    const q = (input?.value || "").trim();
+    remoteSection.innerHTML = `<h3><span>MedEx Bangladesh directory (medex.com.bd/search)</span></h3>
+      <div class="empty">Type a medicine brand or generic name above and click <b>Search medicine info</b>, or <a href="${esc(medexSearchUrl(q))}" target="_blank" rel="noopener noreferrer"><b>open medex.com.bd/search in a new tab ↗</b></a>.</div>`;
+    translateDom(remoteSection);
+  };
+
+  const runSearch = async customQuery => {
+    if (typeof customQuery === "string" && input) input.value = customQuery;
+    updateExternalHref();
+    const q = (input?.value || "").trim();
+    extraGenerics = [];
+    renderLocal();
+    if (!q) {
+      renderRemotePlaceholder();
+      return;
+    }
+    remoteSection.innerHTML = `<h3><span>MedEx Bangladesh directory (medex.com.bd/search)</span></h3><div class="empty">Searching MedEx for “${esc(q)}”…</div>`;
+    try {
+      const result = await api(`/api/pharmacy/medex?q=${encodeURIComponent(q)}`);
+      lastRemoteResults = result.results || [];
+      extraGenerics = lastRemoteResults.map(item => item.genericName).filter(Boolean);
+      renderLocal();
+      if (!lastRemoteResults.length) {
+        remoteSection.innerHTML = `<h3><span>MedEx Bangladesh directory (medex.com.bd/search)</span><a class="user-action" href="${esc(result.searchUrl || medexSearchUrl(q))}" target="_blank" rel="noopener noreferrer">Open on medex.com.bd ↗</a></h3>
+          <div class="medex-card">
+            <div class="medex-meta">${esc(result.message || `Click below to view “${q}” directly on MedEx.com.bd.`)}</div>
+            <div class="medex-actions">
+              <a class="button primary" href="${esc(result.searchUrl || medexSearchUrl(q))}" target="_blank" rel="noopener noreferrer">Search “${esc(q)}” on medex.com.bd/search ↗</a>
+            </div>
+          </div>`;
+        translateDom(remoteSection);
+        return;
+      }
+      const cards = lastRemoteResults.map((item, idx) => {
+        const meta = [
+          item.genericName ? `Generic: ${item.genericName}` : "",
+          item.strength ? `Strength: ${item.strength}` : "",
+          item.manufacturer ? `Company: ${item.manufacturer}` : "",
+          item.priceText ? item.priceText : ""
+        ].filter(Boolean).join(" · ");
+        return `<div class="medex-card">
+          <div class="medex-card-head">
+            <div>
+              <span class="medex-card-title">${esc(item.name)}</span>
+              ${item.dosageForm ? `<span class="medex-badge">${esc(item.dosageForm)}</span>` : ""}
+              ${item.strength ? `<span class="medex-badge">${esc(item.strength)}</span>` : ""}
+              ${meta ? `<div class="medex-meta">${esc(meta)}</div>` : ""}
+            </div>
+          </div>
+          <div class="medex-actions">
+            <button type="button" class="user-action" data-medex-detail-idx="${idx}">Check medicine info &amp; price</button>
+            ${item.genericName ? `<button type="button" class="user-action" data-medex-check-generic="${esc(item.genericName)}">Find generic in shop (${esc(item.genericName)})</button>` : ""}
+            ${onFillProductForm ? `<button type="button" class="user-action" data-medex-fill-idx="${idx}">Fill product fields</button>` : ""}
+            <a class="user-action" href="${esc(item.url || medexSearchUrl(item.name))}" target="_blank" rel="noopener noreferrer">Open on MedEx ↗</a>
+          </div>
+          <div class="medex-details-box hidden" data-medex-detail-box="${idx}"></div>
+        </div>`;
+      }).join("");
+      remoteSection.innerHTML = `<h3><span>MedEx Bangladesh results (${lastRemoteResults.length})</span><a class="user-action" href="${esc(result.searchUrl || medexSearchUrl(q))}" target="_blank" rel="noopener noreferrer">View all on medex.com.bd/search ↗</a></h3>
+        <div class="medex-list">${cards}</div>`;
+      translateDom(remoteSection);
+    } catch (error) {
+      remoteSection.innerHTML = `<h3><span>MedEx Bangladesh directory (medex.com.bd/search)</span></h3>
+        <div class="medex-card">
+          <div class="medex-meta">${esc(error.message || "Could not load MedEx results from the server.")}</div>
+          <div class="medex-actions">
+            <a class="button primary" href="${esc(medexSearchUrl(q))}" target="_blank" rel="noopener noreferrer">Open “${esc(q)}” on medex.com.bd/search ↗</a>
+          </div>
+        </div>`;
+    }
+  };
+
+  let searchDebounce = null;
+  input?.addEventListener("input", () => {
+    updateExternalHref();
+    renderLocal();
+    clearTimeout(searchDebounce);
+    const val = (input?.value || "").trim();
+    if (val.length >= 2) {
+      searchDebounce = setTimeout(() => runSearch(), 180);
+    } else if (!val) {
+      extraGenerics = [];
+      renderLocal();
+      renderRemotePlaceholder();
+    }
+  });
+  input?.addEventListener("keydown", event => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      runSearch();
+    }
+  });
+  searchBtn?.addEventListener("click", () => runSearch());
+
+  container.addEventListener("click", async event => {
+    const brandBtn = event.target.closest("[data-medex-check-brand]");
+    if (brandBtn) {
+      runSearch(brandBtn.dataset.medexCheckBrand || "");
+      return;
+    }
+    const genericBtn = event.target.closest("[data-medex-check-generic]");
+    if (genericBtn) {
+      runSearch(genericBtn.dataset.medexCheckGeneric || "");
+      return;
+    }
+    const addBillBtn = event.target.closest("[data-medex-add-bill]");
+    if (addBillBtn && onAddToBill) {
+      const product = (data.products || []).find(p => Number(p.id) === Number(addBillBtn.dataset.medexAddBill));
+      if (product) onAddToBill(product);
+      return;
+    }
+    const fillBtn = event.target.closest("[data-medex-fill-idx]");
+    if (fillBtn && onFillProductForm) {
+      const item = lastRemoteResults[Number(fillBtn.dataset.medexFillIdx)];
+      if (item) onFillProductForm(item);
+      return;
+    }
+    const detailBtn = event.target.closest("[data-medex-detail-idx]");
+    if (detailBtn) {
+      const idx = Number(detailBtn.dataset.medexDetailIdx);
+      const item = lastRemoteResults[idx];
+      const box = container.querySelector(`[data-medex-detail-box="${idx}"]`);
+      if (!item || !box) return;
+      if (!box.classList.contains("hidden") && box.dataset.loaded === "1") {
+        box.classList.add("hidden");
+        return;
+      }
+      box.classList.remove("hidden");
+      box.innerHTML = `<span>Loading medicine info from MedEx…</span>`;
+      try {
+        const res = await api(`/api/pharmacy/medex/details?url=${encodeURIComponent(item.url)}`);
+        const d = res.details;
+        if (!res.ok || !d) {
+          box.innerHTML = `<div class="medex-meta">${esc(res.message || "Detailed view could not be loaded inside Shop Desk.")}</div>
+            <div class="medex-actions"><a class="user-action" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Open medicine page on MedEx.com.bd ↗</a></div>`;
+          return;
+        }
+        if (d.genericName && !item.genericName) item.genericName = d.genericName;
+        if (d.strength && !item.strength) item.strength = d.strength;
+        if (d.dosageForm && !item.dosageForm) item.dosageForm = d.dosageForm;
+        if (d.manufacturer && !item.manufacturer) item.manufacturer = d.manufacturer;
+        if (d.unitPrice != null && item.unitPrice == null) item.unitPrice = d.unitPrice;
+        box.dataset.loaded = "1";
+        const summaryLines = [
+          d.genericName ? `<b>Generic:</b> ${esc(d.genericName)}` : "",
+          d.strength ? `<b>Strength:</b> ${esc(d.strength)}` : "",
+          d.dosageForm ? `<b>Form:</b> ${esc(d.dosageForm)}` : "",
+          d.manufacturer ? `<b>Manufacturer:</b> ${esc(d.manufacturer)}` : "",
+          d.pricing ? `<b>Price / Pack:</b> ${esc(d.pricing)}` : ""
+        ].filter(Boolean).join(" · ");
+        const sectionHtml = (d.sections || []).map(sec => `<div class="medex-details-section"><strong>${esc(sec.title)}</strong><p>${esc(sec.content)}</p></div>`).join("");
+        box.innerHTML = `${summaryLines ? `<div>${summaryLines}</div>` : ""}
+          ${sectionHtml || `<div class="medex-meta">Open the MedEx page below to view the complete monograph.</div>`}
+          <div class="medex-actions">
+            ${onFillProductForm ? `<button type="button" class="user-action" data-medex-fill-idx="${idx}">Use these details in product form</button>` : ""}
+            <a class="user-action" href="${esc(d.url || item.url)}" target="_blank" rel="noopener noreferrer">View full page on MedEx.com.bd ↗</a>
+          </div>`;
+      } catch (error) {
+        box.innerHTML = `<div class="medex-meta">${esc(error.message)}</div><div class="medex-actions"><a class="user-action" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">Open on MedEx.com.bd ↗</a></div>`;
+      }
+    }
+  });
+
+  renderLocal();
+  if (initialQuery.trim()) runSearch(initialQuery.trim());
+  else renderRemotePlaceholder();
+
+  return {
+    setQueryAndSearch: q => runSearch(q),
+    focusInput: () => input?.focus()
+  };
+}
+
+function attachPharmacyFormMedexEvents() {
+  const toggleBtn = $("#form-medex-toggle");
+  const drawer = $("#form-medex-drawer");
+  if (!toggleBtn || !drawer) return;
+  let helper = null;
+  toggleBtn.onclick = () => {
+    const opening = drawer.classList.contains("hidden");
+    drawer.classList.toggle("hidden", !opening);
+    if (!opening) return;
+    const nameInput = $("#modal-fields [name=name]");
+    const currentName = (nameInput?.value || "").trim();
+    if (!helper) {
+      helper = mountMedexLookupBox(drawer, {
+        initialQuery: currentName,
+        onFillProductForm: item => {
+          const setField = (fieldName, value) => {
+            const el = $(`#modal-fields [name=${fieldName}]`);
+            if (el && value) {
+              el.value = value;
+              el.dispatchEvent(new Event("input", { bubbles: true }));
+            }
+          };
+          setField("name", item.name);
+          setField("genericName", item.genericName);
+          setField("strength", item.strength);
+          setField("dosageForm", item.dosageForm);
+          setField("manufacturer", item.manufacturer);
+          if (item.unitPrice != null && Number.isFinite(Number(item.unitPrice))) {
+            setField("price", String(item.unitPrice));
+          }
+          toast("Medicine details filled from MedEx.");
+        }
+      });
+    } else if (currentName) {
+      helper.setQueryAndSearch(currentName);
+    } else {
+      helper.focusInput();
+    }
+  };
+}
+
+function openPharmacyMedicineLookup(initialQuery = "") {
+  if (data.shopType !== "pharmacy") return toast("Medicine info lookup is only available when the shop type is Pharmacy.");
+  openModal("Medicine info · MedEx lookup", `<div id="pharmacy-medex-modal-root"></div>`, async () => false);
+  dialog.classList.add("wide");
+  $("#submit-modal").classList.add("hidden");
+  dialog.addEventListener("close", () => {
+    dialog.classList.remove("wide");
+    $("#submit-modal").classList.remove("hidden");
+  }, { once: true });
+  const root = $("#pharmacy-medex-modal-root");
+  const mounted = mountMedexLookupBox(root, { initialQuery: String(initialQuery || "").trim() });
+  setTimeout(() => mounted?.focusInput(), 40);
+}
+
+const FOOD_PACKAGE_PRESET_ITEMS = [
+  ["Plain Rice", 1, "plate"],
+  ["Plain Polao", 1, "plate"],
+  ["Khichuri", 1, "plate"],
+  ["Biryani Rice", 1, "plate"],
+  ["Chicken Curry", 1, "pcs"],
+  ["Chicken Roast", 1, "pcs"],
+  ["Chicken Fry", 1, "pcs"],
+  ["Beef Bhuna", 1, "bowl"],
+  ["Mutton Curry", 1, "bowl"],
+  ["Rui Fish Curry", 1, "pcs"],
+  ["Mixed Vegetables", 1, "bowl"],
+  ["Chinese Vegetables", 1, "bowl"],
+  ["Masoor Dal", 1, "bowl"],
+  ["Egg Curry", 1, "pcs"],
+  ["Shami Kebab", 1, "pcs"],
+  ["Green Salad", 1, "portion"],
+  ["Borhani", 1, "glass"],
+  ["Soft Drink", 1, "bottle"],
+  ["Mineral Water", 1, "bottle"],
+  ["Firni / Dessert", 1, "cup"]
+];
+
+function openFoodPackageEditor(existingPkg = null) {
+  if (!data.permissions?.food_packages && signedInUser?.role !== "admin") {
+    return toast("You do not have permission to create or edit food packages. Ask an administrator to grant Food Packages access.");
+  }
+  const initialItems = existingPkg?.items?.length
+    ? existingPkg.items.map(item => ({ name: item.name || "", qty: Number(item.qty || 1), unit: item.unit || "portion" }))
+    : [
+        { name: "Plain Rice", qty: 1, unit: "plate" },
+        { name: "Chicken Curry", qty: 1, unit: "pcs" },
+        { name: "Mixed Vegetables", qty: 1, unit: "bowl" }
+      ];
+  const portionOptions = ["1:1", "1:2", "Full", "Half", "Family (1:4)", "Single Box", "Party Pack"];
+  const foodItemSuggestions = [...new Set([
+    ...FOOD_PACKAGE_PRESET_ITEMS.map(([name]) => name),
+    ...(data.products || []).map(p => p.name)
+  ])];
+
+  openModal(existingPkg ? `Edit food package · ${existingPkg.name}` : "Create custom food package", `
+    <p class="form-hint">Build a custom meal package (e.g. Rice + Chicken + Vegetables + Drink). Saved packages automatically appear in Inventory and Sales so cashiers can bill them in one click.</p>
+    <div class="form-row">
+      <label>Package name<input name="name" maxlength="100" required value="${esc(existingPkg?.name || "")}" placeholder="e.g. Rice + Chicken + Vegetables Package"></label>
+      <label>Package code / SKU<input name="code" maxlength="40" value="${esc(existingPkg?.code || "")}" placeholder="Auto (e.g. PKG-05)"></label>
+    </div>
+    <div class="form-row">
+      <label>Portion / Serving size<input name="portion" maxlength="40" value="${esc(existingPkg?.portion || "1:1")}" placeholder="1:1, Full, Family (1:4)"></label>
+      <label>Package note (optional)<input name="notes" maxlength="160" value="${esc(existingPkg?.notes || "")}" placeholder="e.g. Lunch set with salad & dal"></label>
+    </div>
+    <div class="cloth-quick-chips" id="food-pkg-portion-chips">
+      <span class="form-hint">Portion:</span>
+      ${portionOptions.map(p => `<button type="button" class="cloth-chip" data-pkg-portion="${esc(p)}">${esc(p)}</button>`).join("")}
+    </div>
+    <div class="form-row">
+      <label>Package selling price (${esc(currencySymbol())})<input name="price" type="number" min="0" step="0.01" required value="${existingPkg ? Number(existingPkg.price) : ""}"></label>
+      <label>Estimated cost (${esc(currencySymbol())})<input name="cost" type="number" min="0" step="0.01" required value="${existingPkg ? Number(existingPkg.cost) : 0}"></label>
+    </div>
+    <div class="form-row">
+      <label>Prepared / available packages<input name="qty" type="number" min="0" step="1" required value="${existingPkg ? Number(existingPkg.qty) : 25}"></label>
+      <label>Low-stock alert at<input name="min" type="number" min="0" step="1" required value="${existingPkg ? Number(existingPkg.min) : 5}"></label>
+    </div>
+    <fieldset class="cloth-Variant-box" style="margin-top:8px">
+      <legend>Included food items in this package</legend>
+      <div class="cloth-quick-chips" id="food-pkg-preset-chips" style="margin-bottom:8px">
+        <span class="form-hint">Quick add item:</span>
+        ${FOOD_PACKAGE_PRESET_ITEMS.map(([name, qty, unit]) => `<button type="button" class="cloth-chip" data-add-pkg-item="${esc(name)}" data-add-pkg-qty="${qty}" data-add-pkg-unit="${esc(unit)}">＋ ${esc(name)}</button>`).join("")}
+      </div>
+      <datalist id="food-pkg-item-suggestions">
+        ${foodItemSuggestions.map(name => `<option value="${esc(name)}"></option>`).join("")}
+      </datalist>
+      <div id="food-pkg-items-rows" style="display:grid;gap:8px;margin-bottom:8px"></div>
+      <button type="button" class="button secondary" id="add-custom-pkg-item-row">＋ Add another food item</button>
+    </fieldset>
+  `, async form => {
+    const rowEls = [...document.querySelectorAll("#food-pkg-items-rows .food-pkg-item-row")];
+    const items = rowEls.map(row => ({
+      name: (row.querySelector('[data-pkg-field="name"]')?.value || "").trim(),
+      qty: Number(row.querySelector('[data-pkg-field="qty"]')?.value || 1),
+      unit: (row.querySelector('[data-pkg-field="unit"]')?.value || "portion").trim() || "portion"
+    })).filter(item => item.name);
+    if (!items.length) throw new Error("Add at least one food item (e.g. Rice, Chicken, Vegetables) to the package.");
+    const payload = {
+      name: form.get("name").trim(),
+      code: form.get("code").trim(),
+      portion: form.get("portion").trim() || "1:1",
+      notes: form.get("notes").trim(),
+      price: Number(form.get("price")),
+      cost: Number(form.get("cost") || 0),
+      qty: Number(form.get("qty") || 0),
+      min: Number(form.get("min") || 0),
+      items
+    };
+    data = await api(existingPkg ? `/api/restaurant/packages/${existingPkg.id}` : "/api/restaurant/packages", {
+      method: existingPkg ? "PUT" : "POST",
+      body: JSON.stringify(payload)
+    });
+    render();
+    toast(existingPkg ? "Food package updated" : "Custom food package created");
+    setTimeout(() => openFoodPackageManager(), 40);
+  });
+  dialog.classList.add("wide");
+  $("#submit-modal").textContent = existingPkg ? "Save package" : "Create package";
+  dialog.addEventListener("close", () => {
+    dialog.classList.remove("wide");
+    $("#submit-modal").textContent = "Save";
+  }, { once: true });
+
+  const rowsContainer = $("#food-pkg-items-rows");
+  const appendItemRow = (item = { name: "", qty: 1, unit: "portion" }) => {
+    const row = document.createElement("div");
+    row.className = "food-pkg-item-row";
+    row.style.cssText = "display:grid;grid-template-columns:1fr 90px 110px auto;gap:8px;align-items:center";
+    row.innerHTML = `
+      <input type="text" data-pkg-field="name" list="food-pkg-item-suggestions" placeholder="Food item (e.g. Rice, Chicken, Vegetables)" value="${esc(item.name || "")}" required>
+      <input type="number" data-pkg-field="qty" min="0.1" step="any" value="${Number(item.qty || 1)}" title="Quantity" placeholder="Qty">
+      <input type="text" data-pkg-field="unit" value="${esc(item.unit || "portion")}" placeholder="plate, pcs, bowl">
+      <button type="button" class="user-action danger" data-remove-pkg-row title="Remove item">✕</button>
+    `;
+    row.querySelector("[data-remove-pkg-row]").onclick = () => {
+      row.remove();
+    };
+    rowsContainer.appendChild(row);
+    return row;
+  };
+
+  initialItems.forEach(item => appendItemRow(item));
+
+  $("#add-custom-pkg-item-row").onclick = () => {
+    const row = appendItemRow({ name: "", qty: 1, unit: "portion" });
+    row.querySelector('[data-pkg-field="name"]')?.focus();
+  };
+
+  $("#food-pkg-portion-chips").onclick = event => {
+    const chip = event.target.closest("[data-pkg-portion]");
+    if (!chip) return;
+    const input = $("#modal-fields [name=portion]");
+    if (input) input.value = chip.dataset.pkgPortion;
+  };
+
+  $("#food-pkg-preset-chips").onclick = event => {
+    const chip = event.target.closest("[data-add-pkg-item]");
+    if (!chip) return;
+    const itemName = chip.dataset.addPkgItem;
+    const itemQty = Number(chip.dataset.addPkgQty || 1);
+    const itemUnit = chip.dataset.addPkgUnit || "portion";
+    const existingRow = [...rowsContainer.querySelectorAll(".food-pkg-item-row")].find(r => {
+      const val = (r.querySelector('[data-pkg-field="name"]')?.value || "").trim().toLowerCase();
+      return val === itemName.toLowerCase();
+    });
+    if (existingRow) {
+      const qtyInput = existingRow.querySelector('[data-pkg-field="qty"]');
+      if (qtyInput) qtyInput.value = Number(qtyInput.value || 1) + 1;
+      return;
+    }
+    const emptyRow = [...rowsContainer.querySelectorAll(".food-pkg-item-row")].find(r => !(r.querySelector('[data-pkg-field="name"]')?.value || "").trim());
+    if (emptyRow) {
+      emptyRow.querySelector('[data-pkg-field="name"]').value = itemName;
+      emptyRow.querySelector('[data-pkg-field="qty"]').value = itemQty;
+      emptyRow.querySelector('[data-pkg-field="unit"]').value = itemUnit;
+      return;
+    }
+    appendItemRow({ name: itemName, qty: itemQty, unit: itemUnit });
+  };
+}
+
+async function openFoodPackageTeamAccessModal() {
+  if (!(myCaps().team || myCaps().admins)) {
+    return toast("Only administrators with team access can change staff permissions.");
+  }
+  const users = await api("/api/users");
+  const staffAndAdmins = users.filter(u => !u.owner);
+  const rows = staffAndAdmins.map(u => {
+    const hasAccess = Boolean(u.permissions?.food_packages || u.role === "admin");
+    return `<tr>
+      <td><b>${esc(u.username)}</b></td>
+      <td>${u.role === "admin" ? "Administrator" : "Staff"}</td>
+      <td>${hasAccess ? `<span class="status">Can create & edit packages</span>` : `<span class="status out">View & sell only</span>`}</td>
+      <td>${u.manageable
+        ? `<button type="button" class="user-action" data-toggle-pkg-user="${u.id}" data-user-perms='${esc(JSON.stringify(u.permissions || {}))}' data-next-access="${u.permissions?.food_packages ? "0" : "1"}">${u.permissions?.food_packages ? "Revoke create access" : "Grant create access"}</button>`
+        : `<small>${u.role === "admin" ? "Admin (built-in)" : "This is you"}</small>`}</td>
+    </tr>`;
+  }).join("");
+
+  openModal("Team access · Custom food packages", `
+    <p class="form-hint">Grant or revoke permission for team members to create, edit, and delete custom food packages. You can also manage all permissions under <b>Team access</b> in the left sidebar.</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>TEAM MEMBER</th><th>ROLE</th><th>FOOD PACKAGES ACCESS</th><th>ACTION</th></tr></thead>
+        <tbody id="pkg-team-access-tbody">${rows || `<tr><td colspan="4" class="empty">No additional team members yet. Add staff from Team access in the sidebar.</td></tr>`}</tbody>
+      </table>
+    </div>
+    <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center">
+      <button type="button" class="button secondary" id="back-to-food-packages">← Back to Food packages</button>
+      <button type="button" class="button secondary" id="open-full-team-screen">Open Team access screen →</button>
+    </div>
+  `, async () => false);
+  dialog.classList.add("wide");
+  $("#submit-modal").classList.add("hidden");
+  dialog.addEventListener("close", () => {
+    dialog.classList.remove("wide");
+    $("#submit-modal").classList.remove("hidden");
+  }, { once: true });
+
+  $("#back-to-food-packages").onclick = () => openFoodPackageManager();
+  $("#open-full-team-screen").onclick = () => {
+    closeModal();
+    location.hash = "#users";
+  };
+  $("#pkg-team-access-tbody").onclick = async event => {
+    const btn = event.target.closest("[data-toggle-pkg-user]");
+    if (!btn) return;
+    const userId = Number(btn.dataset.togglePkgUser);
+    const currentPerms = JSON.parse(btn.dataset.userPerms || "{}");
+    const nextAccess = btn.dataset.nextAccess === "1";
+    btn.disabled = true;
+    try {
+      await api(`/api/users/${userId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ permissions: { ...currentPerms, food_packages: nextAccess } })
+      });
+      await loadUsers();
+      toast(nextAccess ? "Granted food package creation access" : "Revoked food package creation access");
+      openFoodPackageTeamAccessModal();
+    } catch (error) {
+      btn.disabled = false;
+      toast(error.message);
+    }
+  };
+}
+
+function openFoodPackageManager() {
+  if (data.shopType !== "restaurant") {
+    return toast("Food packages are available when the shop type is set to Food & restaurant.");
+  }
+  const canManagePackages = Boolean(data.permissions?.food_packages || signedInUser?.role === "admin");
+  const canManageTeam = Boolean(myCaps().team || myCaps().admins);
+  const packages = data.foodPackages || [];
+
+  const rows = packages.map(pkg => {
+    const itemChips = (pkg.items || []).map(item => {
+      const qtyText = Number(item.qty || 1) !== 1 ? `${item.qty} ${item.unit || "pcs"}` : (item.unit || "portion");
+      return `<span class="cloth-size-badge" style="margin:2px 4px 2px 0;display:inline-block">${esc(item.name)} <small>(${esc(qtyText)})</small></span>`;
+    }).join("");
+    return `<tr>
+      <td><b>🍱 ${esc(pkg.name)}</b><br><small class="form-hint">${esc(pkg.code || "")}${pkg.notes ? ` · ${esc(pkg.notes)}` : ""}</small></td>
+      <td style="white-space:normal;min-width:240px">${itemChips || esc(pkg.itemsSummary || "—")}</td>
+      <td><span class="cloth-color-badge">${esc(pkg.portion || "1:1")}</span></td>
+      <td><b>${money(pkg.price)}</b>${canManagePackages ? `<br><small class="form-hint">Cost: ${money(pkg.cost)}</small>` : ""}</td>
+      <td><b>${esc(fmtQty(pkg.qty, "package"))}</b></td>
+      <td>
+        ${data.permissions?.sales ? `<button type="button" class="user-action" data-pkg-action="sell" data-id="${pkg.id}">＋ Bill / Sell</button>` : ""}
+        ${canManagePackages ? `<button type="button" class="user-action" data-pkg-action="edit" data-id="${pkg.id}">Edit</button><button type="button" class="user-action danger" data-pkg-action="delete" data-id="${pkg.id}">Delete</button>` : ""}
+      </td>
+    </tr>`;
+  }).join("");
+
+  openModal("Food & restaurant · Custom food packages", `
+    <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px">
+      <p class="form-hint" style="margin:0">Create custom meal packages (like Rice + Chicken + Vegetables, Platter sets, or Family combos).${canManagePackages ? " You have permission to create and edit custom packages." : " Ask an administrator if you need access to create or edit packages."}</p>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
+        ${canManageTeam ? `<button type="button" class="button secondary" id="pkg-team-access-btn">Team create access</button>` : ""}
+        ${canManagePackages ? `<button type="button" class="button secondary" id="seed-starter-packages-btn">Load starter packages</button><button type="button" class="button primary" id="create-custom-package-btn">＋ Create custom package</button>` : ""}
+      </div>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>PACKAGE</th>
+            <th>INCLUDED ITEMS (RICE, CHICKEN, VEGETABLES, ETC.)</th>
+            <th>PORTION</th>
+            <th>PRICE</th>
+            <th>AVAILABLE</th>
+            <th>ACTION</th>
+          </tr>
+        </thead>
+        <tbody id="food-packages-tbody">${rows}</tbody>
+      </table>
+      <div class="empty ${packages.length ? "hidden" : ""}" id="food-packages-empty">No food packages yet. Click "Create custom package" or "Load starter packages" to begin.</div>
+    </div>
+  `, async () => false);
+  dialog.classList.add("wide");
+  $("#submit-modal").classList.add("hidden");
+  dialog.addEventListener("close", () => {
+    dialog.classList.remove("wide");
+    $("#submit-modal").classList.remove("hidden");
+  }, { once: true });
+
+  if ($("#create-custom-package-btn")) {
+    $("#create-custom-package-btn").onclick = () => openFoodPackageEditor(null);
+  }
+  if ($("#seed-starter-packages-btn")) {
+    $("#seed-starter-packages-btn").onclick = async () => {
+      try {
+        const res = await api("/api/restaurant/packages/seed", { method: "POST", body: "{}" });
+        const { added, ...nextState } = res;
+        data = nextState;
+        render();
+        toast(added ? `Added ${added} starter food package(s)` : "All starter food packages are already present");
+        openFoodPackageManager();
+      } catch (error) {
+        toast(error.message);
+      }
+    };
+  }
+  if ($("#pkg-team-access-btn")) {
+    $("#pkg-team-access-btn").onclick = () => openFoodPackageTeamAccessModal();
+  }
+  $("#food-packages-tbody").onclick = async event => {
+    const btn = event.target.closest("[data-pkg-action]");
+    if (!btn) return;
+    const pkgId = Number(btn.dataset.id);
+    const pkg = (data.foodPackages || []).find(item => item.id === pkgId);
+    if (!pkg) return;
+    if (btn.dataset.pkgAction === "edit") {
+      openFoodPackageEditor(pkg);
+      return;
+    }
+    if (btn.dataset.pkgAction === "delete") {
+      if (!confirm(`Delete custom package "${pkg.name}"?`)) return;
+      try {
+        data = await api(`/api/restaurant/packages/${pkg.id}`, { method: "DELETE" });
+        render();
+        toast("Food package deleted");
+        openFoodPackageManager();
+      } catch (error) {
+        toast(error.message);
+      }
+      return;
+    }
+    if (btn.dataset.pkgAction === "sell") {
+      const linkedProduct = data.products.find(p => p.id === pkg.productId) || data.products.find(p => p.name === pkg.name);
+      if (!linkedProduct || productSellableQty(linkedProduct) <= 0) {
+        return toast("This package has 0 available stock. Edit the package to increase prepared quantity.");
+      }
+      openBillEditor(null, linkedProduct);
+    }
+  };
+}
+
 const renderBeforeSupplierTools = render;
 render = function () {
   renderBeforeSupplierTools();
@@ -3501,6 +4952,12 @@ render = function () {
 };
 $("#supplier-tools").onclick = openSupplierHub;
 $("#pharmacy-batches-button").onclick = openPharmacyBatchManager;
+$("#pharmacy-medex-button") && ($("#pharmacy-medex-button").onclick = () => openPharmacyMedicineLookup(""));
+$("#pharmacy-medex-inventory-button") && ($("#pharmacy-medex-inventory-button").onclick = () => openPharmacyMedicineLookup($("#search")?.value || ""));
+$("#pharmacy-medex-sales-button") && ($("#pharmacy-medex-sales-button").onclick = () => openPharmacyMedicineLookup(""));
+$("#restaurant-packages-button") && ($("#restaurant-packages-button").onclick = () => openFoodPackageManager());
+$("#restaurant-packages-inventory-button") && ($("#restaurant-packages-inventory-button").onclick = () => openFoodPackageManager());
+$("#restaurant-packages-sales-button") && ($("#restaurant-packages-sales-button").onclick = () => openFoodPackageManager());
 // ---- Installable app (PWA) and the "connect a phone" page ----
 let installPrompt = null;
 function setupInstallButton() {

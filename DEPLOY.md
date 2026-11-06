@@ -5,7 +5,7 @@ and keep a **persistent disk** for the `data` folder. Plain PHP/static hosting (
 
 Always serve it over **HTTPS**. It contains passwords, sessions and business data.
 
-For shop-PC installs (Windows service, systemd, backups and licence keys), see [INSTALL.md](INSTALL.md).
+For shop-PC installs (Windows service, systemd and backups), see [INSTALL.md](INSTALL.md).
 
 ## Environment variables
 

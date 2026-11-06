@@ -6,14 +6,10 @@ server.log
 .env
 node_modules/
 
-# Vendor licence signing key: keep it offline, never commit it.
+# Release signing key: keep it offline, never commit it.
 vendor/
 *.pem
 
 # Local installers / releases
 releases/
 *.zip
-
-# Licence kit output (contains the private signing key)
-licences/
-licences.csv
