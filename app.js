@@ -192,6 +192,12 @@ const screenTitles = { "pharmacy-support": "Symptom help", dashboard: "Dashboard
 function showScreen(screen, updateHash = false) {
   const link = document.querySelector(`[data-screen-link="${screen}"]`);
   if (!screenTitles[screen] || link?.classList.contains("hidden")) screen = "dashboard";
+  if (screen !== "pharmacy-support" && $("#symptom-search")) {
+    $("#symptom-search").value = "";
+    $("#symptom-choice").value = "";
+    $("#symptom-result").innerHTML = "<h2>3. Review the concern</h2><p>Select a symptom to see questions, warning signs, and reference links.</p>";
+    $("#symptom-matches").innerHTML = "<p>Type a symptom to find a guide. Only four topics are available in this prototype.</p>";
+  }
   document.querySelectorAll("[data-screen]").forEach(view => view.classList.toggle("hidden", view.dataset.screen !== screen));
   document.querySelectorAll("[data-screen-link]").forEach(item => {
     const active = item.dataset.screenLink === screen;
@@ -248,6 +254,10 @@ function toast(message, duration = 3000) {
   toastTimer = setTimeout(() => element.classList.remove("show"), duration);
 }
 function showAuth() {
+  if ($("#symptom-search")) $("#symptom-search").value = "";
+  if ($("#symptom-choice")) $("#symptom-choice").value = "";
+  if ($("#symptom-result")) $("#symptom-result").textContent = "Select a symptom to see questions, warning signs, and reference links.";
+  if ($("#symptom-matches")) $("#symptom-matches").textContent = "Type a symptom to find a guide. Only four topics are available in this prototype.";
   signedInUser = null;
   $("#auth-screen").classList.remove("hidden");
   $("#login-form").classList.add("hidden");
@@ -5128,5 +5138,43 @@ function renderSymptomSupport() {
   if (!guide) { result.innerHTML = "<h2>3. Review the concern</h2><p>Select a symptom to see questions, warning signs, and reference links.</p>"; return; }
   result.innerHTML = `<h2>3. Review: ${esc(guide.title)}</h2><div class="symptom-card"><h3>Ask about</h3><p>${esc(guide.questions)}</p></div><div class="symptom-emergency"><h3>Urgent warning signs</h3><p>${esc(guide.urgent)}</p></div><div class="symptom-card"><h3>Professional assessment</h3><p>${esc(guide.advice)}</p><p><b>If unsure, refer to a qualified clinician.</b> Absence of these listed signs does not guarantee safety.</p></div><p class="form-hint">Reference: <a href="${esc(guide.source)}" target="_blank" rel="noopener noreferrer">${esc(guide.sourceLabel)} ↗</a> (external; may not reflect Bangladesh practice). Not a complete list of risks.</p>`;
 }
+// Keyword matching only: never interpret a match as a diagnosis or transmit the query.
+function matchSymptomGuides(text) {
+  const query = String(text || "").toLowerCase().trim();
+  if (!query) return [];
+  const keywords = {
+    fever: /\b(fever|feverish|temperature)\b|জ্বর/u,
+    diarrhea: /\b(diarrh?oe?a|diarrhea|diarhea|loose stools?|loose motion|watery stools?)\b|ডায়রিয়া|ডায়রিয়া|পাতলা পায়খানা|পাতলা পায়খানা/u,
+    constipation: /\b(constipation|constipated|hard stools?|hard poop|hard poops)\b|কোষ্ঠকাঠিন্য|শক্ত পায়খানা|শক্ত পায়খানা/u,
+    eye: /\b(eyes?|itchy eyes?|itching eyes?|red eyes?)\b|চোখ/u
+  };
+  return Object.entries(keywords).filter(([, pattern]) => pattern.test(query)).map(([key]) => key);
+}
+function renderSymptomMatches() {
+  const text = $("#symptom-search").value.trim(), container = $("#symptom-matches");
+  if (!text) { container.innerHTML = "<p>Type a symptom to find a guide. Only four topics are available in this prototype.</p>"; return; }
+  const matches = matchSymptomGuides(text);
+  container.innerHTML = matches.length
+    ? `<p><b>Matching guide topics—not diagnoses.</b> Select a topic to review; all symptoms need professional assessment.</p><div class="symptom-links">${matches.map(key => `<button type="button" class="button secondary" data-symptom-match="${esc(key)}">${esc(symptomSupportGuides[key].title)}</button>`).join("")}</div>`
+    : `<p><b>No matching offline guide.</b> This prototype covers only fever, diarrhea, constipation, and eye symptoms. Do not assume the problem is minor; consult a qualified clinician. Use online references if available.</p>`;
+}
+function updateSymptomConnection() {
+  $("#symptom-connection").textContent = navigator.onLine ? "Browser reports online; external reference availability may vary. The offline guide remains available." : "Browser reports offline. The limited guide is available; external references require internet.";
+}
+$("#symptom-search").addEventListener("input", () => {
+  $("#symptom-choice").value = "";
+  renderSymptomSupport();
+  renderSymptomMatches();
+});
+$("#symptom-clear").addEventListener("click", () => { $("#symptom-search").value = ""; $("#symptom-choice").value = ""; renderSymptomSupport(); renderSymptomMatches(); $("#symptom-search").focus(); });
+$("#symptom-matches").addEventListener("click", event => {
+  const button = event.target.closest("[data-symptom-match]");
+  if (!button || !Object.hasOwn(symptomSupportGuides, button.dataset.symptomMatch)) return;
+  $("#symptom-choice").value = button.dataset.symptomMatch;
+  renderSymptomSupport();
+});
+window.addEventListener("online", updateSymptomConnection);
+window.addEventListener("offline", updateSymptomConnection);
+updateSymptomConnection();
 $("#symptom-choice").addEventListener("change", renderSymptomSupport);
 $("#symptom-medex").addEventListener("click", () => openPharmacyMedicineLookup(""));
