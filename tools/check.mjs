@@ -205,9 +205,10 @@ try {
   render(); if (!result.innerHTML.includes("Select a symptom")) fail("empty choice must not present a diagnosis");
   for (const topic of ["fever", "diarrhea", "constipation", "eye"]) {
     choice.value = topic; render();
-    for (const word of ["Urgent warning signs", "qualified clinician", "does not guarantee safety", "https://"]) if (!result.innerHTML.includes(word)) fail(`${topic} missing ${word}`);
+    for (const word of ["Urgent warning signs", "qualified clinician", "does not guarantee safety", "Possible causes — not a diagnosis", "Medicine information — demonstration only", "Do not use this example", "https://"]) if (!result.innerHTML.includes(word)) fail(`${topic} missing ${word}`);
     if (/<form|<input|\/api\//i.test(result.innerHTML)) fail(`${topic} must not collect patient answers or make requests`);
   }
+  choice.value = "fever"; render(); if (!result.innerHTML.includes("dengue") || !result.innerHTML.includes("avoid ibuprofen and aspirin")) fail("fever demo must show dengue-related NSAID warning");
   choice.value = ""; render(); if (result.innerHTML.includes("Urgent warning signs")) fail("clearing selection must clear previous topic");
   const matchStart = app.indexOf("function matchSymptomGuides("), matchEnd = app.indexOf("function renderSymptomMatches(", matchStart);
   if (matchStart < 0 || matchEnd < 0) throw new Error("offline symptom matching missing");

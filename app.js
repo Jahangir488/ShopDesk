@@ -5108,25 +5108,37 @@ startApp();
 // A conservative reference aid only. No diagnosis, medicine selection, or patient data is stored.
 const symptomSupportGuides = {
   fever: {
-    title: "Fever", questions: "Ask about duration, measured temperature, other symptoms, and whether the person is worsening.",
+    title: "Fever", causes: "Fever may have many causes, including respiratory infections such as flu or COVID-19, or dengue. Symptoms overlap; the right diagnosis requires clinical assessment.",
+    medicine: "Paracetamol is used for fever and pain, but is not suitable for everyone. Check allergies, liver disease, other medicines, and duplicate ingredients with a qualified clinician. If dengue is suspected, avoid ibuprofen and aspirin unless a clinician directs otherwise because of bleeding risk.",
+    medicineSource: "https://www.cdc.gov/dengue/treatment/index.html", medicineSourceLabel: "CDC: dengue care and medicine precautions",
+    questions: "Ask about duration, measured temperature, other symptoms, and whether the person is worsening.",
     urgent: "Severe confusion, trouble breathing, a stiff neck with severe headache, or a person who is difficult to wake needs emergency assessment.",
     advice: "A pharmacist or clinician should assess the whole situation. Do not assume fever is a minor illness; refer if the person is very unwell, getting worse, or you are uncertain.",
     source: "https://www.nhs.uk/conditions/fever-in-adults/", sourceLabel: "NHS: fever in adults"
   },
   diarrhea: {
-    title: "Diarrhea", questions: "Ask about duration, blood or black stool, vomiting, abdominal pain, recent antibiotics, and signs of dehydration such as much less urine.",
+    title: "Diarrhea", causes: "Possible causes include infection, food-related illness, or a medicine side effect. These are examples, not a diagnosis.",
+    medicine: "Oral rehydration solution can help replace fluids and salts. A qualified clinician should check whether it is appropriate, especially with underlying conditions or difficulty keeping fluids down. Do not assume an anti-diarrhea medicine is suitable.",
+    medicineSource: "https://www.nhs.uk/conditions/dehydration/", medicineSourceLabel: "NHS: dehydration and oral rehydration",
+    questions: "Ask about duration, blood or black stool, vomiting, abdominal pain, recent antibiotics, and signs of dehydration such as much less urine.",
     urgent: "Severe weakness, fainting, severe abdominal pain, blood in stool or vomit, or inability to keep fluids down requires urgent medical assessment.",
     advice: "Preventing dehydration is important. Consult a pharmacist or clinician about safe rehydration, particularly if fluids cannot be kept down or the person has a medical condition.",
     source: "https://www.chelwest.nhs.uk/your-visit/patient-leaflets/medicine-services/gastroenteritis", sourceLabel: "NHS: gastroenteritis"
   },
   constipation: {
-    title: "Constipation / hard stools", questions: "Ask how long this has lasted and about pain, vomiting, blood in stool, weight loss, and any recent change in bowel habits or medicines.",
+    title: "Constipation / hard stools", causes: "Possible causes include changes in diet or fluid intake, reduced activity, or medicines. Other causes may need medical assessment.",
+    medicine: "Laxatives are medicines used for constipation, but the correct approach depends on the person and cause. Severe pain, vomiting, bleeding, or a swollen abdomen requires urgent assessment rather than an automatic medicine choice.",
+    medicineSource: "https://www.nhs.uk/conditions/constipation/", medicineSourceLabel: "NHS: constipation and pharmacist advice",
+    questions: "Ask how long this has lasted and about pain, vomiting, blood in stool, weight loss, and any recent change in bowel habits or medicines.",
     urgent: "Severe abdominal pain, a swollen abdomen with vomiting, or black or significant bloody stool needs urgent medical assessment.",
     advice: "A clinician should assess persistent or worsening symptoms and unexplained bleeding or weight loss. Do not assume that every change in bowel habit is simple constipation.",
     source: "https://www.plymouthhospitals.nhs.uk/display-pil/pil-constipation-in-adults-4069/", sourceLabel: "NHS: constipation in adults"
   },
   eye: {
-    title: "Itchy or red eyes", questions: "Ask about pain, injury, contact lenses, light sensitivity, and any change in vision.",
+    title: "Itchy or red eyes", causes: "Possible causes include allergy, irritation, or infection. A painful or red eye can also be a more serious problem and must not be assumed to be an allergy.",
+    medicine: "Lubricating eye drops may be used for some eye symptoms, but are not a diagnosis or a substitute for assessment. Eye pain, vision changes, injury, or contact-lens concerns require professional assessment.",
+    medicineSource: "https://www.nhs.uk/conditions/conjunctivitis/", medicineSourceLabel: "NHS: conjunctivitis",
+    questions: "Ask about pain, injury, contact lenses, light sensitivity, and any change in vision.",
     urgent: "Sudden vision loss, a serious eye injury, or severe eye pain needs emergency assessment. A painful red eye, sensitivity to light, or changes in vision require urgent assessment.",
     advice: "Do not assume itching is an allergy. Ask a qualified clinician or eye specialist if symptoms are worsening, persistent, or the cause is unclear.",
     source: "https://www.nhs.uk/symptoms/eye-pain/", sourceLabel: "NHS: eye pain and urgent signs"
@@ -5136,7 +5148,7 @@ function renderSymptomSupport() {
   const guide = symptomSupportGuides[$("#symptom-choice").value];
   const result = $("#symptom-result");
   if (!guide) { result.innerHTML = "<h2>3. Review the concern</h2><p>Select a symptom to see questions, warning signs, and reference links.</p>"; return; }
-  result.innerHTML = `<h2>3. Review: ${esc(guide.title)}</h2><div class="symptom-card"><h3>Ask about</h3><p>${esc(guide.questions)}</p></div><div class="symptom-emergency"><h3>Urgent warning signs</h3><p>${esc(guide.urgent)}</p></div><div class="symptom-card"><h3>Professional assessment</h3><p>${esc(guide.advice)}</p><p><b>If unsure, refer to a qualified clinician.</b> Absence of these listed signs does not guarantee safety.</p></div><p class="form-hint">Reference: <a href="${esc(guide.source)}" target="_blank" rel="noopener noreferrer">${esc(guide.sourceLabel)} ↗</a> (external; may not reflect Bangladesh practice). Not a complete list of risks.</p>`;
+  result.innerHTML = `<h2>3. Review: ${esc(guide.title)}</h2><div class="symptom-card"><h3>Ask about</h3><p>${esc(guide.questions)}</p></div><div class="symptom-emergency"><h3>Urgent warning signs</h3><p>${esc(guide.urgent)}</p></div><div class="symptom-card"><h3>Possible causes — not a diagnosis</h3><p>${esc(guide.causes)}</p></div><div class="symptom-card"><h3>Medicine information — demonstration only</h3><p>${esc(guide.medicine)}</p><p><b>Do not use this example to select or sell medicine.</b> A qualified clinician must verify suitability, interactions and local guidance.</p><p><a href="${esc(guide.medicineSource)}" target="_blank" rel="noopener noreferrer">${esc(guide.medicineSourceLabel)} ↗</a> (requires internet)</p></div><div class="symptom-card"><h3>Professional assessment</h3><p>${esc(guide.advice)}</p><p><b>If unsure, refer to a qualified clinician.</b> Absence of these listed signs does not guarantee safety.</p></div><p class="form-hint">Reference: <a href="${esc(guide.source)}" target="_blank" rel="noopener noreferrer">${esc(guide.sourceLabel)} ↗</a> (external; may not reflect Bangladesh practice). Not a complete list of risks.</p>`;
 }
 // Keyword matching only: never interpret a match as a diagnosis or transmit the query.
 function matchSymptomGuides(text) {
