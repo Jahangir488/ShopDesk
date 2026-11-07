@@ -1,15 +1,22 @@
 const $ = selector => document.querySelector(selector);
-const money = amount => {
-  const value = Number(amount) || 0, currency = data.currencyCode || "BDT";
-  const locale = data.banglaDigits ? "bn-BD" : (data.locale || "en-BD");
+const money = (() => {
+  let formatterKey = "", formatter = null;
+  return amount => {
+    const value = Number(amount) || 0, currency = data.currencyCode || "BDT";
+    const locale = data.banglaDigits ? "bn-BD" : (data.locale || "en-BD");
   // Pharmacy base-unit prices often include poisha (for example ৳2.50/tablet).
   // Keep whole amounts compact, but never round an edited decimal price away.
-  try { return new Intl.NumberFormat(locale, { style: "currency", currency, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value); }
+  try {
+    const key = `${locale}:${currency}`;
+    if (formatterKey !== key || !formatter) { formatter = new Intl.NumberFormat(locale, { style: "currency", currency, minimumFractionDigits: 0, maximumFractionDigits: 2 }); formatterKey = key; }
+    return formatter.format(value);
+  }
   catch {
     const rounded = Math.round((value + Number.EPSILON) * 100) / 100;
     return `${currency} ${localizeDigits(rounded.toLocaleString("en-US", { maximumFractionDigits: 2 }))}`;
   }
-};
+  };
+})();
 const currencySymbol = () => {
   try { return new Intl.NumberFormat(data.locale || "en-BD", { style: "currency", currency: data.currencyCode || "BDT", maximumFractionDigits: 0 }).formatToParts(0).find(part => part.type === "currency")?.value || data.currencyCode || "BDT"; }
   catch { return data.currencyCode || "BDT"; }
@@ -181,10 +188,16 @@ setInterval(refreshTopbarClock, 1000);
 // The app script is running, so remove the "unsupported browser" notice if it was shown.
 document.querySelectorAll(".browser-warning").forEach(node => node.remove());
 
-const screenTitles = { dashboard: "Dashboard", inventory: "Inventory", sales: "Sales", "online-orders": "Online orders", repairs: "Repairs", devices: "Device sales & warranty", expenses: "Expenses", reports: "Reports", users: "Team access", "backup-tools": "Backup and restore" };
+const screenTitles = { "pharmacy-support": "Symptom help", dashboard: "Dashboard", inventory: "Inventory", sales: "Sales", "online-orders": "Online orders", repairs: "Repairs", devices: "Device sales & warranty", expenses: "Expenses", reports: "Reports", users: "Team access", "backup-tools": "Backup and restore" };
 function showScreen(screen, updateHash = false) {
   const link = document.querySelector(`[data-screen-link="${screen}"]`);
   if (!screenTitles[screen] || link?.classList.contains("hidden")) screen = "dashboard";
+  if (screen !== "pharmacy-support" && $("#symptom-search")) {
+    $("#symptom-search").value = "";
+    $("#symptom-choice").value = "";
+    $("#symptom-result").innerHTML = "<h2>3. Review the concern</h2><p>Select a symptom to see questions, warning signs, and reference links.</p>";
+    $("#symptom-matches").innerHTML = "<p>Type a symptom to find a guide. Only four topics are available in this prototype.</p>";
+  }
   document.querySelectorAll("[data-screen]").forEach(view => view.classList.toggle("hidden", view.dataset.screen !== screen));
   document.querySelectorAll("[data-screen-link]").forEach(item => {
     const active = item.dataset.screenLink === screen;
@@ -241,6 +254,10 @@ function toast(message, duration = 3000) {
   toastTimer = setTimeout(() => element.classList.remove("show"), duration);
 }
 function showAuth() {
+  if ($("#symptom-search")) $("#symptom-search").value = "";
+  if ($("#symptom-choice")) $("#symptom-choice").value = "";
+  if ($("#symptom-result")) $("#symptom-result").textContent = "Select a symptom to see questions, warning signs, and reference links.";
+  if ($("#symptom-matches")) $("#symptom-matches").textContent = "Type a symptom to find a guide. Only four topics are available in this prototype.";
   signedInUser = null;
   $("#auth-screen").classList.remove("hidden");
   $("#login-form").classList.add("hidden");
@@ -467,7 +484,9 @@ function renderReport() {
   $("#report-net").textContent = permissions.sales && permissions.expenses ? money(summary.profitAfterReturns - costs) : "—";
   $("#chart-total").textContent = permissions.sales ? money(summary.netSales) : "—";
   $("#chart-label").textContent = `Net sales after returns · ${range.caption}`;
-  const amounts = range.buckets.map(bucket => sales.filter(item => range.monthly ? item.date.startsWith(bucket.key) : item.date === bucket.key).reduce((sum, item) => sum + Number(item.total || 0), 0));
+  const salesByPeriod = new Map();
+  for (const item of sales) { const key = range.monthly ? item.date.slice(0, 7) : item.date; salesByPeriod.set(key, (salesByPeriod.get(key) || 0) + Number(item.total || 0)); }
+  const amounts = range.buckets.map(bucket => salesByPeriod.get(bucket.key) || 0);
   const max = Math.max(1000, ...amounts);
   $("#chart-max").textContent = money(Math.ceil(max / 4 / 1000) * 1000 || 1000);
   $("#chart").innerHTML = amounts.map((amount, index) => {
@@ -1889,6 +1908,8 @@ function render() {
   $("#inventory-nav").classList.toggle("hidden", !permissions.inventory);
   $("#sales-nav").classList.toggle("hidden", !permissions.sales);
   const pharmacyMedexEnabled = data.shopType === "pharmacy" && Boolean(permissions.sales || permissions.inventory);
+  $("#pharmacy-support-nav").classList.toggle("hidden", !pharmacyMedexEnabled);
+  if (!pharmacyMedexEnabled && location.hash === "#pharmacy-support") showScreen("dashboard", true);
   $("#pharmacy-medex-button")?.classList.toggle("hidden", !pharmacyMedexEnabled);
   $("#pharmacy-medex-inventory-button")?.classList.toggle("hidden", !(permissions.inventory && data.shopType === "pharmacy"));
   $("#pharmacy-medex-sales-button")?.classList.toggle("hidden", !(permissions.sales && data.shopType === "pharmacy"));
@@ -2598,21 +2619,43 @@ $("#download-report").onclick = () => {
   }).join(",")).join("\r\n");
   downloadFile(`shop-report-${range.start}-to-${range.end}.csv`, csv);
 };
+// Large print jobs are divided into explicit parts before building print HTML.
+// Never silently truncate: the user can select every part or download the full data.
+const PRINT_PART_SIZE = 200;
+const lastPrintParts = new Map();
+function choosePrintPart(items, label) {
+  const total = items.length;
+  if (total <= PRINT_PART_SIZE) return { items, start: total ? 1 : 0, end: total, total, part: 1, parts: 1 };
+  const parts = Math.ceil(total / PRINT_PART_SIZE);
+  const previous = Math.min(lastPrintParts.get(label) || 1, parts);
+  const answer = window.prompt(`${label}: ${total} records. To protect your browser, print up to ${PRINT_PART_SIZE} records at a time. Enter a part number from 1 to ${parts}. Run Print again for other parts. You can also use Download where available.`, String(previous));
+  if (answer === null) return null;
+  const part = Number(answer.trim());
+  if (!/^\d+$/.test(answer.trim()) || !Number.isSafeInteger(part) || part < 1 || part > parts) { toast(`Enter a part number from 1 to ${parts}.`); return null; }
+  lastPrintParts.set(label, Math.min(parts, part + 1));
+  const offset = (part - 1) * PRINT_PART_SIZE, end = Math.min(offset + PRINT_PART_SIZE, total);
+  return { items: items.slice(offset, end), start: offset + 1, end, total, part, parts };
+}
+function printPartLabel(part) {
+  return part.parts > 1 ? `Part ${part.part} of ${part.parts} · records ${part.start}–${part.end} of ${part.total}` : `${part.total} records`;
+}
 $("#print-report").onclick = () => {
   const permissions = data.permissions || {}, range = reportRange();
   if (range.start > range.end) return toast("The start date must be on or before the end date.");
   const sales = permissions.sales ? data.sales.filter(item => item.date >= range.start && item.date <= range.end) : [];
   const expenses = permissions.expenses ? data.expenses.filter(item => item.date >= range.start && item.date <= range.end) : [];
+  const part = choosePrintPart([...sales.map(item => ({type:"sale", item})), ...expenses.map(item => ({type:"expense", item}))], "Shop report");
+  if (!part) return;
   const rows = [];
-  if (permissions.sales) for (const item of sales) rows.push(`<tr><td>${esc(item.date)}</td><td>${esc(item.product)}</td><td>${item.qty} ${esc(item.unit || "piece")}</td><td>${esc(item.payment)}</td><td>${money(item.total)}</td><td>${money(item.tax_amount || 0)}</td><td>${money(Number(item.total || 0) - Number(item.cost || 0))}</td></tr>`);
-  if (permissions.expenses) for (const item of expenses) rows.push(`<tr><td>${esc(item.date)}</td><td>${esc(item.category)}${item.note ? ` · ${esc(item.note)}` : ""}</td><td></td><td>Expense</td><td>${money(item.amount)}</td><td></td><td></td></tr>`);
+  for (const entry of part.items) { const item = entry.item; if (entry.type === "sale") rows.push(`<tr><td>${esc(item.date)}</td><td>${esc(item.product)}</td><td>${item.qty} ${esc(item.unit || "piece")}</td><td>${esc(item.payment)}</td><td>${money(item.total)}</td><td>${money(item.tax_amount || 0)}</td><td>${money(Number(item.total || 0) - Number(item.cost || 0))}</td></tr>`);
+  else rows.push(`<tr><td>${esc(item.date)}</td><td>${esc(item.category)}${item.note ? ` · ${esc(item.note)}` : ""}</td><td></td><td>Expense</td><td>${money(item.amount)}</td><td></td><td></td></tr>`); }
   const salesSummary = summarizeSales(sales), spent = expenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const summaryRows = [];
   if (permissions.sales) summaryRows.push(["Gross sales (ex tax)", salesSummary.grossSales], ["Returned value (ex tax)", salesSummary.returnedValue], ["Net sales after returns (ex tax)", salesSummary.netSales], ["Tax collected after returns", salesSummary.netTax], ["Profit after returns", salesSummary.profitAfterReturns]);
   if (permissions.expenses) summaryRows.push(["Expenses", spent]);
   if (permissions.sales && permissions.expenses) summaryRows.push(["Net profit", salesSummary.profitAfterReturns - spent]);
   const summary = summaryRows.map(([label, amount]) => `<tr><th>${label}</th><td>${money(amount)}</td></tr>`).join("");
-  printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Shop report</title><style>@page{margin:12mm}body{font:12px system-ui,"Segoe UI",sans-serif;color:#17212b}h1{margin:0}p{color:#66727d}table{border-collapse:collapse;width:100%;margin:14px 0}th,td{border:1px solid #d2d8dc;padding:6px;text-align:left}thead th{background:#eef2f3}.summary{width:auto;min-width:50%}.summary td{text-align:right}.summary th{background:#f5f6f7}</style></head><body><h1>${esc(data.shopName)}</h1><p>${esc(data.workspace)} · Report from ${esc(range.start)} to ${esc(range.end)}</p><table class="summary"><tbody>${summary}</tbody></table><table><thead><tr><th>Date</th><th>Item / category</th><th>Quantity</th><th>Payment</th><th>Amount</th><th>Tax</th><th>Profit</th></tr></thead><tbody>${rows.join("") || `<tr><td colspan="7">No records in this period.</td></tr>`}</tbody></table></body></html>`);
+  printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Shop report</title><style>@page{margin:12mm}body{font:12px system-ui,"Segoe UI",sans-serif;color:#17212b}h1{margin:0}p{color:#66727d}table{border-collapse:collapse;width:100%;margin:14px 0}th,td{border:1px solid #d2d8dc;padding:6px;text-align:left}thead th{background:#eef2f3}.summary{width:auto;min-width:50%}.summary td{text-align:right}.summary th{background:#f5f6f7}</style></head><body><h1>${esc(data.shopName)}</h1><p>${esc(data.workspace)} · Report from ${esc(range.start)} to ${esc(range.end)} · ${esc(printPartLabel(part))}. Summary covers the full selected date range.</p><table class="summary"><tbody>${summary}</tbody></table><table><thead><tr><th>Date</th><th>Item / category</th><th>Quantity</th><th>Payment</th><th>Amount</th><th>Tax</th><th>Profit</th></tr></thead><tbody>${rows.join("") || `<tr><td colspan="7">No records in this period.</td></tr>`}</tbody></table></body></html>`);
 };
 $("#download-stock-watch").onclick = () => {
   const low = data.products.filter(item => item.qty <= item.min);
@@ -3381,6 +3424,10 @@ dialog.wide{width:min(900px,calc(100% - 28px));max-height:calc(100vh - 28px);ove
 .cust-head{display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap}.cust-head .search{flex:1}.cust-head .search input{width:100%}
 </style>`);
 function printHtml(html) {
+  if (html.length > 1000000 || (html.match(/<tr(?:\s|>)/gi) || []).length > PRINT_PART_SIZE + 15) {
+    toast("This printout is too large for a safe preview. Narrow the filters or download the data instead.");
+    return;
+  }
   const frame = document.createElement("iframe");
   frame.setAttribute("aria-hidden", "true");
   frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
@@ -3413,23 +3460,68 @@ const today10 = () => new Date().toISOString().slice(0, 10);
 $("#manage-categories").insertAdjacentHTML("beforebegin", `<button class="button secondary" id="inv-download" type="button">Download list</button><button class="button secondary" id="inv-print" type="button">Print list</button>`);
 const inventoryRows = () => {
   const q = $("#search").value.trim().toLowerCase();
-  return data.products.filter(p => !q || [p.name, p.sku, p.barcode, p.unit, p.category, p.brand, p.color, p.size, p.material].some(v => String(v || "").toLowerCase().includes(q)));
+  return data.products.filter(p => !q || [p.name, p.sku, p.barcode, p.unit, p.category, p.brand, p.color, p.size, p.material, p.generic_name, p.strength, p.dosage_form, p.manufacturer].some(v => String(v || "").toLowerCase().includes(q)));
 };
+// The downloadable list and printout use the same shop-specific product fields.
+// These labels follow the inventory template's existing storage mappings.
+function inventoryTypeColumns(shopType) {
+  const field = (label, key) => ({ label, value: item => item[key] ?? "" });
+  const pack = [field("Smaller Unit", "pack_name"), { label: "Units per Pack", value: item => Number(item.pack_size) || "" }];
+  switch (shopType) {
+    case "pharmacy": return [field("Generic Name", "generic_name"), field("Strength", "strength"), field("Dosage Form", "dosage_form"), field("Manufacturer", "manufacturer")];
+    case "restaurant": return [field("Portion / Serving", "size"), field("Food Type", "material"), field("Spice / Prep", "color"), field("Kitchen Section", "brand")];
+    case "clothing": return [field("Brand", "brand"), field("Color", "color"), field("Size", "size"), field("Material", "material")];
+    case "mobile": return [field("Brand", "brand"), field("Color", "color"), field("Storage / Variant", "size")];
+    case "hardware": return [field("Brand", "brand"), field("Size / Spec", "size"), ...pack];
+    case "grocery": return [field("Brand", "brand"), field("Pack / Weight", "size"), ...pack];
+    default: return [field("Brand", "brand"), ...pack];
+  }
+}
+function inventoryListRows(items, shopType, hasCost) {
+  const columns = inventoryTypeColumns(shopType);
+  const headers = ["Product", "SKU", "Barcode", "Category", ...columns.map(column => column.label), "Unit", "Quantity", ...(shopType === "pharmacy" ? ["Sellable Quantity"] : []), "Minimum", "Selling price", ...(hasCost ? ["Purchase cost", "Stock value (cost)"] : [])];
+  const rows = items.map(p => [p.name, p.sku || "", p.barcode || "", p.category || "Other", ...columns.map(column => column.value(p)), p.unit || "piece", p.qty, ...(shopType === "pharmacy" ? [productSellableQty(p)] : []), p.min, p.price, ...(hasCost ? [p.cost ?? "", p.cost === undefined ? "" : Number(p.cost) * Number(p.qty)] : [])]);
+  return [headers, ...rows];
+}
 $("#inv-download").onclick = () => {
   const items = inventoryRows(), hasCost = items.some(p => p.cost !== undefined);
-  const rows = [["Product", "SKU", "Category", "Brand", "Color", "Size", "Material", "Unit", "Quantity", "Minimum", "Selling price", ...(hasCost ? ["Purchase cost", "Stock value (cost)"] : [])],
-    ...items.map(p => [p.name, p.sku, p.category || "Other", p.brand || "", p.color || "", p.size || "", p.material || "", p.unit || "piece", p.qty, p.min, p.price, ...(hasCost ? [p.cost, p.cost * p.qty] : [])])];
+  const rows = inventoryListRows(items, data.shopType, hasCost);
   downloadFile(`inventory-${today10()}.csv`, "\uFEFF" + rows.map(r => r.map(csvCell).join(",")).join("\r\n"));
 };
+function otherInventoryPrintTable(items, shopType, hasCost, start = 1) {
+  const columns = inventoryTypeColumns(shopType);
+  const rows = items.map((p, i) => {
+    const details = columns.map(column => [column.label, column.value(p)]).filter(([, value]) => value !== "" && value !== null && value !== undefined).map(([label, value]) => `${esc(label)}: ${esc(value)}`).join(" · ");
+    return `<tr><td>${start + i}</td><td><b>${esc(p.name)}</b>${details ? `<br><small>${details}</small>` : ""}</td><td>${esc(p.sku || "")}</td><td>${esc(p.category || "Other")}</td><td>${esc(p.unit || "piece")}</td><td class="r">${Number(p.qty || 0)}</td><td class="r">${Number(p.min || 0)}</td><td class="r">${money(p.price)}</td>${hasCost ? `<td class="r">${p.cost === undefined ? "—" : money(p.cost)}</td>` : ""}</tr>`;
+  }).join("");
+  return `<table><thead><tr><th>#</th><th>Product / details</th><th>SKU</th><th>Category</th><th>Unit</th><th class="r">Qty</th><th class="r">Min</th><th class="r">Price / unit</th>${hasCost ? '<th class="r">Cost / unit</th>' : ""}</tr></thead><tbody>${rows}</tbody></table>`;
+}
+function pharmacyInventoryPrintTable(items, hasCost, start = 1) {
+  const rows = items.map((p, i) => {
+    const details = [p.generic_name, p.strength, p.dosage_form, p.manufacturer].filter(Boolean).map(esc).join(" · ");
+    return `<tr><td>${start + i}</td><td><b>${esc(p.name)}</b>${details ? `<br><small>${details}</small>` : ""}</td><td>${esc(p.category || "Other")}</td><td>${esc(p.unit || "piece")}</td><td class="r">${Number(p.qty || 0)}</td><td class="r">${productSellableQty(p)}</td><td class="r">${Number(p.min || 0)}</td><td class="r">${money(p.price)}</td>${hasCost ? `<td class="r">${p.cost === undefined ? "—" : money(p.cost)}</td>` : ""}</tr>`;
+  }).join("");
+  return `<table><thead><tr><th>#</th><th>Medicine / details</th><th>Category</th><th>Unit</th><th class="r">Total stock</th><th class="r">Sellable</th><th class="r">Min</th><th class="r">Price / unit</th>${hasCost ? '<th class="r">Cost / unit</th>' : ""}</tr></thead><tbody>${rows}</tbody></table>`;
+}
 $("#inv-print").onclick = () => {
-  const items = inventoryRows(), hasCost = items.some(p => p.cost !== undefined);
-  if (!items.length) return toast("No products to print.");
+  const matchingItems = inventoryRows();
+  if (!matchingItems.length) return toast("No products to print.");
+  const part = choosePrintPart(matchingItems, "Inventory list");
+  if (!part) return;
+  const items = part.items, hasCost = items.some(p => p.cost !== undefined);
   const value = items.reduce((sum, p) => sum + (p.cost || 0) * p.qty, 0);
+  if (data.shopType === "pharmacy") {
+    printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Pharmacy inventory</title><style>
+@page{margin:10mm}body{font:12px/1.4 system-ui,"Segoe UI",sans-serif;color:#000}h1{font-size:20px;margin:0}p{margin:2px 0 10px}table{width:100%;border-collapse:collapse;table-layout:fixed}th,td{border:1px solid #999;padding:5px;text-align:left;overflow-wrap:anywhere}th{background:#eee}.r{text-align:right}tr{page-break-inside:avoid}small{color:#333}th:first-child{width:3%}th:nth-child(2){width:32%}</style></head><body>
+<h1>${esc(data.shopName)} - Pharmacy inventory list</h1><p>${esc(data.workspace)} · ${new Date().toLocaleString("en-BD")} · ${esc(printPartLabel(part))}${hasCost ? ` · ${part.parts > 1 ? "Part stock value at cost" : "Stock value at cost"}: ${money(value)}` : ""}</p><p>Sellable excludes expired, unverified and quarantined stock. For batch numbers and expiry dates, use Batches &amp; expiry.</p>
+${pharmacyInventoryPrintTable(items, hasCost, part.start)}</body></html>`);
+    return;
+  }
   printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>Inventory</title><style>
 @page{margin:10mm}body{font:12px/1.4 system-ui,"Segoe UI",sans-serif;color:#000}h1{font-size:20px;margin:0}p{margin:2px 0 10px}
-table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5px 7px;text-align:left}th{background:#eee}.r{text-align:right}tr{page-break-inside:avoid}</style></head><body>
-<h1>${esc(data.shopName)} - Inventory list</h1><p>${esc(data.workspace)} · ${new Date().toLocaleString("en-BD")} · ${items.length} products${hasCost ? ` · Stock value at cost: ${money(value)}` : ""}</p>
-<table><thead><tr><th>#</th><th>Product</th><th>Brand</th><th>Color</th><th>Size</th><th>Material</th><th>SKU</th><th>Category</th><th class="r">Qty</th><th class="r">Min</th><th class="r">Price</th>${hasCost ? '<th class="r">Cost</th>' : ""}</tr></thead><tbody>${items.map((p, i) => `<tr><td>${i + 1}</td><td>${esc(p.name)}</td><td>${esc(p.brand || "")}</td><td>${esc(p.color || "")}</td><td>${esc(p.size || "")}</td><td>${esc(p.material || "")}</td><td>${esc(p.sku)}</td><td>${esc(p.category || "Other")}</td><td class="r">${p.qty} ${esc(p.unit || "piece")}</td><td class="r">${p.min}</td><td class="r">${money(p.price)}</td>${hasCost ? `<td class="r">${money(p.cost)}</td>` : ""}</tr>`).join("")}</tbody></table></body></html>`);
+table{width:100%;border-collapse:collapse;table-layout:fixed}th,td{border:1px solid #999;padding:5px;text-align:left;overflow-wrap:anywhere}th{background:#eee}.r{text-align:right}tr{page-break-inside:avoid}small{color:#333}th:first-child{width:3%}th:nth-child(2){width:30%}</style></head><body>
+<h1>${esc(data.shopName)} - Inventory list</h1><p>${esc(data.workspace)} · ${new Date().toLocaleString("en-BD")} · ${esc(printPartLabel(part))}${hasCost ? ` · ${part.parts > 1 ? "Part stock value at cost" : "Stock value at cost"}: ${money(value)}` : ""}</p>
+${otherInventoryPrintTable(items, data.shopType, hasCost, part.start)}</body></html>`);
 };
 
 // Local Sales: search whole bills by customer, item, payment, bill no, or date range.
@@ -3470,7 +3562,9 @@ $("#sales-print").onclick = () => {
   const salesGross = currentMatchingSales.reduce((sum, item) => sum + Number(item.original_total ?? item.total ?? 0), 0);
   const salesNet = currentMatchingSales.reduce((sum, item) => sum + Number(item.total || 0), 0);
   const returnsTotal = Math.max(0, salesGross - salesNet);
-  const printRows = currentLocalSaleGroups.map(group => {
+  const part = choosePrintPart(currentLocalSaleGroups, "Local sales");
+  if (!part) return;
+  const printRows = part.items.map(group => {
     const first = group.lines[0] || {}, totals = localSaleGroupTotals(group);
     const items = group.lines.map(sale => {
       const originalQty = Number(sale.original_qty ?? sale.qty ?? 0), gross = Number(sale.original_total ?? sale.total ?? 0), returnedQty = Number(sale.returned_qty || 0);
@@ -3482,7 +3576,7 @@ $("#sales-print").onclick = () => {
 @page{margin:10mm}body{font:12px/1.4 system-ui,"Segoe UI",sans-serif;color:#000}h1{font-size:20px;margin:0}p{margin:2px 0 10px}
 table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5px 7px;text-align:left;vertical-align:top}th{background:#eee}.r{text-align:right}tr{page-break-inside:avoid}
 .summary{margin:15px 0;padding:10px;background:#f5f5f5;border:1px solid #ccc}.summary-row{display:flex;justify-content:space-between;margin:3px 0}</style></head><body>
-<h1>${esc(data.shopName)} - Local Sales</h1><p>${esc(data.workspace)} · ${new Date().toLocaleString("en-BD")} · ${dateRange} · Online-order bills are not included.</p>
+<h1>${esc(data.shopName)} - Local Sales</h1><p>${esc(data.workspace)} · ${new Date().toLocaleString("en-BD")} · ${dateRange} · ${esc(printPartLabel(part))} · Online-order bills are not included. Summary covers all matching sales.</p>
 <div class="summary"><div class="summary-row"><span>Sale lines:</span><b>${currentMatchingSales.length}</b></div><div class="summary-row"><span>Gross sales:</span><b>${money(salesGross)}</b></div><div class="summary-row"><span>Returned value:</span><b>${money(returnsTotal)}</b></div><div class="summary-row"><span>Net sales after returns:</span><b>${money(salesNet)}</b></div></div>
 <table><thead><tr><th>Date</th><th>Bill / Sale</th><th>Customer</th><th>Items</th><th>Payment</th><th class="r">Total</th></tr></thead><tbody>${printRows}</tbody></table></body></html>`);
 };
@@ -3669,7 +3763,7 @@ render = function () {
 const OFFLINE_FONTS = true; // removes the Google Fonts link so screens look the same without internet
 if (OFFLINE_FONTS) document.querySelector('link[href*="fonts.googleapis.com"]')?.remove();
 const saveCsv = (filename, rows) => downloadFile(filename, "\uFEFF" + rows.map(r => r.map(csvCell).join(",")).join("\r\n"));
-const toolTable = (head, rows) => `<div class="table-scroll bill-cart" style="max-height:380px"><table><thead><tr>${head.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+const toolTable = (head, rows) => `<div class="table-scroll bill-cart" style="max-height:380px"><table><thead><tr>${head.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows.slice(0, PRINT_PART_SIZE).map(r => `<tr>${r.map(c => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${rows.length > PRINT_PART_SIZE ? `<p class="form-hint">Showing first ${PRINT_PART_SIZE} of ${rows.length} rows. Download for the full list.</p>` : ""}`;
 const stamp = at => new Date(at.replace(" ", "T") + "Z").toLocaleString("en-BD");
 let toolDays = 90;
 const periodPicker = `<p><label>Period <select id="tool-period">${[30, 90, 180, 365].map(d => `<option value="${d}" ${d === toolDays ? "selected" : ""}>Last ${d} days</option>`).join("")}</select></label></p>`;
@@ -3981,7 +4075,10 @@ async function openTool(key) {
       $("#tool-body").innerHTML = `<div id="tool-print"><h3>${esc(tools[k].label)}</h3>${out.html}</div>`;
       $("#tool-actions").innerHTML = `${out.csv ? '<button type="button" class="button secondary" id="tool-csv">Download</button>' : ""}<button type="button" class="button secondary" id="tool-print-btn">Print</button>${out.extra || ""}`;
       if (out.csv) $("#tool-csv").onclick = () => saveCsv(`${k}-${today10()}.csv`, out.csv);
-      $("#tool-print-btn").onclick = () => printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(tools[k].label)}</title><style>@page{margin:10mm}body{font:12px system-ui,"Segoe UI",sans-serif}table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5px 7px;text-align:left}th{background:#eee}input,select,a{display:none}</style></head><body><h2>${esc(data.shopName)}</h2>${$("#tool-print").innerHTML}</body></html>`);
+      $("#tool-print-btn").onclick = () => {
+        if (out.csv && out.csv.length - 1 > PRINT_PART_SIZE) return printSupplierRows(tools[k].label, out.csv[0], out.csv.slice(1));
+        return printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(tools[k].label)}</title><style>@page{margin:10mm}body{font:12px system-ui,"Segoe UI",sans-serif}table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:5px 7px;text-align:left}th{background:#eee}input,select,a{display:none}</style></head><body><h2>${esc(data.shopName)}</h2>${$("#tool-print").innerHTML}</body></html>`);
+      };
       out.after?.();
     } catch (error) { $("#tool-body").innerHTML = `<div class="empty">${esc(error.message)}</div>`; }
   };
@@ -4002,8 +4099,10 @@ const supplierMoney = value => {
 const supplierDate = () => dateKey(new Date());
 const canEditSupplierHistory = () => !!signedInUser?.permissions?.supplier_purchases;
 function printSupplierRows(title, headers, rows) {
-  const tableRows = rows.map(row => `<tr>${row.map(value => `<td>${esc(value)}</td>`).join("")}</tr>`).join("");
-  printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>body{font:14px Arial,sans-serif;color:#222;padding:24px}h1{font-size:20px;margin:0 0 6px}p{color:#555;margin:0 0 18px}table{width:100%;border-collapse:collapse}th,td{text-align:left;border:1px solid #bbb;padding:8px}th{background:#eee}tfoot{font-weight:bold}@media print{body{padding:0}}</style></head><body><h1>${esc(title)}</h1><p>${esc(data.shopName || "Shop Desk")} · Printed ${new Date().toLocaleString("en-BD")}</p>${rows.length ? `<table><thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${tableRows}</tbody></table>` : "<p>No records to print.</p>"}</body></html>`);
+  const part = choosePrintPart(rows, title);
+  if (!part) return;
+  const tableRows = part.items.map(row => `<tr>${row.map(value => `<td>${esc(value)}</td>`).join("")}</tr>`).join("");
+  printHtml(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>body{font:14px Arial,sans-serif;color:#222;padding:24px}h1{font-size:20px;margin:0 0 6px}p{color:#555;margin:0 0 18px}table{width:100%;border-collapse:collapse}th,td{text-align:left;border:1px solid #bbb;padding:8px}th{background:#eee}tfoot{font-weight:bold}@media print{body{padding:0}}</style></head><body><h1>${esc(title)}</h1><p>${esc(data.shopName || "Shop Desk")} · Printed ${new Date().toLocaleString("en-BD")} · ${esc(printPartLabel(part))}</p>${part.items.length ? `<table><thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${tableRows}</tbody></table>` : "<p>No records to print.</p>"}</body></html>`);
 }
 function supplierModal(title, markup, onSave) {
   openModal(title, markup, onSave);
@@ -4019,14 +4118,14 @@ async function openSupplierHub() {
     const canRecord = !!data.permissions?.inventory;
     const supplierRows = suppliers.length ? suppliers.map(s => `<tr><td><b>${esc(s.name)}</b>${s.phone ? `<br><small>${esc(s.phone)}</small>` : ""}</td><td>${supplierMoney(s.opening_balance)}</td><td>${supplierMoney(s.total_bought)}</td><td>${supplierMoney(s.total_paid)}</td><td><b>${supplierMoney(s.balance)}</b></td><td>${canRecord && Number(s.balance) > 0 ? `<button type="button" class="user-action" data-supplier-pay="${s.id}" data-supplier-name="${esc(s.name)}" data-balance="${s.balance}">Pay supplier</button>` : "—"}${canEdit ? `<button type="button" class="user-action" data-edit-supplier="${s.id}">Edit</button>` : ""}</td></tr>`).join("") : '<tr><td colspan="6" class="empty">Add a supplier to start recording purchases.</td></tr>';
     const purchaseRows = purchases.length ? purchases.map(p => `<tr data-history-supplier="${p.supplier_id}"><td><input type="checkbox" aria-label="Select purchase P-${String(p.id).padStart(8, "0")}" data-select-purchase="${p.id}"></td><td>P-${String(p.id).padStart(8, "0")}</td><td>${esc(p.date)}</td><td>${esc(p.supplier_name)}</td><td>${p.line_count} items <button type="button" class="user-action" aria-expanded="false" data-toggle-purchase="${p.id}">View products</button></td><td><b>${supplierMoney(p.total)}</b></td><td>${esc(p.reference || "—")}</td><td>${esc(p.created_by || "")}</td><td><button type="button" class="user-action" data-print-purchase="${p.id}">Print list</button>${canEdit ? `<button type="button" class="user-action" data-edit-purchase="${p.id}">Edit</button>` : ""}</td></tr><tr class="purchase-detail-row hidden" data-history-supplier="${p.supplier_id}" data-purchase-detail="${p.id}"><td colspan="9"><div class="purchase-detail"><b>Products bought from ${esc(p.supplier_name)}</b>${p.items?.length ? `<div class="table-scroll"><table><thead><tr><th>Product</th><th>Quantity</th><th>Unit cost</th><th>Line total</th>${data.shopType === "pharmacy" ? "<th>Batch / lot</th><th>Expiry</th>" : ""}</tr></thead><tbody>${p.items.map(item => `<tr><td>${esc(item.productName)}</td><td>${Number(item.qty)} ${esc(item.unit || "piece")}</td><td>${supplierMoney(item.cost)}</td><td>${supplierMoney(Number(item.qty) * Number(item.cost))}</td>${data.shopType === "pharmacy" ? `<td>${esc(item.batchNumber || "Not recorded")}</td><td>${esc(item.expiryDate || "Not recorded")}</td>` : ""}</tr>`).join("")}</tbody></table></div>` : `<p class="form-hint">Product details are unavailable for this older purchase.</p>`}</div></td></tr>`).join("") : '<tr><td colspan="9" class="empty">No purchases recorded yet.</td></tr>';
-    const movementRows = movements.length ? movements.map(m => `<tr><td>${esc(m.at)}</td><td>${esc(m.product_name)}</td><td>${esc(m.kind)}</td><td>${Number(m.quantity_change) > 0 ? "+" : ""}${Number(m.quantity_change)} ${esc(m.unit)}</td><td>${Number(m.quantity_after)} ${esc(m.unit)}</td><td>${esc(m.reference || "—")}</td><td>${esc(m.actor || "")}</td></tr>`).join("") : '<tr><td colspan="7" class="empty">New stock movements will appear here.</td></tr>';
+    const movementRows = movements.length ? movements.map(m => `<tr><td>${esc(m.at)}</td><td>${esc(m.product_name)}</td><td>${esc(m.kind)}</td><td>${Number(m.quantity_change) > 0 ? "+" : ""}${Number(m.quantity_change)} ${esc(m.unit)}</td><td>${Number(m.quantity_after)} ${esc(m.unit)}</td><td>${esc(m.reference || "—")}</td><td>${esc(m.note || "—")}</td><td>${esc(m.actor || "")}</td></tr>`).join("") : '<tr><td colspan="8" class="empty">New stock movements will appear here.</td></tr>';
     const paymentRows = payments.length ? payments.map(p => `<tr data-history-supplier="${p.supplier_id}"><td><input type="checkbox" aria-label="Select supplier payment ${p.id}" data-select-payment="${p.id}"></td><td>${esc(p.date)}</td><td>${esc(p.supplier_name)}</td><td>${esc(p.method)}</td><td><b>${supplierMoney(p.amount)}</b></td><td>${esc(p.note || "—")}</td><td>${esc(p.received_by || "")}</td><td><button type="button" class="user-action" data-print-payment="${p.id}">Print</button>${canEdit ? `<button type="button" class="user-action" data-edit-payment="${p.id}">Edit</button>` : ""}</td></tr>`).join("") : '<tr><td colspan="8" class="empty">No supplier payments recorded yet.</td></tr>';
     supplierModal("Suppliers & purchases", `<div class="supplier-actions">${canRecord ? `<button type="button" class="button secondary" id="supplier-add">＋ Add supplier</button><button type="button" class="button primary" id="purchase-add" ${suppliers.length ? "" : "disabled"}>＋ Record purchase</button>` : ""}</div>
       <h3>Supplier balances</h3><div class="table-scroll supplier-table"><table><thead><tr><th>Supplier</th><th>Opening due</th><th>Purchases</th><th>Paid</th><th>Balance due</th><th></th></tr></thead><tbody>${supplierRows}</tbody></table></div>
       <label class="supplier-history-filter">Filter history by supplier<select id="supplier-history-filter"><option value="all">All suppliers</option>${suppliers.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join("")}</select></label>
       <h3>Purchase history</h3><div class="supplier-actions"><button type="button" class="button secondary" data-print-selected="purchase">Print selected</button><button type="button" class="button secondary" data-print-all="purchase">Print all shown</button></div><div class="table-scroll supplier-table"><table><thead><tr><th><input type="checkbox" id="select-all-purchases" aria-label="Select all purchases"></th><th>Purchase</th><th>Date</th><th>Supplier</th><th>Lines</th><th>Total</th><th>Reference</th><th>Recorded by</th><th>Actions</th></tr></thead><tbody id="supplier-purchase-history">${purchaseRows}</tbody></table></div>
       <h3>Supplier payment history</h3><div class="supplier-actions"><button type="button" class="button secondary" data-print-selected="payment">Print selected</button><button type="button" class="button secondary" data-print-all="payment">Print all shown</button></div><div class="table-scroll supplier-table"><table><thead><tr><th><input type="checkbox" id="select-all-payments" aria-label="Select all supplier payments"></th><th>Date</th><th>Supplier</th><th>Method</th><th>Amount</th><th>Note</th><th>Recorded by</th><th>Actions</th></tr></thead><tbody id="supplier-payment-history">${paymentRows}</tbody></table></div>
-      <h3>Stock movement history</h3><p class="form-hint">New purchases, sales, and stock corrections are recorded here. Older activity is not reconstructed.</p><div class="table-scroll supplier-table movement-table"><table><thead><tr><th>When</th><th>Product</th><th>Reason</th><th>Change</th><th>Stock after</th><th>Reference</th><th>By</th></tr></thead><tbody>${movementRows}</tbody></table></div>`, async () => {});
+      <h3>Stock movement history</h3><p class="form-hint">New purchases, sales, and stock corrections are recorded here. Older activity is not reconstructed.</p><div class="table-scroll supplier-table movement-table"><table><thead><tr><th>When</th><th>Product</th><th>Reason</th><th>Change</th><th>Stock after</th><th>Reference</th><th>Details / reason</th><th>By</th></tr></thead><tbody>${movementRows}</tbody></table></div>`, async () => {});
     $("#submit-modal").classList.add("hidden");
     if (canRecord) $("#supplier-add").onclick = () => supplierModal("Add supplier", `<label>Supplier name<input name="name" maxlength="120" required></label><label>Phone<input name="phone" maxlength="40" inputmode="tel"></label><label>Address or market location<input name="address" maxlength="300"></label><label>Existing balance owed (৳)<input name="openingBalance" type="number" min="0" step="0.01" value="0" required><small class="form-hint">Use this for an unpaid balance from before you started using the app.</small></label>`, async form => {
       await api("/api/suppliers", { method: "POST", body: JSON.stringify({ name: form.get("name"), phone: form.get("phone"), address: form.get("address"), openingBalance: Number(form.get("openingBalance")) }) });
@@ -4167,34 +4266,67 @@ async function openPharmacyBatchManager() {
   if (!data.permissions?.inventory) return toast("Inventory access is required to manage medicine batches.");
   try {
     data = await api("/api/state");
-    const { today: dateToday, cutoff } = await api("/api/pharmacy/expiry");
+    const { today: dateToday } = await api("/api/pharmacy/expiry");
     const todayValue = dateToday || dateKey(new Date());
     const batches = data.pharmacyBatches || [];
     const expiryState = batch => {
-      if (!batch.expiry_date) return { label: "Expiry needs review", css: "out" };
-      if (batch.expiry_date < todayValue) return { label: "Expired", css: "out" };
-      if (batch.expiry_date <= cutoff) return { label: "Expiring soon", css: "low" };
-      return { label: "In date", css: "" };
+      if (!batch.expiry_date) return "Expiry needs review";
+      if (batch.expiry_date < todayValue) return "Expired";
+      const cutoff = new Date(`${todayValue}T00:00:00Z`); cutoff.setUTCDate(cutoff.getUTCDate() + 90);
+      return batch.expiry_date <= cutoff.toISOString().slice(0,10) ? "Expiring soon" : "In date";
     };
-    const unknown = batches.filter(batch => !batch.expiry_date && Number(batch.quantity_remaining) > 0).length;
-    const expired = batches.filter(batch => batch.expiry_date && batch.expiry_date < todayValue && Number(batch.quantity_remaining) > 0).length;
-    const soon = batches.filter(batch => batch.expiry_date && batch.expiry_date >= todayValue && batch.expiry_date <= cutoff && Number(batch.quantity_remaining) > 0).length;
-    const rows = batches.length ? batches.map(batch => {
-      const status = expiryState(batch);
-      return `<tr><td><b>${esc(batch.product_name)}</b><small class="form-hint">${esc(batch.generic_name || "")}</small></td><td>${esc(batch.batch_number)}</td><td>${batch.expiry_date ? esc(batch.expiry_date) : "Unknown — review lot label"}</td><td>${Number(batch.quantity_remaining)} ${esc(batch.product_unit || "piece")}</td><td>${Number(batch.sellable_quantity || 0)} ${esc(batch.product_unit || "piece")}</td><td><span class="status ${status.css}">${status.label}</span></td><td><button type="button" class="user-action" data-edit-pharmacy-batch="${batch.id}">Correct batch / expiry</button></td></tr>`;
-    }).join("") : '<tr><td colspan="7" class="empty">No medicine batches recorded. Add a medicine or receive the first batch.</td></tr>';
-    openModal("Medicine batches & expiry", `<div class="pharmacy-batch-toolbar"><div><b>${batches.length} recorded batches</b><p class="form-hint">Sales use earliest-expiring eligible stock first. Expired, unknown-expiry, and returned/quarantined units are not sellable.</p></div><button type="button" class="button primary" id="pharmacy-receive-batch">＋ Receive batch</button></div><div class="pharmacy-expiry-summary"><div><b>${expired}</b><span>Expired lots with stock</span></div><div><b>${soon}</b><span>Expiring within 90 days</span></div><div><b>${unknown}</b><span>Need expiry verification</span></div></div><div class="table-scroll supplier-table"><table><thead><tr><th>Medicine</th><th>Batch / lot</th><th>Expiry date</th><th>Remaining</th><th>Sellable</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div>`, async () => {});
+    const count = status => batches.filter(batch => Number(batch.quantity_remaining)>0 && expiryState(batch) === status).length;
+    openModal("Medicine batches & expiry", `<div class="pharmacy-batch-toolbar"><div><b>${batches.length} recorded batches</b><p class="form-hint">Expired, unknown-expiry and quarantined units cannot be sold.</p></div><button type="button" class="button primary" id="pharmacy-receive-batch">＋ Receive batch</button></div><div class="pharmacy-expiry-summary"><div><b>${count("Expired")}</b><span>Expired lots with stock</span></div><div><b>${count("Expiring soon")}</b><span>Expiring within 90 days</span></div><div><b>${count("Expiry needs review")}</b><span>Need expiry verification</span></div></div><div class="batch-filters"><label>Search medicine or batch<input id="batch-search" type="search" placeholder="Name, generic name or batch number"></label><label>Expiry filter<select id="batch-filter"><option value="all">All batches</option><option value="30">Expiring within 30 days</option><option value="60">Expiring within 60 days</option><option value="90">Expiring within 90 days</option><option value="expired">Expired</option><option value="unknown">Expiry needs review</option></select></label><button type="button" class="button secondary" id="batch-print">Print filtered report</button></div><p class="form-hint" id="batch-count"></p><div class="table-scroll supplier-table"><table><thead><tr><th>Medicine</th><th>Batch / lot</th><th>Expiry date</th><th>Remaining</th><th>Sellable</th><th>Status</th><th>Action</th></tr></thead><tbody id="batch-rows"></tbody></table></div><div class="batch-pagination"><button type="button" class="button secondary" id="batch-prev">Previous</button><span id="batch-page"></span><button type="button" class="button secondary" id="batch-next">Next</button></div>`, async () => {});
     $("#submit-modal").classList.add("hidden");
+    let page = 0, filtered = [];
+    const search = $("#batch-search"), filter = $("#batch-filter"), rows = $("#batch-rows");
+    function update(reset = false) {
+      if (reset) page = 0;
+      const q = search.value.trim().toLocaleLowerCase(), f = filter.value;
+      const cutoff = new Date(`${todayValue}T00:00:00Z`);
+      if (/^\d+$/.test(f)) cutoff.setUTCDate(cutoff.getUTCDate()+Number(f));
+      const end = cutoff.toISOString().slice(0,10);
+      filtered = batches.filter(batch => {
+        if (q && ![batch.product_name,batch.generic_name,batch.batch_number].some(v => String(v || "").toLocaleLowerCase().includes(q))) return false;
+        if (f === "all") return true;
+        if (Number(batch.quantity_remaining) <= 0) return false;
+        if (f === "expired") return !!batch.expiry_date && batch.expiry_date < todayValue;
+        if (f === "unknown") return !batch.expiry_date;
+        return !!batch.expiry_date && batch.expiry_date >= todayValue && batch.expiry_date <= end;
+      });
+      const pages = Math.max(1, Math.ceil(filtered.length/100)); page = Math.min(page,pages-1);
+      $("#batch-count").textContent = `${filtered.length} matching batches${f === "all" ? " (including empty batches)" : " with stock"}`;
+      $("#batch-page").textContent = `Page ${page+1} of ${pages}`;
+      $("#batch-prev").disabled = page === 0; $("#batch-next").disabled = page >= pages-1;
+      rows.innerHTML = filtered.slice(page*100,(page+1)*100).map(batch => {
+        const status = expiryState(batch), sellable = status === "Expired" || status === "Expiry needs review" ? 0 : Number(batch.sellable_quantity || 0);
+        return `<tr><td><b>${esc(batch.product_name)}</b><small class="form-hint">${esc(batch.generic_name || "")}</small></td><td>${esc(batch.batch_number)}</td><td>${esc(batch.expiry_date || "Unknown")}</td><td>${Number(batch.quantity_remaining)} ${esc(batch.product_unit || "piece")}</td><td>${sellable} ${esc(batch.product_unit || "piece")}</td><td><span class="status ${status === "Expired" || status === "Expiry needs review" ? "out" : status === "Expiring soon" ? "low" : ""}">${status}</span></td><td><button type="button" class="user-action" data-edit-pharmacy-batch="${batch.id}">Correct batch / expiry</button>${signedInUser?.role === "admin" && Number(batch.quantity_remaining)>0 ? `<button type="button" class="user-action" data-adjust-pharmacy-batch="${batch.id}">Remove stock</button>` : ""}</td></tr>`;
+      }).join("") || '<tr><td colspan="7" class="empty">No matching batches.</td></tr>';
+    }
+    search.addEventListener("input", () => update(true)); filter.addEventListener("change", () => update(true));
+    $("#batch-prev").onclick = () => { page--; update(); }; $("#batch-next").onclick = () => { page++; update(); };
+    $("#batch-print").onclick = () => printSupplierRows(`Medicine expiry report — ${filter.selectedOptions[0].textContent}${search.value.trim() ? ` — search: ${search.value.trim()}` : ""}`, ["Medicine","Generic","Batch","Expiry","Remaining","Status"], filtered.map(batch => [batch.product_name,batch.generic_name || "",batch.batch_number,batch.expiry_date || "Unknown",`${batch.quantity_remaining} ${batch.product_unit || "piece"}`,expiryState(batch)]));
     $("#cancel-modal").textContent = t("Close");
     $("#pharmacy-receive-batch").onclick = () => { closeModal(); openPharmacyReceiveBatch(); };
-    dialog.querySelectorAll("[data-edit-pharmacy-batch]").forEach(button => button.onclick = () => {
-      const batch = batches.find(item => Number(item.id) === Number(button.dataset.editPharmacyBatch));
+    rows.onclick = event => {
+      const button = event.target.closest("[data-edit-pharmacy-batch], [data-adjust-pharmacy-batch]"); if (!button) return;
+      const batch = batches.find(item => Number(item.id) === Number(button.dataset.editPharmacyBatch || button.dataset.adjustPharmacyBatch));
       if (!batch) return toast("Medicine batch not found. Refresh and try again.");
       closeModal();
-      openPharmacyEditBatch(batch);
-    });
+      if (button.dataset.adjustPharmacyBatch) openPharmacyAdjustBatch(batch); else openPharmacyEditBatch(batch);
+    };
+    update();
   } catch (error) { toast(error.message); }
 }
+function openPharmacyAdjustBatch(batch) {
+  const regular = Math.max(0,Number(batch.quantity_remaining)-Number(batch.quantity_quarantined));
+  const quarantine = Number(batch.quantity_quarantined || 0);
+  openModal("Remove medicine batch stock", `<p><b>${esc(batch.product_name)}</b> · Batch ${esc(batch.batch_number)} · Expiry ${esc(batch.expiry_date || "unknown")}</p><p class="form-hint">Regular stock: ${regular}; quarantined stock: ${quarantine} ${esc(batch.product_unit || "piece")}. This removes stock; it does not delete the batch or record a supplier credit. Receive any replacement separately.</p><label>Action<select name="kind" required><option value="">Choose action</option><option value="destroyed">Destroyed</option><option value="returned to supplier">Returned to supplier</option><option value="stock correction">Stock correction (reduce)</option></select></label><label>Stock type<select name="source" required><option value="regular">Regular stock</option><option value="quarantined">Quarantined stock</option></select></label><label>Quantity to remove (${esc(batch.product_unit || "piece")})<input name="quantity" type="number" min="0.001" step="any" required></label><label>Reason<textarea name="reason" maxlength="500" required></textarea></label><p class="form-hint">Confirm the actual quantity and reason before saving. This action cannot be undone here.</p>`, async form => {
+    const result = await api(`/api/pharmacy/batches/${batch.id}/adjust`, { method: "POST", body: JSON.stringify({ kind: form.get("kind"), source: form.get("source"), quantity: Number(form.get("quantity")), reason: form.get("reason").trim() }) });
+    data = result; render(); toast("Batch stock removed and recorded in stock history.");
+  });
+}
+
 function openPharmacyReceiveBatch(selectedProduct = null) {
   const products = (data.products || []).filter(product => product.id);
   if (!products.length) return toast("Add a medicine before receiving stock.");
@@ -4972,3 +5104,89 @@ setupJoinLink();
 registerServiceWorker();
 
 startApp();
+
+// A conservative reference aid only. No diagnosis, medicine selection, or patient data is stored.
+const symptomSupportGuides = {
+  fever: {
+    title: "Fever", causes: "Fever may have many causes, including respiratory infections such as flu or COVID-19, or dengue. Symptoms overlap; the right diagnosis requires clinical assessment.",
+    medicine: "Paracetamol is used for fever and pain, but is not suitable for everyone. Check allergies, liver disease, other medicines, and duplicate ingredients with a qualified clinician. If dengue is suspected, avoid ibuprofen and aspirin unless a clinician directs otherwise because of bleeding risk.",
+    medicineSource: "https://www.cdc.gov/dengue/treatment/index.html", medicineSourceLabel: "CDC: dengue care and medicine precautions",
+    questions: "Ask about duration, measured temperature, other symptoms, and whether the person is worsening.",
+    urgent: "Severe confusion, trouble breathing, a stiff neck with severe headache, or a person who is difficult to wake needs emergency assessment.",
+    advice: "A pharmacist or clinician should assess the whole situation. Do not assume fever is a minor illness; refer if the person is very unwell, getting worse, or you are uncertain.",
+    source: "https://www.nhs.uk/conditions/fever-in-adults/", sourceLabel: "NHS: fever in adults"
+  },
+  diarrhea: {
+    title: "Diarrhea", causes: "Possible causes include infection, food-related illness, or a medicine side effect. These are examples, not a diagnosis.",
+    medicine: "Oral rehydration solution can help replace fluids and salts. A qualified clinician should check whether it is appropriate, especially with underlying conditions or difficulty keeping fluids down. Do not assume an anti-diarrhea medicine is suitable.",
+    medicineSource: "https://www.nhs.uk/conditions/dehydration/", medicineSourceLabel: "NHS: dehydration and oral rehydration",
+    questions: "Ask about duration, blood or black stool, vomiting, abdominal pain, recent antibiotics, and signs of dehydration such as much less urine.",
+    urgent: "Severe weakness, fainting, severe abdominal pain, blood in stool or vomit, or inability to keep fluids down requires urgent medical assessment.",
+    advice: "Preventing dehydration is important. Consult a pharmacist or clinician about safe rehydration, particularly if fluids cannot be kept down or the person has a medical condition.",
+    source: "https://www.chelwest.nhs.uk/your-visit/patient-leaflets/medicine-services/gastroenteritis", sourceLabel: "NHS: gastroenteritis"
+  },
+  constipation: {
+    title: "Constipation / hard stools", causes: "Possible causes include changes in diet or fluid intake, reduced activity, or medicines. Other causes may need medical assessment.",
+    medicine: "Laxatives are medicines used for constipation, but the correct approach depends on the person and cause. Severe pain, vomiting, bleeding, or a swollen abdomen requires urgent assessment rather than an automatic medicine choice.",
+    medicineSource: "https://www.nhs.uk/conditions/constipation/", medicineSourceLabel: "NHS: constipation and pharmacist advice",
+    questions: "Ask how long this has lasted and about pain, vomiting, blood in stool, weight loss, and any recent change in bowel habits or medicines.",
+    urgent: "Severe abdominal pain, a swollen abdomen with vomiting, or black or significant bloody stool needs urgent medical assessment.",
+    advice: "A clinician should assess persistent or worsening symptoms and unexplained bleeding or weight loss. Do not assume that every change in bowel habit is simple constipation.",
+    source: "https://www.plymouthhospitals.nhs.uk/display-pil/pil-constipation-in-adults-4069/", sourceLabel: "NHS: constipation in adults"
+  },
+  eye: {
+    title: "Itchy or red eyes", causes: "Possible causes include allergy, irritation, or infection. A painful or red eye can also be a more serious problem and must not be assumed to be an allergy.",
+    medicine: "Lubricating eye drops may be used for some eye symptoms, but are not a diagnosis or a substitute for assessment. Eye pain, vision changes, injury, or contact-lens concerns require professional assessment.",
+    medicineSource: "https://www.nhs.uk/conditions/conjunctivitis/", medicineSourceLabel: "NHS: conjunctivitis",
+    questions: "Ask about pain, injury, contact lenses, light sensitivity, and any change in vision.",
+    urgent: "Sudden vision loss, a serious eye injury, or severe eye pain needs emergency assessment. A painful red eye, sensitivity to light, or changes in vision require urgent assessment.",
+    advice: "Do not assume itching is an allergy. Ask a qualified clinician or eye specialist if symptoms are worsening, persistent, or the cause is unclear.",
+    source: "https://www.nhs.uk/symptoms/eye-pain/", sourceLabel: "NHS: eye pain and urgent signs"
+  }
+};
+function renderSymptomSupport() {
+  const guide = symptomSupportGuides[$("#symptom-choice").value];
+  const result = $("#symptom-result");
+  if (!guide) { result.innerHTML = "<h2>3. Review the concern</h2><p>Select a symptom to see questions, warning signs, and reference links.</p>"; return; }
+  result.innerHTML = `<h2>3. Review: ${esc(guide.title)}</h2><div class="symptom-card"><h3>Ask about</h3><p>${esc(guide.questions)}</p></div><div class="symptom-emergency"><h3>Urgent warning signs</h3><p>${esc(guide.urgent)}</p></div><div class="symptom-card"><h3>Possible causes — not a diagnosis</h3><p>${esc(guide.causes)}</p></div><div class="symptom-card"><h3>Medicine information — demonstration only</h3><p>${esc(guide.medicine)}</p><p><b>Do not use this example to select or sell medicine.</b> A qualified clinician must verify suitability, interactions and local guidance.</p><p><a href="${esc(guide.medicineSource)}" target="_blank" rel="noopener noreferrer">${esc(guide.medicineSourceLabel)} ↗</a> (requires internet)</p></div><div class="symptom-card"><h3>Professional assessment</h3><p>${esc(guide.advice)}</p><p><b>If unsure, refer to a qualified clinician.</b> Absence of these listed signs does not guarantee safety.</p></div><p class="form-hint">Reference: <a href="${esc(guide.source)}" target="_blank" rel="noopener noreferrer">${esc(guide.sourceLabel)} ↗</a> (external; may not reflect Bangladesh practice). Not a complete list of risks.</p>`;
+}
+// Keyword matching only: never interpret a match as a diagnosis or transmit the query.
+function matchSymptomGuides(text) {
+  const query = String(text || "").toLowerCase().trim();
+  if (!query) return [];
+  const keywords = {
+    fever: /\b(fever|feverish|temperature)\b|জ্বর/u,
+    diarrhea: /\b(diarrh?oe?a|diarrhea|diarhea|loose stools?|loose motion|watery stools?)\b|ডায়রিয়া|ডায়রিয়া|পাতলা পায়খানা|পাতলা পায়খানা/u,
+    constipation: /\b(constipation|constipated|hard stools?|hard poop|hard poops)\b|কোষ্ঠকাঠিন্য|শক্ত পায়খানা|শক্ত পায়খানা/u,
+    eye: /\b(eyes?|itchy eyes?|itching eyes?|red eyes?)\b|চোখ/u
+  };
+  return Object.entries(keywords).filter(([, pattern]) => pattern.test(query)).map(([key]) => key);
+}
+function renderSymptomMatches() {
+  const text = $("#symptom-search").value.trim(), container = $("#symptom-matches");
+  if (!text) { container.innerHTML = "<p>Type a symptom to find a guide. Only four topics are available in this prototype.</p>"; return; }
+  const matches = matchSymptomGuides(text);
+  container.innerHTML = matches.length
+    ? `<p><b>Matching guide topics—not diagnoses.</b> Select a topic to review; all symptoms need professional assessment.</p><div class="symptom-links">${matches.map(key => `<button type="button" class="button secondary" data-symptom-match="${esc(key)}">${esc(symptomSupportGuides[key].title)}</button>`).join("")}</div>`
+    : `<p><b>No matching offline guide.</b> This prototype covers only fever, diarrhea, constipation, and eye symptoms. Do not assume the problem is minor; consult a qualified clinician. Use online references if available.</p>`;
+}
+function updateSymptomConnection() {
+  $("#symptom-connection").textContent = navigator.onLine ? "Browser reports online; external reference availability may vary. The offline guide remains available." : "Browser reports offline. The limited guide is available; external references require internet.";
+}
+$("#symptom-search").addEventListener("input", () => {
+  $("#symptom-choice").value = "";
+  renderSymptomSupport();
+  renderSymptomMatches();
+});
+$("#symptom-clear").addEventListener("click", () => { $("#symptom-search").value = ""; $("#symptom-choice").value = ""; renderSymptomSupport(); renderSymptomMatches(); $("#symptom-search").focus(); });
+$("#symptom-matches").addEventListener("click", event => {
+  const button = event.target.closest("[data-symptom-match]");
+  if (!button || !Object.hasOwn(symptomSupportGuides, button.dataset.symptomMatch)) return;
+  $("#symptom-choice").value = button.dataset.symptomMatch;
+  renderSymptomSupport();
+});
+window.addEventListener("online", updateSymptomConnection);
+window.addEventListener("offline", updateSymptomConnection);
+updateSymptomConnection();
+$("#symptom-choice").addEventListener("change", renderSymptomSupport);
+$("#symptom-medex").addEventListener("click", () => openPharmacyMedicineLookup(""));

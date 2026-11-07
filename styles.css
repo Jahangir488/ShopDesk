@@ -225,7 +225,7 @@ td.product-cell{font-weight:600;color:var(--ink)}.sku{color:var(--muted);font-si
 .user-action{border:0;background:transparent;color:var(--ink);font-size:13px;font-weight:700;padding:6px 8px;cursor:pointer;text-decoration:underline;text-underline-offset:3px;min-height:32px}
 .user-action.danger{color:var(--bad)}
 .bulk-inventory-tools:not(.hidden){display:flex;align-items:center;gap:8px;flex-wrap:wrap}.bulk-inventory-tools label{cursor:pointer}
-.bulk-inventory-help{margin:12px 0 0;color:var(--steel);font-size:14px;max-width:75ch}
+.bulk-inventory-help{margin:12px 0 0;color:var(--steel);font-size:14px;line-height:1.5;max-width:100%;overflow-wrap:anywhere}
 footer{font-size:13px;color:var(--muted);padding:6px 2px 20px}footer span{padding:0 5px}
 footer button{float:right;border:0;background:transparent;color:var(--steel);font-size:13px;font-weight:600;cursor:pointer;text-decoration:underline}
 
@@ -1154,3 +1154,13 @@ body[data-shop-type] thead th{
   color:var(--muted,#66736d);
   font-weight:400;
 }
+
+@media(max-width:700px){.pharmacy-batch-toolbar{display:grid}.pharmacy-expiry-summary{grid-template-columns:1fr}.pharmacy-purchase-batch{grid-template-columns:1fr}}
+
+.batch-filters { display:flex; flex-wrap:wrap; gap:10px; align-items:end; margin:12px 0; }
+.batch-filters label { flex:1 1 180px; min-width:0; }
+.batch-filters input, .batch-filters select { width:100%; }
+.batch-pagination { display:flex; gap:12px; align-items:center; justify-content:center; margin-top:12px; }
+
+/* Pharmacy symptom support: advisory content only, not a diagnostic tool. */
+.symptom-support{max-width:1200px}.symptom-support h1{font-size:22px;margin:0}.symptom-support h2{font-size:17px;margin:0 0 8px}.symptom-support h3{font-size:15px;margin:0 0 5px}.symptom-support p{line-height:1.55}.symptom-support ul{padding-left:20px;line-height:1.6;margin:6px 0}.symptom-warning,.symptom-emergency,.symptom-card{padding:14px;border-radius:9px;margin:12px 0;border:1px solid #d6e1dc;background:#f8fbf9}.symptom-warning{background:#fff8e2;border-color:#e8c86e}.symptom-emergency{background:#fff1ef;border-color:#e4a39a;color:#6d211a}.symptom-emergency p,.symptom-warning p,.symptom-card p{margin:5px 0}.symptom-layout{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:16px}.symptom-layout>div{min-width:0}.symptom-support select,.symptom-support input[type=search]{display:block;width:100%;max-width:450px;margin-top:6px;padding:10px;border:1px solid #b7c9c1;border-radius:8px;background:#fff;font:inherit}.symptom-references{border-top:1px solid var(--line);margin-top:20px;padding-top:16px}.symptom-links{display:flex;flex-wrap:wrap;gap:8px}.symptom-links a{text-decoration:none}@media(max-width:700px){.symptom-layout{grid-template-columns:1fr}}

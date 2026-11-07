@@ -88,6 +88,22 @@ try {
   assert.equal(state.products.length, 0);
   assert.ok(state.categories.some(category => category.name === "Other"), "new profile categories must match its type");
   await a.json("/api/products", { method: "POST", body: product("Pharmacy Only"), expected: 201 });
+  state = await a.json("/api/state");
+  const medicine = state.products.find(item => item.name === "Pharmacy Only");
+  state = await a.json("/api/pharmacy/batches", { method: "POST", body: { productId: medicine.id, batchNumber: "TEST-BATCH", expiryDate: "2099-12-31", quantity: 100, unitCost: 10 }, expected: 201 });
+  const batch = state.pharmacyBatches.find(item => item.batch_number === "TEST-BATCH");
+  const adjustment = `/api/pharmacy/batches/${batch.id}/adjust`;
+  const order = await a.json("/api/online-orders", { method: "POST", body: { customerName: "Test", customerPhone: "12345", shippingAddress: "Test address", orderStatus: "Confirmed", items: [{ productId: medicine.id, qty: 30, price: 20 }] }, expected: 201 });
+  await a.json(adjustment, { method: "POST", body: { kind: "destroyed", source: "regular", quantity: 71, reason: "Damaged" }, expected: 409 });
+  const adjusted = await a.json(adjustment, { method: "POST", body: { kind: "destroyed", source: "regular", quantity: 20, reason: "Damaged" } });
+  assert.equal(adjusted.products.find(item => item.id === medicine.id).qty, 50);
+  assert.equal(adjusted.pharmacyBatches.find(item => item.id === batch.id).quantity_remaining, 50);
+  const cancelled = await a.json(`/api/online-orders/${order.orderId}`, { method: "PATCH", body: { orderStatus: "Cancelled" } });
+  assert.equal(cancelled.products.find(item => item.id === medicine.id).qty, 80);
+  assert.equal(cancelled.pharmacyBatches.find(item => item.id === batch.id).quantity_remaining, 80);
+  const history = await a.json("/api/purchases");
+  assert.ok(history.movements.some(item => item.kind === "pharmacy destroyed" && item.quantity_change === -20 && item.note.includes("Damaged")), "stock adjustment must retain a reason in its audit record");
+  console.log("  ok  batch adjustment preserves online reservations, cancellation, product totals and audit history");
   await a.json("/api/expenses", { method: "POST", body: { date: new Date().toISOString().slice(0, 10), category: "Pharmacy expense", note: "", amount: 15 }, expected: 201 });
 
   let otherSession = await b.json("/api/state");

@@ -82,6 +82,90 @@ try {
   ok("medicine edits refresh inventory; ৳2.50 and ৳3.25 stay visible in English and Bangla");
 } catch (error) { fail("inventory edit formatting: " + error.message); }
 
+console.log("Pharmacy inventory print");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8");
+  const start = app.indexOf("function pharmacyInventoryPrintTable("), end = app.indexOf('$("#inv-print").onclick', start);
+  if (start < 0 || end < 0) throw new Error("Pharmacy print table missing");
+  const escape = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  const make = new Function("esc", "money", "productSellableQty", `${app.slice(start, end)}\nreturn pharmacyInventoryPrintTable;`);
+  const table = make(escape, value => `৳${value}`, p => p.available_to_sell || 0);
+  const items = [{name:"Medicine <A>",generic_name:"Generic",strength:"500 mg",dosage_form:"Tablet",manufacturer:"Maker",category:"Medicine",unit:"tablet",qty:98,available_to_sell:0,min:5,price:3,cost:2}];
+  const printed = table(items, true), restricted = table(items, false);
+  for (const token of ["Medicine &lt;A&gt;", "Generic", "500 mg", "Maker", "Total stock", "Sellable", ">98<", ">0<", "Cost / unit"]) if (!printed.includes(token)) fail(`Pharmacy print missing ${token}`);
+  for (const token of ["<th>Brand</th>", "<th>Color</th>", "<th>Size</th>", "<th>Material</th>"]) if (printed.includes(token)) fail(`Pharmacy print contains irrelevant ${token}`);
+  if (restricted.includes("Cost / unit") || restricted.includes("৳2")) fail("cost must remain hidden when unavailable");
+  if (!app.includes('if (data.shopType === "pharmacy")') || !app.includes('pharmacyInventoryPrintTable(items, hasCost, part.start)')) fail("Pharmacy print must use its own layout");
+  ok("medicine details and total/sellable quantities print without clothing columns or unauthorized cost");
+} catch (error) { fail("Pharmacy inventory print: " + error.message); }
+
+console.log("Shop-specific inventory download and print");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8");
+  const start = app.indexOf("function inventoryTypeColumns("), end = app.indexOf('$("#inv-download").onclick', start);
+  const printStart = app.indexOf("function otherInventoryPrintTable("), printEnd = app.indexOf("function pharmacyInventoryPrintTable(", printStart);
+  if ([start,end,printStart,printEnd].some(value => value < 0)) throw new Error("shop-specific inventory helpers missing");
+  const escape = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  const api = new Function("esc", "money", "productSellableQty", `${app.slice(start, end)}\n${app.slice(printStart, printEnd)}\nreturn { inventoryListRows, otherInventoryPrintTable };`)(escape, value => `৳${value}`, p => p.available_to_sell || 0);
+  const item = { name:"Test <item>", sku:"S-1", barcode:"123", category:"Other", unit:"piece", qty:8, available_to_sell:3, min:2, price:4, cost:2, generic_name:"Ingredient", strength:"5mg", dosage_form:"Tablet", manufacturer:"Maker", brand:"Acme", color:"Blue", size:"Large", material:"Cotton", pack_name:"piece", pack_size:10 };
+  const expected = {
+    pharmacy:["Generic Name","Strength","Dosage Form","Manufacturer","Sellable Quantity"], restaurant:["Portion / Serving","Food Type","Spice / Prep","Kitchen Section"], clothing:["Brand","Color","Size","Material"], mobile:["Brand","Color","Storage / Variant"], hardware:["Brand","Size / Spec","Smaller Unit","Units per Pack"], grocery:["Brand","Pack / Weight","Smaller Unit","Units per Pack"], general:["Brand","Smaller Unit","Units per Pack"]
+  };
+  for (const [type, fields] of Object.entries(expected)) {
+    const [head, row] = api.inventoryListRows([item],type,true);
+    if (head.length !== row.length || fields.some(field => !head.includes(field)) || !head.includes("Purchase cost")) fail(`${type}: wrong list fields`);
+    const protectedRows = api.inventoryListRows([{...item,cost:undefined}],type,false);
+    if (protectedRows[0].includes("Purchase cost") || protectedRows[0].includes("Stock value (cost)")) fail(`${type}: cost must stay hidden`);
+    if (type !== "clothing" && type !== "mobile" && head.includes("Color")) fail(`${type}: unrelated clothing color column`);
+    if (type !== "clothing" && head.includes("Material")) fail(`${type}: unrelated clothing material column`);
+    if (type !== "pharmacy") {
+      const print = api.otherInventoryPrintTable([item],type,true);
+      for (const field of fields) if (!print.includes(field)) fail(`${type}: print missing ${field}`);
+      if (!print.includes("Test &lt;item&gt;") || !print.includes("Cost / unit") || api.otherInventoryPrintTable([{...item,cost:undefined}],type,false).includes("Cost / unit")) fail(`${type}: print escaping or cost permission`);
+    }
+  }
+  const [pharmacyHeaders, pharmacyRow] = api.inventoryListRows([item],"pharmacy",true);
+  if (pharmacyRow[pharmacyHeaders.indexOf("Sellable Quantity")] !== 3 || pharmacyRow[pharmacyHeaders.indexOf("Quantity")] !== 8) fail("Pharmacy total and sellable stock must be distinct");
+  ok("all seven profiles use their own fields in CSV and print, with cost access preserved");
+} catch (error) { fail("shop-specific inventory download and print: " + error.message); }
+
+console.log("Large print safety");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8");
+  const helperStart = app.indexOf("const PRINT_PART_SIZE ="), helperEnd = app.indexOf('$("#print-report").onclick', helperStart);
+  if (helperStart < 0 || helperEnd < 0) throw new Error("print part selector missing");
+  let answer = "1", message = "";
+  const win = { prompt: () => answer }, toast = text => { message = text; };
+  const helpers = new Function("window", "toast", `${app.slice(helperStart, helperEnd)}\nreturn { choosePrintPart, printPartLabel };`)(win, toast);
+  const all = Array.from({length:22000}, (_, i) => i);
+  const seen = [];
+  for (let part = 1; part <= 110; part++) {
+    answer = String(part); const selected = helpers.choosePrintPart(all, "test");
+    if (selected.items.length !== 200 || selected.start !== (part-1)*200+1 || selected.end !== part*200) throw new Error(`wrong part ${part}`);
+    seen.push(...selected.items);
+  }
+  if (seen.length !== all.length || seen.some((value, i) => value !== i)) fail("large print parts must include every record exactly once");
+  answer = "111"; if (helpers.choosePrintPart(all, "test") !== null || !message) fail("invalid print part must be rejected");
+  answer = null; if (helpers.choosePrintPart(all, "test") !== null) fail("cancelled print must not print");
+  const readRowsStart = app.indexOf("const inventoryRows ="), readRowsEnd = app.indexOf('$("#inv-download").onclick', readRowsStart);
+  const helpersStart = app.indexOf("function inventoryTypeColumns("), helpersEnd = app.indexOf('$("#inv-download").onclick', helpersStart);
+  const tableStart = app.indexOf("function otherInventoryPrintTable("), tableEnd = app.indexOf("// Local Sales:", tableStart);
+  if (readRowsStart < 0 || readRowsEnd < 0 || helpersStart < 0 || helpersEnd < 0 || tableStart < 0 || tableEnd < 0) throw new Error("inventory print handler missing");
+  let printed = "", selectedPart = "110";
+  const button = {}, search = {value:""};
+  const get = selector => selector === "#search" ? search : button;
+  const inventory = Array.from({length:22000}, (_, i) => ({id:i+1,name:`Medicine ${i+1}`,sku:`SKU${i+1}`,category:"Other",unit:"tablet",qty:10,available_to_sell:4,min:0,price:2,cost:1}));
+  for (const type of ["pharmacy","general","grocery","restaurant","hardware","clothing","mobile"]) {
+    const data = { products:inventory, shopType:type, shopName:"Test", workspace:"Test" };
+    const helperInstance = new Function("window", "toast", `${app.slice(helperStart, helperEnd)}\nreturn { choosePrintPart, printPartLabel };`)({prompt:()=>selectedPart}, toast);
+    new Function("$","data","money","esc","productSellableQty","printHtml","choosePrintPart","printPartLabel", `${app.slice(readRowsStart, readRowsEnd)}\n${app.slice(helpersStart, helpersEnd)}\n${app.slice(tableStart, tableEnd)}`)(get,data,x=>String(x),String,p=>p.available_to_sell,html=>{printed=html;},helperInstance.choosePrintPart,helperInstance.printPartLabel);
+    button.onclick();
+    if (!printed.includes("records 21801–22000 of 22000") || !printed.includes("Medicine 21801") || !printed.includes("Medicine 22000") || printed.includes("Medicine 21800") || (printed.match(/<tr(?:\s|>)/g)||[]).length > 201) fail(`${type} large inventory printing is not bounded or loses the final part`);
+  }
+  for (const token of ['choosePrintPart(currentLocalSaleGroups', 'choosePrintPart(rows, title)', 'choosePrintPart([...sales.map', 'html.length > 1000000']) if (!app.includes(token)) fail(`large print protection missing: ${token}`);
+  ok("22,000 rows print in 200-record parts for every shop type; cancellation, bounds, reports and safety guard covered");
+} catch (error) { fail("large print safety: " + error.message); }
+
 console.log("Pharmacy CSV stock receipt");
 try {
   const app = readFileSync(join(root, "app.js"), "utf8"), server = readFileSync(join(root, "server.mjs"), "utf8");
@@ -106,6 +190,35 @@ try {
   if (!html.includes("Simple workflow:") || !html.includes("Add medicine")) fail("Pharmacy inventory workflow guide is missing");
   ok("essential fields stay visible, advanced fields collapse, and stock/calculator actions remain safe");
 } catch (error) { fail("simple Pharmacy operation: " + error.message); }
+
+console.log("Pharmacy symptom support");
+try {
+  const app = readFileSync(join(root, "app.js"), "utf8"), html = readFileSync(join(root, "index.html"), "utf8"), css = readFileSync(join(root, "styles.css"), "utf8");
+  for (const token of ['id="pharmacy-support-nav"', 'data-screen="pharmacy-support"', 'id="symptom-choice"', 'tel:999', 'does not diagnose, prescribe', 'has not yet been reviewed for Bangladesh', 'It is not saved or sent to external sites']) if (!html.includes(token)) fail(`symptom support safeguard missing: ${token}`);
+  for (const token of ['$("#pharmacy-support-nav").classList.toggle("hidden", !pharmacyMedexEnabled)', 'data.shopType === "pharmacy" && Boolean(permissions.sales || permissions.inventory)', 'location.hash === "#pharmacy-support"']) if (!app.includes(token)) fail(`symptom support profile/permission guard missing: ${token}`);
+  if (!css.includes(".symptom-layout{grid-template-columns:1fr}")) fail("symptom support must fit narrow screens");
+  const start = app.indexOf("const symptomSupportGuides ="), end = app.indexOf("// Keyword matching only", start);
+  if (start < 0 || end < 0) throw new Error("symptom support content or renderer missing");
+  let choice = {value:""}, result = {innerHTML:""};
+  const select = query => query === "#symptom-choice" ? choice : result;
+  const render = new Function("$", "esc", `${app.slice(start, end)}\nreturn renderSymptomSupport;`)(select, value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"));
+  render(); if (!result.innerHTML.includes("Select a symptom")) fail("empty choice must not present a diagnosis");
+  for (const topic of ["fever", "diarrhea", "constipation", "eye"]) {
+    choice.value = topic; render();
+    for (const word of ["Urgent warning signs", "qualified clinician", "does not guarantee safety", "Possible causes — not a diagnosis", "Medicine information — demonstration only", "Do not use this example", "https://"]) if (!result.innerHTML.includes(word)) fail(`${topic} missing ${word}`);
+    if (/<form|<input|\/api\//i.test(result.innerHTML)) fail(`${topic} must not collect patient answers or make requests`);
+  }
+  choice.value = "fever"; render(); if (!result.innerHTML.includes("dengue") || !result.innerHTML.includes("avoid ibuprofen and aspirin")) fail("fever demo must show dengue-related NSAID warning");
+  choice.value = ""; render(); if (result.innerHTML.includes("Urgent warning signs")) fail("clearing selection must clear previous topic");
+  const matchStart = app.indexOf("function matchSymptomGuides("), matchEnd = app.indexOf("function renderSymptomMatches(", matchStart);
+  if (matchStart < 0 || matchEnd < 0) throw new Error("offline symptom matching missing");
+  const match = new Function(`${app.slice(matchStart, matchEnd)}\nreturn matchSymptomGuides;`)();
+  for (const [query, expected] of [["fever","fever"],["diarrhoea","diarrhea"],["hard poops","constipation"],["itchy eyes","eye"],["জ্বর","fever"]]) if (!match(query).includes(expected)) fail(`offline search misses ${query}`);
+  if (match("chest pain").length !== 0 || match("").length !== 0 || match("fever and diarrhea").length !== 2) fail("search must not invent a diagnosis or hide matching topics");
+  for (const token of ['No matching offline guide', 'not diagnoses', 'navigator.onLine', 'symptom-search").value = ""']) if (!app.includes(token)) fail(`online/offline privacy safeguard missing: ${token}`);
+
+  ok("four conservative, referenced guides; urgent warnings, privacy, profile gating and mobile layout");
+} catch (error) { fail("pharmacy symptom support: " + error.message); }
 
 console.log("Translations");
 try {
